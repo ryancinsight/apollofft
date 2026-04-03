@@ -19,4 +19,3 @@ thread_local! {
     /// Thread-local real-valued scratch buffer used by the RFFT Z pass.
     pub(super) static RFFT_REAL_BUF: RefCell<Vec<f64>> = RefCell::new(Vec::new());
 }
-

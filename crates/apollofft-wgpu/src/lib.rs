@@ -32,8 +32,9 @@ impl WgpuBackend {
     /// Create a backend by requesting a default adapter and device.
     pub fn try_default() -> ApolloResult<Self> {
         let instance = wgpu::Instance::default();
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .map_err(|error| ApolloError::BackendUnavailable {
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .map_err(|error| ApolloError::BackendUnavailable {
                 backend: format!("wgpu adapter unavailable: {error}"),
             })?;
         let descriptor = wgpu::DeviceDescriptor {
@@ -43,9 +44,11 @@ impl WgpuBackend {
             memory_hints: wgpu::MemoryHints::default(),
             trace: wgpu::Trace::default(),
         };
-        let (device, queue) = pollster::block_on(adapter.request_device(&descriptor))
-            .map_err(|error| ApolloError::Wgpu {
-                message: error.to_string(),
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&descriptor)).map_err(|error| {
+                ApolloError::Wgpu {
+                    message: error.to_string(),
+                }
             })?;
         Ok(Self::new(
             std::sync::Arc::new(device),
@@ -97,4 +100,3 @@ impl FftBackend for WgpuBackend {
         .map_err(|message| ApolloError::Wgpu { message })
     }
 }
-

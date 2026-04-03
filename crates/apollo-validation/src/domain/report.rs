@@ -26,6 +26,10 @@ pub struct CpuFftReport {
     pub roundtrip_max_abs_error: f64,
     /// Relative Parseval error for a representative 1D signal.
     pub parseval_relative_error: f64,
+    /// Maximum deviation across repeated forward evaluations of the same signal.
+    pub stability_max_abs_delta: f64,
+    /// Whether non-finite input produced non-finite spectral output without panicking.
+    pub non_finite_input_propagates: bool,
     /// Whether the CPU validation thresholds passed.
     pub passed: bool,
 }
@@ -56,8 +60,35 @@ pub struct NufftReport {
     pub type2_1d_max_relative_error: f64,
     /// Relative error for fast 3D type-1 against exact direct evaluation.
     pub type1_3d_max_relative_error: f64,
+    /// Relative error for an irrational-position stress case.
+    pub irrational_positions_max_relative_error: f64,
+    /// Relative error for a clustered near-boundary stress case.
+    pub clustered_positions_max_relative_error: f64,
     /// Whether the NUFFT validation thresholds passed.
     pub passed: bool,
+}
+
+/// Comparison with one external FFT backend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalBackendReport {
+    /// Human-readable backend name.
+    pub backend: String,
+    /// Whether the backend is installed and callable on this host.
+    pub available: bool,
+    /// Whether a parity run was attempted.
+    pub attempted: bool,
+    /// 1D max absolute error for a representative power-of-two signal.
+    pub fft1_max_abs_error: Option<f64>,
+    /// 1D max absolute error for a representative prime-sized signal.
+    pub fft1_prime_max_abs_error: Option<f64>,
+    /// 3D max absolute error for a representative real field.
+    pub fft3_max_abs_error: Option<f64>,
+    /// Maximum repeated-run deviation reported by the backend.
+    pub stability_max_abs_delta: Option<f64>,
+    /// Optional version string when known.
+    pub version: Option<String>,
+    /// Optional note explaining skip/failure details.
+    pub note: Option<String>,
 }
 
 /// Comparison with external FFT implementations or assets.
@@ -65,12 +96,18 @@ pub struct NufftReport {
 pub struct ExternalComparisonReport {
     /// Whether the external comparison thresholds passed.
     pub passed: bool,
-    /// Direct comparison against the `rustfft` crate on a representative 1D signal.
-    pub rustfft_max_abs_error: f64,
     /// Whether an external `rustfft` checkout exists under the workspace.
     pub rustfft_checkout_present: bool,
     /// Whether an external `pyfftw` checkout exists under the workspace.
     pub pyfftw_checkout_present: bool,
+    /// `rustfft` parity report.
+    pub rustfft: ExternalBackendReport,
+    /// NumPy parity report.
+    pub numpy: ExternalBackendReport,
+    /// Optional `pyfftw` parity report.
+    pub pyfftw: ExternalBackendReport,
+    /// Whether adversarial robustness probes passed.
+    pub robustness_passed: bool,
     /// Optional note explaining skipped comparisons.
     pub note: Option<String>,
 }
@@ -78,10 +115,24 @@ pub struct ExternalComparisonReport {
 /// Benchmark timings collected during validation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BenchmarkReport {
-    /// CPU 3D FFT forward wall time in milliseconds.
-    pub cpu_fft_forward_ms: f64,
-    /// CPU 3D FFT inverse wall time in milliseconds.
-    pub cpu_fft_inverse_ms: f64,
+    /// Apollo CPU 1D FFT wall time in milliseconds.
+    pub apollo_fft1_ms: f64,
+    /// Apollo CPU 3D FFT forward wall time in milliseconds.
+    pub apollo_fft3_forward_ms: f64,
+    /// Apollo CPU 3D FFT inverse wall time in milliseconds.
+    pub apollo_fft3_inverse_ms: f64,
+    /// `rustfft` 1D FFT wall time in milliseconds.
+    pub rustfft_fft1_ms: f64,
+    /// `rustfft` 3D FFT wall time in milliseconds.
+    pub rustfft_fft3_ms: f64,
+    /// NumPy 1D FFT wall time in milliseconds when available.
+    pub numpy_fft1_ms: Option<f64>,
+    /// NumPy 3D FFT wall time in milliseconds when available.
+    pub numpy_fft3_ms: Option<f64>,
+    /// Optional `pyfftw` 1D FFT wall time in milliseconds.
+    pub pyfftw_fft1_ms: Option<f64>,
+    /// Optional `pyfftw` 3D FFT wall time in milliseconds.
+    pub pyfftw_fft3_ms: Option<f64>,
     /// Exact direct 1D type-1 NUFFT wall time in milliseconds.
     pub nufft_exact_type1_1d_ms: f64,
     /// Fast 1D type-1 NUFFT wall time in milliseconds.
@@ -103,4 +154,10 @@ pub struct EnvironmentReport {
     pub arch: String,
     /// Whether debug assertions were enabled for the build.
     pub debug_build: bool,
+    /// Python version when a compatible interpreter was found.
+    pub python_version: Option<String>,
+    /// NumPy version when available.
+    pub numpy_version: Option<String>,
+    /// `pyfftw` version when available.
+    pub pyfftw_version: Option<String>,
 }

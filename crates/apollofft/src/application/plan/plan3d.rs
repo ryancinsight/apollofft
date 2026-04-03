@@ -2,7 +2,7 @@
 
 use super::{AXIS_BUF, RFFT_REAL_BUF};
 use crate::domain::error::{ApolloError, ApolloResult};
-use ndarray::{s, Array3, Axis, Zip};
+use ndarray::{Array3, Axis, Zip};
 use num_complex::Complex64;
 use rayon::prelude::*;
 use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
@@ -120,7 +120,11 @@ impl FftPlan3D {
     }
 
     /// Forward transform of a real field into a full complex spectrum buffer.
-    pub fn forward_real_to_complex_into(&self, input: &Array3<f64>, output: &mut Array3<Complex64>) {
+    pub fn forward_real_to_complex_into(
+        &self,
+        input: &Array3<f64>,
+        output: &mut Array3<Complex64>,
+    ) {
         self.forward_real_to_complex_into_full(input, output);
     }
 
@@ -151,9 +155,11 @@ impl FftPlan3D {
         scratch.assign(input);
         self.inverse_complex_inplace(scratch);
         let norm = 1.0 / (self.nx * self.ny * self.nz) as f64;
-        Zip::from(output).and(scratch.view()).par_for_each(|out, value| {
-            *out = value.re * norm;
-        });
+        Zip::from(output)
+            .and(scratch.view())
+            .par_for_each(|out, value| {
+                *out = value.re * norm;
+            });
     }
 
     /// Compatibility alias for `inverse_complex_to_real_into`.
@@ -172,9 +178,11 @@ impl FftPlan3D {
         self.check_real_shape(output.dim(), "inverse_inplace output");
         self.inverse_complex_inplace(data);
         let norm = 1.0 / (self.nx * self.ny * self.nz) as f64;
-        Zip::from(output).and(data.view()).par_for_each(|out, value| {
-            *out = value.re * norm;
-        });
+        Zip::from(output)
+            .and(data.view())
+            .par_for_each(|out, value| {
+                *out = value.re * norm;
+            });
     }
 
     /// Forward real-to-complex transform into a half-spectrum buffer.
@@ -349,7 +357,9 @@ impl FftPlan3D {
             .into_par_iter()
             .zip(data.outer_iter_mut())
             .for_each(|(mut out_x, mut data_x)| {
-                for (mut out_row, mut data_row) in out_x.outer_iter_mut().zip(data_x.outer_iter_mut()) {
+                for (mut out_row, mut data_row) in
+                    out_x.outer_iter_mut().zip(data_x.outer_iter_mut())
+                {
                     RFFT_REAL_BUF.with(|cell| {
                         let mut scratch = cell.borrow_mut();
                         if scratch.len() < nz {
@@ -443,11 +453,13 @@ impl FftPlan3D {
         let nx = self.nx;
         let nz = self.nz;
 
-        data.outer_iter_mut().into_par_iter().for_each(|mut x_slice| {
-            for mut row in x_slice.outer_iter_mut() {
-                fft_z.process(row.as_slice_mut().expect("z row must be contiguous"));
-            }
-        });
+        data.outer_iter_mut()
+            .into_par_iter()
+            .for_each(|mut x_slice| {
+                for mut row in x_slice.outer_iter_mut() {
+                    fft_z.process(row.as_slice_mut().expect("z row must be contiguous"));
+                }
+            });
 
         data.axis_iter_mut(Axis(0))
             .into_par_iter()
@@ -540,11 +552,13 @@ impl FftPlan3D {
                 }
             });
 
-        data.outer_iter_mut().into_par_iter().for_each(|mut x_slice| {
-            for mut row in x_slice.outer_iter_mut() {
-                ifft_z.process(row.as_slice_mut().expect("z row must be contiguous"));
-            }
-        });
+        data.outer_iter_mut()
+            .into_par_iter()
+            .for_each(|mut x_slice| {
+                for mut row in x_slice.outer_iter_mut() {
+                    ifft_z.process(row.as_slice_mut().expect("z row must be contiguous"));
+                }
+            });
     }
 
     /// Compute a spectral derivative along one Cartesian axis.
@@ -558,10 +572,49 @@ impl FftPlan3D {
         axis: usize,
     ) -> ApolloResult<Array3<f64>> {
         let mut spectrum = self.forward(field);
-        let k_values = match axis {
-            0 => self.get_kx(),
-            1 => self.get_ky(),
-            2 => self.get_kz(),
+        match axis {
+            0 => {
+                let dk = 2.0 * std::f64::consts::PI / self.nx as f64;
+                for i in 0..self.nx {
+                    let k = if i <= self.nx / 2 {
+                        i as f64 * dk
+                    } else {
+                        (i as f64 - self.nx as f64) * dk
+                    };
+                    let factor = Complex64::new(0.0, k);
+                    spectrum
+                        .index_axis_mut(Axis(0), i)
+                        .par_mapv_inplace(|value| value * factor);
+                }
+            }
+            1 => {
+                let dk = 2.0 * std::f64::consts::PI / self.ny as f64;
+                for j in 0..self.ny {
+                    let k = if j <= self.ny / 2 {
+                        j as f64 * dk
+                    } else {
+                        (j as f64 - self.ny as f64) * dk
+                    };
+                    let factor = Complex64::new(0.0, k);
+                    spectrum
+                        .index_axis_mut(Axis(1), j)
+                        .par_mapv_inplace(|value| value * factor);
+                }
+            }
+            2 => {
+                let dk = 2.0 * std::f64::consts::PI / self.nz as f64;
+                for k_index in 0..self.nz {
+                    let k = if k_index <= self.nz / 2 {
+                        k_index as f64 * dk
+                    } else {
+                        (k_index as f64 - self.nz as f64) * dk
+                    };
+                    let factor = Complex64::new(0.0, k);
+                    spectrum
+                        .index_axis_mut(Axis(2), k_index)
+                        .par_mapv_inplace(|value| value * factor);
+                }
+            }
             _ => {
                 return Err(ApolloError::validation(
                     "axis",
@@ -569,21 +622,23 @@ impl FftPlan3D {
                     "Axis must be 0, 1, or 2",
                 ));
             }
-        };
-
-        Zip::from(&mut spectrum).and(&k_values).par_for_each(|value, &k| {
-            *value *= Complex64::new(0.0, k);
-        });
+        }
 
         Ok(self.inverse(&spectrum))
     }
 
-    fn forward_real_to_complex_into_full(&self, input: &Array3<f64>, output: &mut Array3<Complex64>) {
+    fn forward_real_to_complex_into_full(
+        &self,
+        input: &Array3<f64>,
+        output: &mut Array3<Complex64>,
+    ) {
         self.check_real_shape(input.dim(), "forward input");
         self.check_full_complex_shape(output.dim(), "forward output");
-        Zip::from(&mut *output).and(input).par_for_each(|dst, &src| {
-            *dst = Complex64::new(src, 0.0);
-        });
+        Zip::from(&mut *output)
+            .and(input)
+            .par_for_each(|dst, &src| {
+                *dst = Complex64::new(src, 0.0);
+            });
         self.forward_complex_inplace(output);
     }
 
@@ -610,48 +665,6 @@ impl FftPlan3D {
             shape
         );
     }
-
-    fn get_kx(&self) -> Array3<f64> {
-        let mut kx = Array3::zeros((self.nx, self.ny, self.nz));
-        let dk = 2.0 * std::f64::consts::PI / self.nx as f64;
-        for i in 0..self.nx {
-            let k = if i <= self.nx / 2 {
-                i as f64 * dk
-            } else {
-                (i as f64 - self.nx as f64) * dk
-            };
-            kx.slice_mut(s![i, .., ..]).fill(k);
-        }
-        kx
-    }
-
-    fn get_ky(&self) -> Array3<f64> {
-        let mut ky = Array3::zeros((self.nx, self.ny, self.nz));
-        let dk = 2.0 * std::f64::consts::PI / self.ny as f64;
-        for j in 0..self.ny {
-            let k = if j <= self.ny / 2 {
-                j as f64 * dk
-            } else {
-                (j as f64 - self.ny as f64) * dk
-            };
-            ky.slice_mut(s![.., j, ..]).fill(k);
-        }
-        ky
-    }
-
-    fn get_kz(&self) -> Array3<f64> {
-        let mut kz = Array3::zeros((self.nx, self.ny, self.nz));
-        let dk = 2.0 * std::f64::consts::PI / self.nz as f64;
-        for k_index in 0..self.nz {
-            let k = if k_index <= self.nz / 2 {
-                k_index as f64 * dk
-            } else {
-                (k_index as f64 - self.nz as f64) * dk
-            };
-            kz.slice_mut(s![.., .., k_index]).fill(k);
-        }
-        kz
-    }
 }
 
 #[cfg(test)]
@@ -659,6 +672,7 @@ mod tests {
     use super::*;
     use approx::assert_relative_eq;
     use ndarray::{Array1, Array3};
+    use proptest::prelude::*;
 
     #[test]
     fn roundtrip_matches_for_delta() {
@@ -711,5 +725,47 @@ mod tests {
         let field = Array3::<f64>::zeros((4, 4, 4));
         let error = plan.spectral_derivative(&field, 3).unwrap_err();
         assert!(matches!(error, ApolloError::Validation { .. }));
+    }
+
+    proptest! {
+        #[test]
+        fn 1d_roundtrip_holds_for_random_lengths_and_signals(
+            n in 2usize..48,
+            seed in 0u64..500,
+        ) {
+            let plan = crate::application::plan::FftPlan1D::new(n);
+            let signal = Array1::from_shape_fn(n, |i| {
+                let x = i as f64 + seed as f64 * 0.01;
+                (x * 0.31).sin() + 0.5 * (x * 0.17).cos()
+            });
+            let recovered = plan.inverse(&plan.forward(&signal));
+            let max_err = signal
+                .iter()
+                .zip(recovered.iter())
+                .map(|(lhs, rhs)| (lhs - rhs).abs())
+                .fold(0.0_f64, f64::max);
+            prop_assert!(max_err < 1e-12);
+        }
+
+        #[test]
+        fn 3d_roundtrip_holds_for_small_random_shapes(
+            nx in 2usize..6,
+            ny in 2usize..6,
+            nz in 2usize..6,
+            seed in 0u64..200,
+        ) {
+            let plan = FftPlan3D::new(nx, ny, nz);
+            let field = Array3::from_shape_fn((nx, ny, nz), |(i, j, k)| {
+                let x = i as f64 + 0.3 * j as f64 + 0.7 * k as f64 + seed as f64 * 0.01;
+                (x * 0.21).sin() - 0.4 * (x * 0.13).cos()
+            });
+            let recovered = plan.inverse(&plan.forward(&field));
+            let max_err = field
+                .iter()
+                .zip(recovered.iter())
+                .map(|(lhs, rhs)| (lhs - rhs).abs())
+                .fold(0.0_f64, f64::max);
+            prop_assert!(max_err < 1e-11);
+        }
     }
 }

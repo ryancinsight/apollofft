@@ -66,7 +66,11 @@ impl FftPlan2D {
     }
 
     /// Forward transform of a real array into a caller-supplied complex buffer.
-    pub fn forward_real_to_complex_into(&self, input: &Array2<f64>, output: &mut Array2<Complex64>) {
+    pub fn forward_real_to_complex_into(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<Complex64>,
+    ) {
         Zip::from(&mut *output).and(input).for_each(|out, &value| {
             *out = Complex64::new(value, 0.0);
         });
@@ -172,4 +176,3 @@ impl FftPlan2D {
             });
     }
 }
-

@@ -61,7 +61,9 @@ pub fn fft_3d_array(field: &Array3<f64>) -> Array3<Complex64> {
 /// Inverse 1D FFT of a complex signal.
 #[must_use]
 pub fn ifft_1d_array(field_hat: &Array1<Complex64>) -> Array1<f64> {
-    FFT_CACHE_1D.get_or_create(field_hat.len()).inverse(field_hat)
+    FFT_CACHE_1D
+        .get_or_create(field_hat.len())
+        .inverse(field_hat)
 }
 
 /// Inverse 2D FFT of a complex array.
@@ -88,9 +90,7 @@ pub fn fft_1d_complex_inplace(data: &mut Array1<Complex64>) {
 /// Inverse complex 1D FFT in-place with FFTW-compatible normalization.
 pub fn ifft_1d_complex_inplace(data: &mut Array1<Complex64>) {
     let n = data.len();
-    FFT_CACHE_1D
-        .get_or_create(n)
-        .inverse_complex_inplace(data);
+    FFT_CACHE_1D.get_or_create(n).inverse_complex_inplace(data);
     let norm = 1.0 / n as f64;
     data.par_iter_mut().for_each(|value| *value *= norm);
 }
@@ -182,9 +182,11 @@ pub fn ifft_3d_complex(field_hat: &Array3<Complex64>) -> Array3<Complex64> {
 /// Forward 3D FFT of a real array into a caller-provided complex buffer.
 pub fn fft_3d_array_into(field: &Array3<f64>, out: &mut Array3<Complex64>) {
     debug_assert_eq!(field.dim(), out.dim(), "fft_3d_array_into: shape mismatch");
-    Zip::from(out.view_mut()).and(field).par_for_each(|dst, &src| {
-        *dst = Complex64::new(src, 0.0);
-    });
+    Zip::from(out.view_mut())
+        .and(field)
+        .par_for_each(|dst, &src| {
+            *dst = Complex64::new(src, 0.0);
+        });
     let (nx, ny, nz) = field.dim();
     FFT_CACHE_3D
         .get_or_create(nx, ny, nz)
@@ -194,7 +196,11 @@ pub fn fft_3d_array_into(field: &Array3<f64>, out: &mut Array3<Complex64>) {
 /// Inverse 3D FFT of a complex array into a caller-provided real buffer.
 pub fn ifft_3d_array_into(field_hat: &mut Array3<Complex64>, out: &mut Array3<f64>) {
     let (nx, ny, nz) = field_hat.dim();
-    debug_assert_eq!(out.dim(), (nx, ny, nz), "ifft_3d_array_into: shape mismatch");
+    debug_assert_eq!(
+        out.dim(),
+        (nx, ny, nz),
+        "ifft_3d_array_into: shape mismatch"
+    );
     FFT_CACHE_3D
         .get_or_create(nx, ny, nz)
         .inverse_complex_inplace(field_hat);

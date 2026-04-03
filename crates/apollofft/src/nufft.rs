@@ -4,6 +4,7 @@ use crate::types::{UniformDomain1D, UniformGrid3D};
 use ndarray::{Array1, Array3};
 use num_complex::Complex64;
 use rustfft::FftPlanner;
+use std::cmp::Ordering;
 use std::f64::consts::PI;
 use std::sync::Arc;
 
@@ -21,8 +22,7 @@ fn i0(z: f64) -> f64 {
         1.0 + y
             * (3.515_623_7
                 + y * (3.089_942_4
-                    + y * (1.206_749_2
-                        + y * (0.265_973_2 + y * (0.036_076_8 + y * 0.004_581_3)))))
+                    + y * (1.206_749_2 + y * (0.265_973_2 + y * (0.036_076_8 + y * 0.004_581_3)))))
     } else {
         let y = 3.75 / t;
         (t.exp() / t.sqrt())
@@ -60,6 +60,119 @@ fn kb_kernel_ft(xi: f64, w: usize, beta: f64, i0_beta: f64) -> f64 {
         let s = (-z_sq).sqrt();
         prefix * s.sin() / s
     }
+}
+
+#[derive(Clone, Copy)]
+struct IndexedPoint1D {
+    original_index: usize,
+    x: f64,
+    value: Complex64,
+    bucket: usize,
+}
+
+#[derive(Clone, Copy)]
+struct IndexedPoint3D {
+    x: f64,
+    y: f64,
+    z: f64,
+    value: Complex64,
+    bucket: usize,
+}
+
+fn bucket_count(len: usize, kernel_width: usize) -> usize {
+    len.max(1).div_ceil((2 * kernel_width + 1).max(1)).max(1)
+}
+
+fn sort_points_1d(
+    positions: &[f64],
+    values: &[Complex64],
+    domain: UniformDomain1D,
+    oversampled_len: usize,
+    kernel_width: usize,
+) -> Vec<IndexedPoint1D> {
+    let buckets = bucket_count(oversampled_len, kernel_width);
+    let bucket_scale = buckets as f64 / domain.length();
+    let mut indexed: Vec<_> = positions
+        .iter()
+        .zip(values.iter())
+        .enumerate()
+        .map(|(original_index, (&x, &value))| {
+            let x_mod = x.rem_euclid(domain.length());
+            let bucket = ((x_mod * bucket_scale).floor() as usize).min(buckets - 1);
+            IndexedPoint1D {
+                original_index,
+                x: x_mod,
+                value,
+                bucket,
+            }
+        })
+        .collect();
+    indexed.sort_unstable_by(|lhs, rhs| lhs.bucket.cmp(&rhs.bucket));
+    indexed
+}
+
+fn sort_positions_1d(
+    positions: &[f64],
+    domain: UniformDomain1D,
+    oversampled_len: usize,
+    kernel_width: usize,
+) -> Vec<(usize, f64, usize)> {
+    let buckets = bucket_count(oversampled_len, kernel_width);
+    let bucket_scale = buckets as f64 / domain.length();
+    let mut indexed: Vec<_> = positions
+        .iter()
+        .enumerate()
+        .map(|(original_index, &x)| {
+            let x_mod = x.rem_euclid(domain.length());
+            let bucket = ((x_mod * bucket_scale).floor() as usize).min(buckets - 1);
+            (original_index, x_mod, bucket)
+        })
+        .collect();
+    indexed.sort_unstable_by(|lhs, rhs| lhs.2.cmp(&rhs.2));
+    indexed
+}
+
+fn sort_points_3d(
+    positions: &[(f64, f64, f64)],
+    values: &[Complex64],
+    grid: UniformGrid3D,
+    oversampled_shape: (usize, usize, usize),
+    kernel_width: usize,
+) -> Vec<IndexedPoint3D> {
+    let (lx, ly, lz) = grid.lengths();
+    let bx = bucket_count(oversampled_shape.0, kernel_width);
+    let by = bucket_count(oversampled_shape.1, kernel_width);
+    let bz = bucket_count(oversampled_shape.2, kernel_width);
+    let sx = bx as f64 / lx;
+    let sy = by as f64 / ly;
+    let sz = bz as f64 / lz;
+    let mut indexed: Vec<_> = positions
+        .iter()
+        .zip(values.iter())
+        .map(|(&(x, y, z), &value)| {
+            let x_mod = x.rem_euclid(lx);
+            let y_mod = y.rem_euclid(ly);
+            let z_mod = z.rem_euclid(lz);
+            let ix = ((x_mod * sx).floor() as usize).min(bx - 1);
+            let iy = ((y_mod * sy).floor() as usize).min(by - 1);
+            let iz = ((z_mod * sz).floor() as usize).min(bz - 1);
+            IndexedPoint3D {
+                x: x_mod,
+                y: y_mod,
+                z: z_mod,
+                value,
+                bucket: (ix * by + iy) * bz + iz,
+            }
+        })
+        .collect();
+    indexed.sort_unstable_by(|lhs, rhs| {
+        lhs.bucket
+            .cmp(&rhs.bucket)
+            .then_with(|| lhs.x.partial_cmp(&rhs.x).unwrap_or(Ordering::Equal))
+            .then_with(|| lhs.y.partial_cmp(&rhs.y).unwrap_or(Ordering::Equal))
+            .then_with(|| lhs.z.partial_cmp(&rhs.z).unwrap_or(Ordering::Equal))
+    });
+    indexed
 }
 
 /// Reusable 1D NUFFT plan using Kaiser-Bessel spreading.
@@ -122,21 +235,25 @@ impl NufftPlan1D {
     /// Run type-1 NUFFT, mapping non-uniform samples to uniform Fourier bins.
     #[must_use]
     pub fn type1(&self, positions: &[f64], values: &[Complex64]) -> Array1<Complex64> {
-        assert_eq!(positions.len(), values.len(), "positions/value length mismatch");
+        assert_eq!(
+            positions.len(),
+            values.len(),
+            "positions/value length mismatch"
+        );
         let mut grid = vec![Complex64::new(0.0, 0.0); self.m];
         let w = self.w as i64;
         let w_f = self.w as f64;
+        let sorted_points = sort_points_1d(positions, values, self.domain, self.m, self.w);
 
-        for (&x, &value) in positions.iter().zip(values.iter()) {
-            let x_mod = x.rem_euclid(self.domain.length());
-            let t = self.m as f64 * x_mod / self.domain.length();
+        for point in sorted_points {
+            let t = self.m as f64 * point.x / self.domain.length();
             let m0 = t.round() as i64;
             let d = t - m0 as f64;
             for p in -w..=w {
                 let weight = kb_kernel(p as f64 - d, w_f, self.beta, self.i0_beta);
                 if weight != 0.0 {
                     let m_idx = (m0 + p).rem_euclid(self.m as i64) as usize;
-                    grid[m_idx] += value * weight;
+                    grid[m_idx] += point.value * weight;
                 }
             }
         }
@@ -169,25 +286,24 @@ impl NufftPlan1D {
 
         let w = self.w as i64;
         let w_f = self.w as f64;
-        positions
-            .iter()
-            .map(|&x| {
-                let x_mod = x.rem_euclid(self.domain.length());
+        let sorted_points = sort_positions_1d(positions, self.domain, self.m, self.w);
+        let mut output = vec![Complex64::default(); positions.len()];
+        for (original_index, x_mod, _) in sorted_points {
                 let t = self.m as f64 * x_mod / self.domain.length();
                 let m0 = t.round() as i64;
                 let d = t - m0 as f64;
 
-                let mut value = Complex64::new(0.0, 0.0);
-                for p in -w..=w {
-                    let weight = kb_kernel(p as f64 - d, w_f, self.beta, self.i0_beta);
-                    if weight != 0.0 {
-                        let m_idx = (m0 + p).rem_euclid(self.m as i64) as usize;
-                        value += spread[m_idx] * weight;
-                    }
+            let mut value = Complex64::new(0.0, 0.0);
+            for p in -w..=w {
+                let weight = kb_kernel(p as f64 - d, w_f, self.beta, self.i0_beta);
+                if weight != 0.0 {
+                    let m_idx = (m0 + p).rem_euclid(self.m as i64) as usize;
+                    value += spread[m_idx] * weight;
                 }
-                value
-            })
-            .collect()
+            }
+                output[original_index] = value;
+            }
+        output
     }
 }
 
@@ -258,31 +374,42 @@ impl NufftPlan3D {
     /// Run type-1 3D NUFFT.
     #[must_use]
     pub fn type1(&self, positions: &[(f64, f64, f64)], values: &[Complex64]) -> Array3<Complex64> {
-        assert_eq!(positions.len(), values.len(), "positions/value length mismatch");
+        assert_eq!(
+            positions.len(),
+            values.len(),
+            "positions/value length mismatch"
+        );
         let (lx, ly, lz) = self.grid.lengths();
         let mut grid = Array3::<Complex64>::zeros((self.mx, self.my, self.mz));
         let w = self.w as i64;
         let w_f = self.w as f64;
 
-        for (&(x, y, z), &value) in positions.iter().zip(values.iter()) {
-            let tx = self.mx as f64 * x.rem_euclid(lx) / lx;
-            let ty = self.my as f64 * y.rem_euclid(ly) / ly;
-            let tz = self.mz as f64 * z.rem_euclid(lz) / lz;
+        let sorted_points = sort_points_3d(
+            positions,
+            values,
+            self.grid,
+            (self.mx, self.my, self.mz),
+            self.w,
+        );
+        let mut wx = vec![0.0_f64; 2 * self.w + 1];
+        let mut wy = vec![0.0_f64; 2 * self.w + 1];
+        let mut wz = vec![0.0_f64; 2 * self.w + 1];
+
+        for point in sorted_points {
+            let tx = self.mx as f64 * point.x / lx;
+            let ty = self.my as f64 * point.y / ly;
+            let tz = self.mz as f64 * point.z / lz;
             let m0x = tx.round() as i64;
             let m0y = ty.round() as i64;
             let m0z = tz.round() as i64;
             let dx = tx - m0x as f64;
             let dy = ty - m0y as f64;
             let dz = tz - m0z as f64;
-            let wx: Vec<f64> = (-w..=w)
-                .map(|p| kb_kernel(p as f64 - dx, w_f, self.beta, self.i0_beta))
-                .collect();
-            let wy: Vec<f64> = (-w..=w)
-                .map(|p| kb_kernel(p as f64 - dy, w_f, self.beta, self.i0_beta))
-                .collect();
-            let wz: Vec<f64> = (-w..=w)
-                .map(|p| kb_kernel(p as f64 - dz, w_f, self.beta, self.i0_beta))
-                .collect();
+            for (offset, p) in (-w..=w).enumerate() {
+                wx[offset] = kb_kernel(p as f64 - dx, w_f, self.beta, self.i0_beta);
+                wy[offset] = kb_kernel(p as f64 - dy, w_f, self.beta, self.i0_beta);
+                wz[offset] = kb_kernel(p as f64 - dz, w_f, self.beta, self.i0_beta);
+            }
 
             for (px, &wxv) in wx.iter().enumerate() {
                 if wxv == 0.0 {
@@ -300,7 +427,7 @@ impl NufftPlan3D {
                             continue;
                         }
                         let iz = (m0z + pz as i64 - w).rem_euclid(self.mz as i64) as usize;
-                        grid[[ix, iy, iz]] += value * (wxy * wzv);
+                        grid[[ix, iy, iz]] += point.value * (wxy * wzv);
                     }
                 }
             }
@@ -345,13 +472,16 @@ impl NufftPlan3D {
             }
         }
 
-        Array3::from_shape_fn((self.grid.nx, self.grid.ny, self.grid.nz), |(kx, ky, kz)| {
-            let kx_idx = fft_signed_index(kx, self.grid.nx).rem_euclid(self.mx as i64) as usize;
-            let ky_idx = fft_signed_index(ky, self.grid.ny).rem_euclid(self.my as i64) as usize;
-            let kz_idx = fft_signed_index(kz, self.grid.nz).rem_euclid(self.mz as i64) as usize;
-            grid[[kx_idx, ky_idx, kz_idx]]
-                * (self.deconv_x[kx] * self.deconv_y[ky] * self.deconv_z[kz])
-        })
+        Array3::from_shape_fn(
+            (self.grid.nx, self.grid.ny, self.grid.nz),
+            |(kx, ky, kz)| {
+                let kx_idx = fft_signed_index(kx, self.grid.nx).rem_euclid(self.mx as i64) as usize;
+                let ky_idx = fft_signed_index(ky, self.grid.ny).rem_euclid(self.my as i64) as usize;
+                let kz_idx = fft_signed_index(kz, self.grid.nz).rem_euclid(self.mz as i64) as usize;
+                grid[[kx_idx, ky_idx, kz_idx]]
+                    * (self.deconv_x[kx] * self.deconv_y[ky] * self.deconv_z[kz])
+            },
+        )
     }
 }
 
@@ -362,7 +492,11 @@ pub fn nufft_type1_1d(
     values: &[Complex64],
     domain: UniformDomain1D,
 ) -> Array1<Complex64> {
-    assert_eq!(positions.len(), values.len(), "positions/value length mismatch");
+    assert_eq!(
+        positions.len(),
+        values.len(),
+        "positions/value length mismatch"
+    );
     let two_pi_over_l = 2.0 * PI / domain.length();
     Array1::from_shape_fn(domain.n, |k| {
         let k_signed = fft_signed_index(k, domain.n);
@@ -390,7 +524,8 @@ pub fn nufft_type2_1d(
                 .iter()
                 .enumerate()
                 .fold(Complex64::new(0.0, 0.0), |acc, (k, &value)| {
-                    let angle = 2.0 * PI * fft_signed_index(k, domain.n) as f64 * x / domain.length();
+                    let angle =
+                        2.0 * PI * fft_signed_index(k, domain.n) as f64 * x / domain.length();
                     acc + value * Complex64::new(angle.cos(), angle.sin())
                 })
         })
@@ -404,7 +539,11 @@ pub fn nufft_type1_3d(
     values: &[Complex64],
     grid: UniformGrid3D,
 ) -> Array3<Complex64> {
-    assert_eq!(positions.len(), values.len(), "positions/value length mismatch");
+    assert_eq!(
+        positions.len(),
+        values.len(),
+        "positions/value length mismatch"
+    );
     let (lx, ly, lz) = grid.lengths();
     let two_pi_lx = 2.0 * PI / lx;
     let two_pi_ly = 2.0 * PI / ly;
@@ -414,15 +553,15 @@ pub fn nufft_type1_3d(
         let kx = fft_signed_index(px, grid.nx);
         let ky = fft_signed_index(py, grid.ny);
         let kz = fft_signed_index(pz, grid.nz);
-        positions
-            .iter()
-            .zip(values.iter())
-            .fold(Complex64::new(0.0, 0.0), |acc, (&(x, y, z), &value)| {
+        positions.iter().zip(values.iter()).fold(
+            Complex64::new(0.0, 0.0),
+            |acc, (&(x, y, z), &value)| {
                 let angle = -(two_pi_lx * kx as f64 * x
                     + two_pi_ly * ky as f64 * y
                     + two_pi_lz * kz as f64 * z);
                 acc + value * Complex64::new(angle.cos(), angle.sin())
-            })
+            },
+        )
     })
 }
 
@@ -445,7 +584,8 @@ pub fn nufft_type2_1d_fast(
     domain: UniformDomain1D,
     kernel_width: usize,
 ) -> Vec<Complex64> {
-    NufftPlan1D::new(domain, DEFAULT_NUFFT_OVERSAMPLING, kernel_width).type2(fourier_coeffs, positions)
+    NufftPlan1D::new(domain, DEFAULT_NUFFT_OVERSAMPLING, kernel_width)
+        .type2(fourier_coeffs, positions)
 }
 
 /// Fast 3D type-1 NUFFT convenience wrapper.
@@ -477,6 +617,7 @@ fn fft_signed_index(index: usize, len: usize) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn exact_1d_matches_direct_mode_sum() {
@@ -496,7 +637,9 @@ mod tests {
     #[test]
     fn fast_1d_tracks_exact() {
         let domain = UniformDomain1D::new(32, 0.05).unwrap();
-        let positions: Vec<f64> = (0..20).map(|i| ((i as f64 * 0.137) % domain.length()).abs()).collect();
+        let positions: Vec<f64> = (0..20)
+            .map(|i| ((i as f64 * 0.137) % domain.length()).abs())
+            .collect();
         let values: Vec<Complex64> = (0..20)
             .map(|i| Complex64::new((i as f64 * 0.3).cos(), (i as f64 * 0.2).sin()))
             .collect();
@@ -508,7 +651,11 @@ mod tests {
             .zip(fast.iter())
             .map(|(lhs, rhs)| (lhs - rhs).norm())
             .fold(0.0, f64::max);
-        assert!(max_err / scale < 1e-6, "max relative error = {}", max_err / scale);
+        assert!(
+            max_err / scale < 1e-6,
+            "max relative error = {}",
+            max_err / scale
+        );
     }
 
     #[test]
@@ -535,6 +682,36 @@ mod tests {
             .zip(fast.iter())
             .map(|(lhs, rhs)| (lhs - rhs).norm())
             .fold(0.0, f64::max);
-        assert!(max_err / scale < 1e-6, "max relative error = {}", max_err / scale);
+        assert!(
+            max_err / scale < 1e-6,
+            "max relative error = {}",
+            max_err / scale
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn fast_1d_matches_exact_for_random_points(
+            n in 8usize..32,
+            dx in 0.02f64..0.2,
+            sample_count in 3usize..12,
+        ) {
+            let domain = UniformDomain1D::new(n, dx).unwrap();
+            let positions: Vec<f64> = (0..sample_count)
+                .map(|i| ((i as f64 * std::f64::consts::SQRT_2 + 0.13).fract() * domain.length()))
+                .collect();
+            let values: Vec<Complex64> = (0..sample_count)
+                .map(|i| Complex64::new((i as f64 * 0.37).cos(), (i as f64 * 0.19).sin()))
+                .collect();
+            let exact = nufft_type1_1d(&positions, &values, domain);
+            let fast = nufft_type1_1d_fast(&positions, &values, domain, DEFAULT_NUFFT_KERNEL_WIDTH);
+            let scale = exact.iter().map(|value| value.norm()).fold(1.0, f64::max);
+            let max_err = exact
+                .iter()
+                .zip(fast.iter())
+                .map(|(lhs, rhs)| (lhs - rhs).norm())
+                .fold(0.0, f64::max);
+            prop_assert!(max_err / scale < 1e-6);
+        }
     }
 }

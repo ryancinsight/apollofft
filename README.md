@@ -6,7 +6,7 @@ Stage 2 moves Apollo beyond the initial compatibility cut:
 
 - `apollofft` owns reusable CPU FFT and NUFFT implementations.
 - `apollofft-wgpu` owns the real shader-backed 3D WGPU FFT path with radix-2 and Bluestein/Chirp-Z axis strategies.
-- `apollo-validation` emits structured CPU, GPU, NUFFT, benchmark, and external-comparison reports.
+- `apollo-validation` emits structured CPU, GPU, NUFFT, benchmark, and external-comparison reports, including direct parity against `rustfft` and NumPy when Python is available.
 - `pyapollofft` exposes FFT, R2C/C2R, NUFFT, and backend capability introspection for Python callers.
 
 ## Crates

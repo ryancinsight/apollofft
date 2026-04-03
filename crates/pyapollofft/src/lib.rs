@@ -22,7 +22,9 @@ fn require_contiguous_1d<T: Element>(input: &PyReadonlyArray1<'_, T>, name: &str
     if input.as_array().is_standard_layout() {
         Ok(())
     } else {
-        Err(PyValueError::new_err(format!("{name} must be C-contiguous")))
+        Err(PyValueError::new_err(format!(
+            "{name} must be C-contiguous"
+        )))
     }
 }
 
@@ -30,7 +32,9 @@ fn require_contiguous_2d<T: Element>(input: &PyReadonlyArray2<'_, T>, name: &str
     if input.as_array().is_standard_layout() {
         Ok(())
     } else {
-        Err(PyValueError::new_err(format!("{name} must be C-contiguous")))
+        Err(PyValueError::new_err(format!(
+            "{name} must be C-contiguous"
+        )))
     }
 }
 
@@ -38,7 +42,9 @@ fn require_contiguous_3d<T: Element>(input: &PyReadonlyArray3<'_, T>, name: &str
     if input.as_array().is_standard_layout() {
         Ok(())
     } else {
-        Err(PyValueError::new_err(format!("{name} must be C-contiguous")))
+        Err(PyValueError::new_err(format!(
+            "{name} must be C-contiguous"
+        )))
     }
 }
 
@@ -186,7 +192,9 @@ impl PyFftPlan3D {
         require_contiguous_3d(&input, "irfft input")?;
         let mut spectrum = input.as_array().to_owned();
         if spectrum.dim().2 != self.inner.nz_c() {
-            return Err(PyValueError::new_err("irfft input shape does not match plan nz_c"));
+            return Err(PyValueError::new_err(
+                "irfft input shape does not match plan nz_c",
+            ));
         }
         let (nx, ny, nz) = self.inner.dimensions();
         let mut output = ndarray::Array3::<f64>::zeros((nx, ny, nz));
@@ -203,7 +211,10 @@ fn fft1<'py>(
 ) -> PyResult<Bound<'py, PyArray1<Complex64>>> {
     require_contiguous_1d(&input, "fft1 input")?;
     let owned = input.as_array().to_owned();
-    Ok(PyArray1::from_owned_array(py, apollofft::fft_1d_array(&owned)))
+    Ok(PyArray1::from_owned_array(
+        py,
+        apollofft::fft_1d_array(&owned),
+    ))
 }
 
 /// Inverse 1D FFT of a complex spectrum.
@@ -214,7 +225,10 @@ fn ifft1<'py>(
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
     require_contiguous_1d(&input, "ifft1 input")?;
     let owned = input.as_array().to_owned();
-    Ok(PyArray1::from_owned_array(py, apollofft::ifft_1d_array(&owned)))
+    Ok(PyArray1::from_owned_array(
+        py,
+        apollofft::ifft_1d_array(&owned),
+    ))
 }
 
 /// Forward 2D FFT of a real array.
@@ -225,7 +239,10 @@ fn fft2<'py>(
 ) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
     require_contiguous_2d(&input, "fft2 input")?;
     let owned = input.as_array().to_owned();
-    Ok(PyArray2::from_owned_array(py, apollofft::fft_2d_array(&owned)))
+    Ok(PyArray2::from_owned_array(
+        py,
+        apollofft::fft_2d_array(&owned),
+    ))
 }
 
 /// Inverse 2D FFT of a complex spectrum.
@@ -236,7 +253,10 @@ fn ifft2<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     require_contiguous_2d(&input, "ifft2 input")?;
     let owned = input.as_array().to_owned();
-    Ok(PyArray2::from_owned_array(py, apollofft::ifft_2d_array(&owned)))
+    Ok(PyArray2::from_owned_array(
+        py,
+        apollofft::ifft_2d_array(&owned),
+    ))
 }
 
 /// Forward 3D FFT of a real array.
@@ -247,7 +267,10 @@ fn fft3<'py>(
 ) -> PyResult<Bound<'py, PyArray3<Complex64>>> {
     require_contiguous_3d(&input, "fft3 input")?;
     let owned = input.as_array().to_owned();
-    Ok(PyArray3::from_owned_array(py, apollofft::fft_3d_array(&owned)))
+    Ok(PyArray3::from_owned_array(
+        py,
+        apollofft::fft_3d_array(&owned),
+    ))
 }
 
 /// Inverse 3D FFT of a complex spectrum.
@@ -258,7 +281,10 @@ fn ifft3<'py>(
 ) -> PyResult<Bound<'py, PyArray3<f64>>> {
     require_contiguous_3d(&input, "ifft3 input")?;
     let owned = input.as_array().to_owned();
-    Ok(PyArray3::from_owned_array(py, apollofft::ifft_3d_array(&owned)))
+    Ok(PyArray3::from_owned_array(
+        py,
+        apollofft::ifft_3d_array(&owned),
+    ))
 }
 
 /// Forward 3D real-to-complex half-spectrum FFT.
@@ -287,7 +313,9 @@ fn irfft3<'py>(
     let mut owned = input.as_array().to_owned();
     let (nx, ny, nz_c) = owned.dim();
     if nz_c != nz / 2 + 1 {
-        return Err(PyValueError::new_err("irfft3 input shape and nz are inconsistent"));
+        return Err(PyValueError::new_err(
+            "irfft3 input shape and nz are inconsistent",
+        ));
     }
     let plan = FftPlan3D::new(nx, ny, nz);
     let mut output = ndarray::Array3::<f64>::zeros((nx, ny, nz));
@@ -314,7 +342,9 @@ fn nufft_type1_1d_py<'py>(
     Ok(PyArray1::from_owned_array(
         py,
         nufft_type1_1d(
-            positions.as_slice().expect("owned positions are contiguous"),
+            positions
+                .as_slice()
+                .expect("owned positions are contiguous"),
             values.as_slice().expect("owned values are contiguous"),
             domain,
         ),
@@ -337,7 +367,9 @@ fn nufft_type2_1d_py<'py>(
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
     Ok(nufft_type2_1d(
         &coeffs,
-        positions.as_slice().expect("owned positions are contiguous"),
+        positions
+            .as_slice()
+            .expect("owned positions are contiguous"),
         domain,
     )
     .into_pyarray(py))
@@ -381,7 +413,9 @@ fn nufft_type1_3d_py<'py>(
         py,
         nufft_type1_3d(
             &tuples,
-            owned_values.as_slice().expect("owned values are contiguous"),
+            owned_values
+                .as_slice()
+                .expect("owned values are contiguous"),
             grid,
         ),
     ))
@@ -407,7 +441,9 @@ fn nufft_type1_1d_fast_py<'py>(
     Ok(PyArray1::from_owned_array(
         py,
         nufft_type1_1d_fast(
-            positions.as_slice().expect("owned positions are contiguous"),
+            positions
+                .as_slice()
+                .expect("owned positions are contiguous"),
             values.as_slice().expect("owned values are contiguous"),
             domain,
             kernel_width,
@@ -433,7 +469,9 @@ fn nufft_type2_1d_fast_py<'py>(
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
     Ok(nufft_type2_1d_fast(
         &coeffs,
-        positions.as_slice().expect("owned positions are contiguous"),
+        positions
+            .as_slice()
+            .expect("owned positions are contiguous"),
         domain,
         kernel_width,
     )
@@ -480,7 +518,9 @@ fn nufft_type1_3d_fast_py<'py>(
         py,
         nufft_type1_3d_fast(
             &tuples,
-            owned_values.as_slice().expect("owned values are contiguous"),
+            owned_values
+                .as_slice()
+                .expect("owned values are contiguous"),
             grid,
             kernel_width,
         ),

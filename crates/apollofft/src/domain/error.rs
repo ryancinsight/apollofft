@@ -49,7 +49,11 @@ pub enum ApolloError {
 impl ApolloError {
     /// Construct a validation error.
     #[must_use]
-    pub fn validation(field: impl Into<String>, value: impl Into<String>, constraint: impl Into<String>) -> Self {
+    pub fn validation(
+        field: impl Into<String>,
+        value: impl Into<String>,
+        constraint: impl Into<String>,
+    ) -> Self {
         Self::Validation {
             field: field.into(),
             value: value.into(),
@@ -57,4 +61,3 @@ impl ApolloError {
         }
     }
 }
-

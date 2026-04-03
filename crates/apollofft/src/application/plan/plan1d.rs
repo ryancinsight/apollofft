@@ -133,4 +133,3 @@ impl FftPlan1D {
             .process(data.as_slice_mut().expect("Array must be contiguous"));
     }
 }
-

@@ -151,4 +151,3 @@ mod tests {
         assert!(Arc::ptr_eq(&lhs, &rhs));
     }
 }
-

@@ -348,27 +348,39 @@ impl GpuFft3d {
         };
 
         let axis_fwd_x = match strategy_x {
-            AxisStrategy::Radix2 => RadixStages::precompute(&device, &params_layout, nx as u32, false),
+            AxisStrategy::Radix2 => {
+                RadixStages::precompute(&device, &params_layout, nx as u32, false)
+            }
             AxisStrategy::ChirpZ { .. } => RadixStages::empty(),
         };
         let axis_inv_x = match strategy_x {
-            AxisStrategy::Radix2 => RadixStages::precompute(&device, &params_layout, nx as u32, true),
+            AxisStrategy::Radix2 => {
+                RadixStages::precompute(&device, &params_layout, nx as u32, true)
+            }
             AxisStrategy::ChirpZ { .. } => RadixStages::empty(),
         };
         let axis_fwd_y = match strategy_y {
-            AxisStrategy::Radix2 => RadixStages::precompute(&device, &params_layout, ny as u32, false),
+            AxisStrategy::Radix2 => {
+                RadixStages::precompute(&device, &params_layout, ny as u32, false)
+            }
             AxisStrategy::ChirpZ { .. } => RadixStages::empty(),
         };
         let axis_inv_y = match strategy_y {
-            AxisStrategy::Radix2 => RadixStages::precompute(&device, &params_layout, ny as u32, true),
+            AxisStrategy::Radix2 => {
+                RadixStages::precompute(&device, &params_layout, ny as u32, true)
+            }
             AxisStrategy::ChirpZ { .. } => RadixStages::empty(),
         };
         let axis_fwd_z = match strategy_z {
-            AxisStrategy::Radix2 => RadixStages::precompute(&device, &params_layout, nz as u32, false),
+            AxisStrategy::Radix2 => {
+                RadixStages::precompute(&device, &params_layout, nz as u32, false)
+            }
             AxisStrategy::ChirpZ { .. } => RadixStages::empty(),
         };
         let axis_inv_z = match strategy_z {
-            AxisStrategy::Radix2 => RadixStages::precompute(&device, &params_layout, nz as u32, true),
+            AxisStrategy::Radix2 => {
+                RadixStages::precompute(&device, &params_layout, nz as u32, true)
+            }
             AxisStrategy::ChirpZ { .. } => RadixStages::empty(),
         };
 
@@ -695,7 +707,11 @@ impl GpuFft3d {
         match axis {
             Axis::Z => match self.strategy_z {
                 AxisStrategy::Radix2 => {
-                    let stages = if inverse { &self.axis_inv_z } else { &self.axis_fwd_z };
+                    let stages = if inverse {
+                        &self.axis_inv_z
+                    } else {
+                        &self.axis_fwd_z
+                    };
                     self.dispatch_radix2(&mut encoder, self.nz as u32, inverse, stages);
                 }
                 AxisStrategy::ChirpZ { .. } => self.dispatch_chirp(
@@ -706,7 +722,11 @@ impl GpuFft3d {
             },
             Axis::Y => match self.strategy_y {
                 AxisStrategy::Radix2 => {
-                    let stages = if inverse { &self.axis_inv_y } else { &self.axis_fwd_y };
+                    let stages = if inverse {
+                        &self.axis_inv_y
+                    } else {
+                        &self.axis_fwd_y
+                    };
                     self.dispatch_radix2(&mut encoder, self.ny as u32, inverse, stages);
                 }
                 AxisStrategy::ChirpZ { .. } => self.dispatch_chirp(
@@ -717,7 +737,11 @@ impl GpuFft3d {
             },
             Axis::X => match self.strategy_x {
                 AxisStrategy::Radix2 => {
-                    let stages = if inverse { &self.axis_inv_x } else { &self.axis_fwd_x };
+                    let stages = if inverse {
+                        &self.axis_inv_x
+                    } else {
+                        &self.axis_fwd_x
+                    };
                     self.dispatch_radix2(&mut encoder, self.nx as u32, inverse, stages);
                 }
                 AxisStrategy::ChirpZ { .. } => self.dispatch_chirp(
@@ -907,7 +931,8 @@ mod tests {
 
     #[test]
     fn rejects_dimensions_that_exceed_device_limit() {
-        let err = validate_dimensions(16, 4, 5, 4).expect_err("chirp embedding should exceed limit");
+        let err =
+            validate_dimensions(16, 4, 5, 4).expect_err("chirp embedding should exceed limit");
         assert!(err.contains("ny=5"));
         assert!(err.contains("max_buffer_size=16"));
     }
