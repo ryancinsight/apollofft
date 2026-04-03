@@ -1,0 +1,34 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cargo Check
+        run: cargo check
+      - name: Apollo Tests
+        run: cargo test -p apollofft -p apollofft-wgpu -p apollo-validation
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Maturin
+        run: pip install maturin pytest
+      - name: Build Python Extension
+        working-directory: crates/pyapollofft
+        run: maturin develop
+      - name: Python Smoke Tests
+        run: pytest crates/pyapollofft/tests/test_smoke.py -q

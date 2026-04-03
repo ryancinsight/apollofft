@@ -1,0 +1,16 @@
+[package]
+name = "apollofft-wgpu"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ryan Clanton PhD <ryanclanton@outlook.com>"]
+repository = "https://github.com/ryancinsight/kwavers"
+description = "WGPU backend surface for Apollo FFT"
+
+[dependencies]
+apollofft = { path = "../apollofft" }
+bytemuck = { version = "1.19", features = ["derive"] }
+ndarray = { version = "0.16", features = ["rayon"] }
+num-complex = "0.4"
+pollster = "0.4"
+wgpu = { version = "26.0", features = ["wgsl"] }

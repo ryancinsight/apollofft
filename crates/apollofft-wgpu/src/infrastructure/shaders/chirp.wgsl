@@ -1,0 +1,95 @@
+struct ChirpParams {
+    n: u32,
+    m: u32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+@group(0) @binding(0)
+var<storage, read_write> data_re: array<f32>;
+@group(0) @binding(1)
+var<storage, read_write> data_im: array<f32>;
+@group(0) @binding(2)
+var<storage, read> chirp_re: array<f32>;
+@group(0) @binding(3)
+var<storage, read> chirp_im: array<f32>;
+
+@group(1) @binding(0)
+var<uniform> params: ChirpParams;
+
+const PI: f32 = 3.14159265358979323846;
+
+@compute @workgroup_size(256, 1, 1)
+fn chirp_premul(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= params.m {
+        return;
+    }
+
+    if idx >= params.n {
+        data_re[idx] = 0.0;
+        data_im[idx] = 0.0;
+        return;
+    }
+
+    let n_f = f32(idx);
+    let arg = PI * n_f * n_f / f32(params.n);
+    let cos_arg = cos(arg);
+    let sin_arg = sin(arg);
+
+    let re = data_re[idx];
+    let im = data_im[idx];
+    data_re[idx] = re * cos_arg - im * sin_arg;
+    data_im[idx] = re * sin_arg + im * cos_arg;
+}
+
+@compute @workgroup_size(256, 1, 1)
+fn chirp_pointmul(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= params.m {
+        return;
+    }
+
+    let a_re = data_re[idx];
+    let a_im = data_im[idx];
+    let h_re = chirp_re[idx];
+    let h_im = chirp_im[idx];
+
+    data_re[idx] = a_re * h_re - a_im * h_im;
+    data_im[idx] = a_re * h_im + a_im * h_re;
+}
+
+@compute @workgroup_size(256, 1, 1)
+fn chirp_scale(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= params.n {
+        return;
+    }
+}
+
+@compute @workgroup_size(256, 1, 1)
+fn chirp_postmul(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= params.n {
+        return;
+    }
+
+    let k_f = f32(idx);
+    let arg = PI * k_f * k_f / f32(params.n);
+    let cos_arg = cos(arg);
+    let sin_arg = sin(arg);
+
+    let re = data_re[idx];
+    let im = data_im[idx];
+    data_re[idx] = re * cos_arg - im * sin_arg;
+    data_im[idx] = re * sin_arg + im * cos_arg;
+}
+
+@compute @workgroup_size(256, 1, 1)
+fn chirp_negate_im(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= params.n {
+        return;
+    }
+    data_im[idx] = -data_im[idx];
+}

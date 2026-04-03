@@ -1,0 +1,26 @@
+# Cargo build outputs
+/target/
+
+# Python build outputs
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.mypy_cache/
+**/.venv/
+**/dist/
+**/build/
+**/*.so
+**/*.pyd
+
+# Fuzzing artifacts
+/fuzz/artifacts/
+/fuzz/corpus/
+
+# External comparators stay untracked except the README
+/external/*
+!/external/README.md
+
+# Local benchmark outputs
+/external/results/*
+!/external/results/.gitkeep
+

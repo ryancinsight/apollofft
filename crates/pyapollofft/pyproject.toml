@@ -1,0 +1,22 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "pyapollofft"
+version = "0.1.0"
+description = "Python bindings for Apollo FFT"
+authors = [
+    {name = "Ryan Clanton PhD", email = "ryanclanton@outlook.com"}
+]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy>=1.20,<3.0",
+]
+
+[tool.maturin]
+python-source = "python"
+module-name = "pyapollofft._pyapollofft"
+
