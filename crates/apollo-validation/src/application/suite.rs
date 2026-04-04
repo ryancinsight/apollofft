@@ -2,20 +2,27 @@
 
 use crate::domain::report::{
     BenchmarkReport, CpuFftReport, EnvironmentReport, ExternalBackendReport,
-    ExternalComparisonReport, GpuFftReport, NufftReport, ValidationReport,
+    ExternalComparisonReport, GpuFftReport, NufftReport, PrecisionBenchmarkReport,
+    PrecisionRunReport, ValidationReport,
 };
 use crate::infrastructure::{numpy, rustfft_reference};
 use apollofft::{
-    nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type1_3d_fast, nufft_type2_1d,
-    nufft_type2_1d_fast, Complex64, FftBackend, FftPlan1D, FftPlan3D, Shape3D, UniformDomain1D,
-    UniformGrid3D, DEFAULT_NUFFT_KERNEL_WIDTH,
+    f16, nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type1_3d_fast, nufft_type2_1d,
+    nufft_type2_1d_fast, Complex32, Complex64, FftBackend, FftPlan1D, FftPlan3D, PrecisionMode,
+    PrecisionProfile, Shape3D, UniformDomain1D, UniformGrid3D, DEFAULT_NUFFT_KERNEL_WIDTH,
 };
 use ndarray::{arr1, Array1, Array3};
+use std::hint::black_box;
 use std::path::PathBuf;
 use std::time::Instant;
 
 const EXTERNAL_STABILITY_REPEATS: usize = 4;
 const BENCHMARK_ITERATIONS: usize = 24;
+
+const CPU_LOW_PRECISION_RELATIVE_ERROR_LIMIT: f64 = 1e-5;
+const CPU_MIXED_PRECISION_RELATIVE_ERROR_LIMIT: f64 = 1e-2;
+const GPU_LOW_PRECISION_FORWARD_ERROR_LIMIT: f64 = 5e-5;
+const GPU_LOW_PRECISION_INVERSE_ERROR_LIMIT: f64 = 1e-5;
 
 fn representative_signal(len: usize) -> Array1<f64> {
     Array1::from_shape_fn(len, |i| (i as f64 * 0.23).sin() + (i as f64 * 0.11).cos())
@@ -28,6 +35,14 @@ fn representative_field(nx: usize, ny: usize, nz: usize) -> Array3<f64> {
     })
 }
 
+fn representative_field_f32(nx: usize, ny: usize, nz: usize) -> Array3<f32> {
+    representative_field(nx, ny, nz).mapv(|value| value as f32)
+}
+
+fn representative_field_f16(nx: usize, ny: usize, nz: usize) -> Array3<f16> {
+    representative_field(nx, ny, nz).mapv(|value| f16::from_f32(value as f32))
+}
+
 fn complex_max_abs_error<I, J>(lhs: I, rhs: J) -> f64
 where
     I: Iterator<Item = Complex64>,
@@ -38,15 +53,59 @@ where
         .fold(0.0_f64, f64::max)
 }
 
-fn benchmark_ms<F>(iterations: usize, mut f: F) -> f64
+fn complex32_max_abs_error<I, J>(lhs: I, rhs: J) -> f64
 where
-    F: FnMut(),
+    I: Iterator<Item = Complex32>,
+    J: Iterator<Item = Complex32>,
 {
-    let start = Instant::now();
-    for _ in 0..iterations {
-        f();
+    lhs.zip(rhs)
+        .map(|(left, right)| (left - right).norm() as f64)
+        .fold(0.0_f64, f64::max)
+}
+
+fn relative_real_error_f32(lhs: &Array3<f32>, rhs: &Array3<f32>) -> f64 {
+    let max_abs = lhs
+        .iter()
+        .zip(rhs.iter())
+        .map(|(left, right)| (left - right).abs() as f64)
+        .fold(0.0_f64, f64::max);
+    let scale = lhs
+        .iter()
+        .map(|value| value.abs() as f64)
+        .fold(1.0_f64, f64::max);
+    max_abs / scale
+}
+
+fn precision_profile_name(profile: PrecisionProfile) -> &'static str {
+    match profile.mode {
+        PrecisionMode::HighAccuracy => "high_accuracy",
+        PrecisionMode::LowPrecision => "low_precision",
+        PrecisionMode::MixedPrecision => "mixed_precision",
     }
-    start.elapsed().as_secs_f64() * 1_000.0 / iterations as f64
+}
+
+fn benchmark_ms<F, R>(iterations: usize, mut f: F) -> f64
+where
+    F: FnMut() -> R,
+{
+    const WARMUP_ITERATIONS: usize = 4;
+    const SAMPLES: usize = 5;
+
+    for _ in 0..WARMUP_ITERATIONS {
+        black_box(f());
+    }
+
+    let mut best_ms = f64::INFINITY;
+    for _ in 0..SAMPLES {
+        let start = Instant::now();
+        for _ in 0..iterations {
+            black_box(f());
+        }
+        let sample_ms = start.elapsed().as_secs_f64() * 1_000.0 / iterations as f64;
+        best_ms = best_ms.min(sample_ms);
+    }
+
+    best_ms
 }
 
 fn python_environment_probe() -> EnvironmentReport {
@@ -101,15 +160,90 @@ pub fn run_fft_cpu_suite() -> Result<CpuFftReport, Box<dyn std::error::Error>> {
         .iter()
         .any(|value| !value.re.is_finite() || !value.im.is_finite());
 
+    let field_f32 = representative_field_f32(8, 8, 8);
+    let reference_plan = FftPlan3D::with_precision(8, 8, 8, PrecisionProfile::HIGH_ACCURACY_F64);
+    let reference_spectrum_f32 = reference_plan
+        .forward(&field_f32.mapv(f64::from))
+        .mapv(|value| Complex32::new(value.re as f32, value.im as f32));
+
+    let low_plan = FftPlan3D::with_precision(8, 8, 8, PrecisionProfile::LOW_PRECISION_F32);
+    let low_spectrum = low_plan.forward_typed::<f32>(&field_f32);
+    let low_inverse = low_plan.inverse_typed::<f32>(&low_spectrum);
+    let low_forward_error = complex32_max_abs_error(
+        reference_spectrum_f32.iter().copied(),
+        low_spectrum.iter().copied(),
+    );
+    let low_inverse_error = field_f32
+        .iter()
+        .zip(low_inverse.iter())
+        .map(|(lhs, rhs)| (lhs - rhs).abs() as f64)
+        .fold(0.0_f64, f64::max);
+    let low_relative_error = relative_real_error_f32(&field_f32, &low_inverse);
+
+    let field_f16 = representative_field_f16(8, 8, 8);
+    let mixed_plan = FftPlan3D::with_precision(8, 8, 8, PrecisionProfile::MIXED_PRECISION_F16_F32);
+    let mixed_spectrum = mixed_plan.forward_typed::<f16>(&field_f16);
+    let mixed_inverse = mixed_plan.inverse_typed::<f16>(&mixed_spectrum);
+    let mixed_forward_error = complex32_max_abs_error(
+        reference_spectrum_f32.iter().copied(),
+        mixed_spectrum.iter().copied(),
+    );
+    let mixed_inverse_error = field_f16
+        .iter()
+        .zip(mixed_inverse.iter())
+        .map(|(lhs, rhs)| (lhs.to_f32() - rhs.to_f32()).abs() as f64)
+        .fold(0.0_f64, f64::max);
+    let mixed_relative_error = field_f16
+        .iter()
+        .zip(mixed_inverse.iter())
+        .map(|(lhs, rhs)| (lhs.to_f32() - rhs.to_f32()).abs() as f64)
+        .fold(0.0_f64, f64::max)
+        / field_f16
+            .iter()
+            .map(|value| value.to_f32().abs() as f64)
+            .fold(1.0_f64, f64::max);
+
+    let precision_profiles = vec![
+        PrecisionRunReport {
+            profile: precision_profile_name(PrecisionProfile::HIGH_ACCURACY_F64).to_string(),
+            attempted: true,
+            passed: roundtrip_max_abs_error < 1e-12,
+            forward_max_abs_error: Some(0.0),
+            inverse_max_abs_error: Some(roundtrip_max_abs_error),
+            relative_error: Some(roundtrip_max_abs_error),
+            note: Some("reference f64 path".to_string()),
+        },
+        PrecisionRunReport {
+            profile: precision_profile_name(PrecisionProfile::LOW_PRECISION_F32).to_string(),
+            attempted: true,
+            passed: low_relative_error < CPU_LOW_PRECISION_RELATIVE_ERROR_LIMIT,
+            forward_max_abs_error: Some(low_forward_error),
+            inverse_max_abs_error: Some(low_inverse_error),
+            relative_error: Some(low_relative_error),
+            note: Some("f32 storage and f32 compute".to_string()),
+        },
+        PrecisionRunReport {
+            profile: precision_profile_name(PrecisionProfile::MIXED_PRECISION_F16_F32).to_string(),
+            attempted: true,
+            passed: mixed_relative_error < CPU_MIXED_PRECISION_RELATIVE_ERROR_LIMIT,
+            forward_max_abs_error: Some(mixed_forward_error),
+            inverse_max_abs_error: Some(mixed_inverse_error),
+            relative_error: Some(mixed_relative_error),
+            note: Some("f16 storage with f32 compute".to_string()),
+        },
+    ];
+
     Ok(CpuFftReport {
         roundtrip_max_abs_error,
         parseval_relative_error,
         stability_max_abs_delta,
         non_finite_input_propagates,
+        precision_profiles: precision_profiles.clone(),
         passed: roundtrip_max_abs_error < 1e-12
             && parseval_relative_error < 1e-12
             && stability_max_abs_delta < 1e-12
-            && non_finite_input_propagates,
+            && non_finite_input_propagates
+            && precision_profiles.iter().all(|profile| profile.passed),
     })
 }
 
@@ -146,10 +280,36 @@ pub fn run_fft_gpu_suite() -> Result<GpuFftReport, Box<dyn std::error::Error>> {
             GpuFftReport {
                 surface_reported_available,
                 attempted: true,
-                passed: forward_max_abs_error < 5e-5 && inverse_max_abs_error < 1e-5,
+                passed: forward_max_abs_error < GPU_LOW_PRECISION_FORWARD_ERROR_LIMIT
+                    && inverse_max_abs_error < GPU_LOW_PRECISION_INVERSE_ERROR_LIMIT,
                 forward_max_abs_error: Some(forward_max_abs_error),
                 inverse_max_abs_error: Some(inverse_max_abs_error),
                 note: None,
+                precision_profiles: vec![
+                    PrecisionRunReport {
+                        profile: precision_profile_name(PrecisionProfile::LOW_PRECISION_F32)
+                            .to_string(),
+                        attempted: true,
+                        passed: forward_max_abs_error < GPU_LOW_PRECISION_FORWARD_ERROR_LIMIT
+                            && inverse_max_abs_error < GPU_LOW_PRECISION_INVERSE_ERROR_LIMIT,
+                        forward_max_abs_error: Some(forward_max_abs_error),
+                        inverse_max_abs_error: Some(inverse_max_abs_error),
+                        relative_error: None,
+                        note: Some("wgpu backend currently exposes only the f32 path".to_string()),
+                    },
+                    PrecisionRunReport {
+                        profile: precision_profile_name(PrecisionProfile::MIXED_PRECISION_F16_F32)
+                            .to_string(),
+                        attempted: false,
+                        passed: false,
+                        forward_max_abs_error: None,
+                        inverse_max_abs_error: None,
+                        relative_error: None,
+                        note: Some(
+                            "mixed precision is not implemented for the wgpu backend".to_string(),
+                        ),
+                    },
+                ],
             }
         }
         Err(error) => GpuFftReport {
@@ -159,6 +319,30 @@ pub fn run_fft_gpu_suite() -> Result<GpuFftReport, Box<dyn std::error::Error>> {
             forward_max_abs_error: None,
             inverse_max_abs_error: None,
             note: Some(error.to_string()),
+            precision_profiles: vec![
+                PrecisionRunReport {
+                    profile: precision_profile_name(PrecisionProfile::LOW_PRECISION_F32)
+                        .to_string(),
+                    attempted: false,
+                    passed: false,
+                    forward_max_abs_error: None,
+                    inverse_max_abs_error: None,
+                    relative_error: None,
+                    note: Some("wgpu backend unavailable on this host".to_string()),
+                },
+                PrecisionRunReport {
+                    profile: precision_profile_name(PrecisionProfile::MIXED_PRECISION_F16_F32)
+                        .to_string(),
+                    attempted: false,
+                    passed: false,
+                    forward_max_abs_error: None,
+                    inverse_max_abs_error: None,
+                    relative_error: None,
+                    note: Some(
+                        "mixed precision is not implemented for the wgpu backend".to_string(),
+                    ),
+                },
+            ],
         },
     };
 
@@ -524,6 +708,45 @@ pub fn run_external_comparison_suite(
         Some("only the built-in rustfft reference path was available; python comparators were skipped".to_string())
     };
 
+    let field_f32 = representative_field_f32(8, 8, 8);
+    let reference_plan = FftPlan3D::with_precision(8, 8, 8, PrecisionProfile::HIGH_ACCURACY_F64);
+    let reference_spectrum_f32 = reference_plan
+        .forward(&field_f32.mapv(f64::from))
+        .mapv(|value| Complex32::new(value.re as f32, value.im as f32));
+    let low_plan = FftPlan3D::with_precision(8, 8, 8, PrecisionProfile::LOW_PRECISION_F32);
+    let low_spectrum = low_plan.forward_typed::<f32>(&field_f32);
+    let field_f16 = representative_field_f16(8, 8, 8);
+    let mixed_plan = FftPlan3D::with_precision(8, 8, 8, PrecisionProfile::MIXED_PRECISION_F16_F32);
+    let mixed_spectrum = mixed_plan.forward_typed::<f16>(&field_f16);
+    let low_external_error = complex32_max_abs_error(
+        reference_spectrum_f32.iter().copied(),
+        low_spectrum.iter().copied(),
+    );
+    let mixed_external_error = complex32_max_abs_error(
+        reference_spectrum_f32.iter().copied(),
+        mixed_spectrum.iter().copied(),
+    );
+    let precision_comparisons = vec![
+        PrecisionRunReport {
+            profile: precision_profile_name(PrecisionProfile::LOW_PRECISION_F32).to_string(),
+            attempted: true,
+            passed: low_external_error < CPU_LOW_PRECISION_RELATIVE_ERROR_LIMIT,
+            forward_max_abs_error: Some(low_external_error),
+            inverse_max_abs_error: None,
+            relative_error: Some(low_external_error),
+            note: Some("compared against the Apollo f64 reference because external float32 probes are not yet wired".to_string()),
+        },
+        PrecisionRunReport {
+            profile: precision_profile_name(PrecisionProfile::MIXED_PRECISION_F16_F32).to_string(),
+            attempted: true,
+            passed: mixed_external_error < CPU_MIXED_PRECISION_RELATIVE_ERROR_LIMIT,
+            forward_max_abs_error: Some(mixed_external_error),
+            inverse_max_abs_error: None,
+            relative_error: Some(mixed_external_error),
+            note: Some("compared against the Apollo f64 reference after f16 quantization".to_string()),
+        },
+    ];
+
     Ok(ExternalComparisonReport {
         passed: robustness_passed,
         rustfft_checkout_present,
@@ -532,6 +755,7 @@ pub fn run_external_comparison_suite(
         numpy,
         pyfftw,
         robustness_passed,
+        precision_comparisons,
         note,
     })
 }
@@ -540,26 +764,47 @@ pub fn run_external_comparison_suite(
 pub fn run_benchmark_suite() -> Result<BenchmarkReport, Box<dyn std::error::Error>> {
     let signal = representative_signal(256);
     let field = representative_field(16, 16, 16);
+    let rustfft_1d_plan = rustfft_reference::RustFftPlan1D::new(signal.len());
+    let rustfft_3d_plan = rustfft_reference::RustFftPlan3D::new((16, 16, 16));
 
     let fft1_plan = FftPlan1D::new(signal.len());
-    let apollo_fft1_ms = benchmark_ms(BENCHMARK_ITERATIONS, || {
-        let _ = fft1_plan.forward(&signal);
-    });
+    let apollo_fft1_ms = benchmark_ms(BENCHMARK_ITERATIONS, || fft1_plan.forward(&signal));
 
     let fft3_plan = FftPlan3D::new(16, 16, 16);
+    let mut apollo_fft3_spectrum = Array3::<Complex64>::zeros((16, 16, 16));
     let apollo_fft3_forward_ms = benchmark_ms(BENCHMARK_ITERATIONS, || {
-        let _ = fft3_plan.forward(&field);
+        fft3_plan.forward_real_to_complex_into(&field, &mut apollo_fft3_spectrum);
     });
     let baseline_spectrum = fft3_plan.forward(&field);
+    let mut apollo_fft3_inverse_out = Array3::<f64>::zeros((16, 16, 16));
+    let mut apollo_fft3_inverse_scratch = Array3::<Complex64>::zeros((16, 16, 16));
     let apollo_fft3_inverse_ms = benchmark_ms(BENCHMARK_ITERATIONS, || {
-        let _ = fft3_plan.inverse(&baseline_spectrum);
+        fft3_plan.inverse_complex_to_real_into(
+            &baseline_spectrum,
+            &mut apollo_fft3_inverse_out,
+            &mut apollo_fft3_inverse_scratch,
+        );
     });
 
+    let mut rustfft_fft1_buffer = vec![Complex64::new(0.0, 0.0); signal.len()];
+    let mut rustfft_fft1_scratch = vec![Complex64::new(0.0, 0.0); rustfft_1d_plan.scratch_len()];
     let rustfft_fft1_ms = benchmark_ms(BENCHMARK_ITERATIONS, || {
-        let _ = rustfft_reference::fft1_real(&signal);
+        rustfft_1d_plan.forward_real_into(
+            &signal,
+            &mut rustfft_fft1_buffer,
+            &mut rustfft_fft1_scratch,
+        );
     });
+    let mut rustfft_fft3_out = Array3::from_elem((16, 16, 16), Complex64::new(0.0, 0.0));
+    let mut rustfft_fft3_lane = vec![Complex64::new(0.0, 0.0); 16];
+    let mut rustfft_fft3_scratch = vec![Complex64::new(0.0, 0.0); rustfft_3d_plan.scratch_len()];
     let rustfft_fft3_ms = benchmark_ms(BENCHMARK_ITERATIONS, || {
-        let _ = rustfft_reference::fft3_real(&field);
+        rustfft_3d_plan.forward_real_into(
+            &field,
+            &mut rustfft_fft3_out,
+            &mut rustfft_fft3_lane,
+            &mut rustfft_fft3_scratch,
+        );
     });
 
     let numpy_1d = numpy::benchmark_fft(
@@ -612,18 +857,39 @@ pub fn run_benchmark_suite() -> Result<BenchmarkReport, Box<dyn std::error::Erro
     {
         Ok(backend) => {
             let gpu_plan = backend.plan_3d(Shape3D::new(16, 16, 16)?)?;
+            let mut gpu_forward_out = vec![0.0_f32; 2 * 16 * 16 * 16];
             let gpu_fft_forward_ms = benchmark_ms(BENCHMARK_ITERATIONS, || {
-                let _ = gpu_plan.forward(&field);
+                gpu_plan.forward_into(&field, &mut gpu_forward_out);
             });
             let gpu_spectrum = gpu_plan.forward(&field);
+            let mut gpu_recovered = Array3::<f64>::zeros((16, 16, 16));
             let gpu_fft_inverse_ms = benchmark_ms(BENCHMARK_ITERATIONS, || {
-                let mut gpu_recovered = Array3::<f64>::zeros((16, 16, 16));
                 gpu_plan.inverse(&gpu_spectrum, &mut gpu_recovered);
             });
             (Some(gpu_fft_forward_ms), Some(gpu_fft_inverse_ms))
         }
         Err(_) => (None, None),
     };
+
+    let field_f32 = representative_field_f32(16, 16, 16);
+    let field_f16 = representative_field_f16(16, 16, 16);
+    let low_plan = FftPlan3D::with_precision(16, 16, 16, PrecisionProfile::LOW_PRECISION_F32);
+    let mixed_plan =
+        FftPlan3D::with_precision(16, 16, 16, PrecisionProfile::MIXED_PRECISION_F16_F32);
+    let low_forward_ms = benchmark_ms(BENCHMARK_ITERATIONS, || {
+        low_plan.forward_typed::<f32>(&field_f32)
+    });
+    let low_spectrum = low_plan.forward_typed::<f32>(&field_f32);
+    let low_inverse_ms = benchmark_ms(BENCHMARK_ITERATIONS, || {
+        low_plan.inverse_typed::<f32>(&low_spectrum)
+    });
+    let mixed_forward_ms = benchmark_ms(BENCHMARK_ITERATIONS, || {
+        mixed_plan.forward_typed::<f16>(&field_f16)
+    });
+    let mixed_spectrum = mixed_plan.forward_typed::<f16>(&field_f16);
+    let mixed_inverse_ms = benchmark_ms(BENCHMARK_ITERATIONS, || {
+        mixed_plan.inverse_typed::<f16>(&mixed_spectrum)
+    });
 
     Ok(BenchmarkReport {
         apollo_fft1_ms,
@@ -640,6 +906,27 @@ pub fn run_benchmark_suite() -> Result<BenchmarkReport, Box<dyn std::error::Erro
         nufft_fast_type1_3d_ms,
         gpu_fft_forward_ms,
         gpu_fft_inverse_ms,
+        precision_benchmarks: vec![
+            PrecisionBenchmarkReport {
+                profile: precision_profile_name(PrecisionProfile::HIGH_ACCURACY_F64).to_string(),
+                forward_ms: Some(apollo_fft3_forward_ms),
+                inverse_ms: Some(apollo_fft3_inverse_ms),
+                note: Some("f64 storage and f64 compute".to_string()),
+            },
+            PrecisionBenchmarkReport {
+                profile: precision_profile_name(PrecisionProfile::LOW_PRECISION_F32).to_string(),
+                forward_ms: Some(low_forward_ms),
+                inverse_ms: Some(low_inverse_ms),
+                note: Some("f32 storage and f32 compute".to_string()),
+            },
+            PrecisionBenchmarkReport {
+                profile: precision_profile_name(PrecisionProfile::MIXED_PRECISION_F16_F32)
+                    .to_string(),
+                forward_ms: Some(mixed_forward_ms),
+                inverse_ms: Some(mixed_inverse_ms),
+                note: Some("f16 storage with f32 compute".to_string()),
+            },
+        ],
     })
 }
 
@@ -675,6 +962,11 @@ mod tests {
         assert!(report.passed);
         assert!(report.roundtrip_max_abs_error < 1e-12);
         assert!(report.stability_max_abs_delta < 1e-12);
+        assert_eq!(report.precision_profiles.len(), 3);
+        assert!(report
+            .precision_profiles
+            .iter()
+            .any(|profile| profile.profile == "mixed_precision" && profile.passed));
     }
 
     #[test]
@@ -697,5 +989,9 @@ mod tests {
         let report = run_benchmark_suite().expect("benchmark suite must run");
         assert!(report.apollo_fft1_ms >= 0.0);
         assert!(report.rustfft_fft1_ms >= 0.0);
+        assert!(report
+            .precision_benchmarks
+            .iter()
+            .any(|profile| profile.profile == "low_precision"));
     }
 }

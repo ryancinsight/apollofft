@@ -6,9 +6,10 @@ pub mod domain;
 pub mod infrastructure;
 
 use apollofft::{
-    nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type1_3d_fast, nufft_type2_1d,
-    nufft_type2_1d_fast, Complex64, FftPlan1D, FftPlan2D, FftPlan3D, UniformDomain1D,
-    UniformGrid3D, DEFAULT_NUFFT_KERNEL_WIDTH,
+    f16, nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type1_3d_fast, nufft_type2_1d,
+    nufft_type2_1d_fast, Complex32, Complex64, CpuBackend, FftBackend, FftPlan1D, FftPlan2D,
+    FftPlan3D, PrecisionMode, PrecisionProfile, StoragePrecision, UniformDomain1D, UniformGrid3D,
+    DEFAULT_NUFFT_KERNEL_WIDTH,
 };
 use numpy::{
     Element, IntoPyArray, PyArray1, PyArray2, PyArray3, PyReadonlyArray1, PyReadonlyArray2,
@@ -16,7 +17,7 @@ use numpy::{
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use std::collections::BTreeMap;
+use pyo3::types::PyDict;
 
 fn require_contiguous_1d<T: Element>(input: &PyReadonlyArray1<'_, T>, name: &str) -> PyResult<()> {
     if input.as_array().is_standard_layout() {
@@ -52,6 +53,47 @@ fn wgpu_backend_usable() -> bool {
     apollofft_wgpu::WgpuBackend::try_default().is_ok()
 }
 
+fn parse_precision(precision: Option<&str>) -> PyResult<PrecisionProfile> {
+    match precision.unwrap_or("high_accuracy") {
+        "high_accuracy" => Ok(PrecisionProfile::HIGH_ACCURACY_F64),
+        "low_precision" => Ok(PrecisionProfile::LOW_PRECISION_F32),
+        "mixed_precision" => Ok(PrecisionProfile::MIXED_PRECISION_F16_F32),
+        other => Err(PyValueError::new_err(format!(
+            "unsupported precision `{other}`; expected `high_accuracy`, `low_precision`, or `mixed_precision`"
+        ))),
+    }
+}
+
+fn precision_name(profile: PrecisionProfile) -> &'static str {
+    match profile.mode {
+        PrecisionMode::HighAccuracy => "high_accuracy",
+        PrecisionMode::LowPrecision => "low_precision",
+        PrecisionMode::MixedPrecision => "mixed_precision",
+    }
+}
+
+fn require_profile_matches_f64(profile: PrecisionProfile, name: &str) -> PyResult<()> {
+    if profile.storage == StoragePrecision::F64 {
+        Ok(())
+    } else {
+        Err(PyValueError::new_err(format!(
+            "{name} received float64/complex128 input but precision `{}` expects float32/complex64 storage",
+            precision_name(profile)
+        )))
+    }
+}
+
+fn require_profile_matches_f32(profile: PrecisionProfile, name: &str) -> PyResult<()> {
+    if profile.storage == StoragePrecision::F32 {
+        Ok(())
+    } else {
+        Err(PyValueError::new_err(format!(
+            "{name} received float32/complex64 input but precision `{}` expects float64/complex128 storage",
+            precision_name(profile)
+        )))
+    }
+}
+
 /// Python wrapper for a reusable 1D FFT plan.
 #[pyclass(name = "FftPlan1D")]
 struct PyFftPlan1D {
@@ -61,34 +103,84 @@ struct PyFftPlan1D {
 #[pymethods]
 impl PyFftPlan1D {
     #[new]
-    fn new(n: usize) -> Self {
-        Self {
-            inner: FftPlan1D::new(n),
+    #[pyo3(signature = (n, precision=None))]
+    fn new(n: usize, precision: Option<&str>) -> PyResult<Self> {
+        let profile = parse_precision(precision)?;
+        Ok(Self {
+            inner: FftPlan1D::with_precision(n, profile),
+        })
+    }
+
+    fn fft<'py>(&self, py: Python<'py>, input: &Bound<'py, PyAny>) -> PyResult<PyObject> {
+        if let Ok(input64) = input.extract::<PyReadonlyArray1<f64>>() {
+            require_contiguous_1d(&input64, "fft input")?;
+            require_profile_matches_f64(self.inner.precision_profile(), "fft")?;
+            Ok(
+                PyArray1::from_owned_array(py, self.inner.forward(&input64.as_array().to_owned()))
+                    .into_any()
+                    .unbind(),
+            )
+        } else {
+            match self.inner.precision_profile().storage {
+                StoragePrecision::F16 => {
+                    let input32 = input.extract::<PyReadonlyArray1<f32>>()?;
+                    require_contiguous_1d(&input32, "fft input")?;
+                    Ok(PyArray1::from_owned_array(
+                        py,
+                        self.inner
+                            .forward_typed(&input32.as_array().mapv(f16::from_f32)),
+                    )
+                    .into_any()
+                    .unbind())
+                }
+                _ => {
+                    let input32 = input.extract::<PyReadonlyArray1<f32>>()?;
+                    require_contiguous_1d(&input32, "fft input")?;
+                    require_profile_matches_f32(self.inner.precision_profile(), "fft")?;
+                    Ok(PyArray1::from_owned_array(
+                        py,
+                        self.inner.forward_typed(&input32.as_array().to_owned()),
+                    )
+                    .into_any()
+                    .unbind())
+                }
+            }
         }
     }
 
-    fn fft<'py>(
-        &self,
-        py: Python<'py>,
-        input: PyReadonlyArray1<f64>,
-    ) -> PyResult<Bound<'py, PyArray1<Complex64>>> {
-        require_contiguous_1d(&input, "fft input")?;
-        Ok(PyArray1::from_owned_array(
-            py,
-            self.inner.forward(&input.as_array().to_owned()),
-        ))
-    }
-
-    fn ifft<'py>(
-        &self,
-        py: Python<'py>,
-        input: PyReadonlyArray1<Complex64>,
-    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        require_contiguous_1d(&input, "ifft input")?;
-        Ok(PyArray1::from_owned_array(
-            py,
-            self.inner.inverse(&input.as_array().to_owned()),
-        ))
+    fn ifft<'py>(&self, py: Python<'py>, input: &Bound<'py, PyAny>) -> PyResult<PyObject> {
+        if let Ok(input64) = input.extract::<PyReadonlyArray1<Complex64>>() {
+            require_contiguous_1d(&input64, "ifft input")?;
+            require_profile_matches_f64(self.inner.precision_profile(), "ifft")?;
+            Ok(
+                PyArray1::from_owned_array(py, self.inner.inverse(&input64.as_array().to_owned()))
+                    .into_any()
+                    .unbind(),
+            )
+        } else {
+            let input32 = input.extract::<PyReadonlyArray1<Complex32>>()?;
+            require_contiguous_1d(&input32, "ifft input")?;
+            match self.inner.precision_profile().storage {
+                StoragePrecision::F16 => Ok(PyArray1::from_owned_array(
+                    py,
+                    self.inner
+                        .inverse_typed::<f16>(&input32.as_array().to_owned())
+                        .mapv(|value: f16| value.to_f32()),
+                )
+                .into_any()
+                .unbind()),
+                _ => {
+                    require_profile_matches_f32(self.inner.precision_profile(), "ifft")?;
+                    Ok(PyArray1::from_owned_array(
+                        py,
+                        self.inner
+                            .inverse_typed::<f32>(&input32.as_array().to_owned()),
+                    )
+                    .into_any()
+                    .unbind())
+                }
+            }
+        }
     }
 }
 
@@ -101,34 +193,84 @@ struct PyFftPlan2D {
 #[pymethods]
 impl PyFftPlan2D {
     #[new]
-    fn new(nx: usize, ny: usize) -> Self {
-        Self {
-            inner: FftPlan2D::new(nx, ny),
+    #[pyo3(signature = (nx, ny, precision=None))]
+    fn new(nx: usize, ny: usize, precision: Option<&str>) -> PyResult<Self> {
+        let profile = parse_precision(precision)?;
+        Ok(Self {
+            inner: FftPlan2D::with_precision(nx, ny, profile),
+        })
+    }
+
+    fn fft<'py>(&self, py: Python<'py>, input: &Bound<'py, PyAny>) -> PyResult<PyObject> {
+        if let Ok(input64) = input.extract::<PyReadonlyArray2<f64>>() {
+            require_contiguous_2d(&input64, "fft input")?;
+            require_profile_matches_f64(self.inner.precision_profile(), "fft")?;
+            Ok(
+                PyArray2::from_owned_array(py, self.inner.forward(&input64.as_array().to_owned()))
+                    .into_any()
+                    .unbind(),
+            )
+        } else {
+            match self.inner.precision_profile().storage {
+                StoragePrecision::F16 => {
+                    let input32 = input.extract::<PyReadonlyArray2<f32>>()?;
+                    require_contiguous_2d(&input32, "fft input")?;
+                    Ok(PyArray2::from_owned_array(
+                        py,
+                        self.inner
+                            .forward_typed(&input32.as_array().mapv(f16::from_f32)),
+                    )
+                    .into_any()
+                    .unbind())
+                }
+                _ => {
+                    let input32 = input.extract::<PyReadonlyArray2<f32>>()?;
+                    require_contiguous_2d(&input32, "fft input")?;
+                    require_profile_matches_f32(self.inner.precision_profile(), "fft")?;
+                    Ok(PyArray2::from_owned_array(
+                        py,
+                        self.inner.forward_typed(&input32.as_array().to_owned()),
+                    )
+                    .into_any()
+                    .unbind())
+                }
+            }
         }
     }
 
-    fn fft<'py>(
-        &self,
-        py: Python<'py>,
-        input: PyReadonlyArray2<f64>,
-    ) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
-        require_contiguous_2d(&input, "fft input")?;
-        Ok(PyArray2::from_owned_array(
-            py,
-            self.inner.forward(&input.as_array().to_owned()),
-        ))
-    }
-
-    fn ifft<'py>(
-        &self,
-        py: Python<'py>,
-        input: PyReadonlyArray2<Complex64>,
-    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        require_contiguous_2d(&input, "ifft input")?;
-        Ok(PyArray2::from_owned_array(
-            py,
-            self.inner.inverse(&input.as_array().to_owned()),
-        ))
+    fn ifft<'py>(&self, py: Python<'py>, input: &Bound<'py, PyAny>) -> PyResult<PyObject> {
+        if let Ok(input64) = input.extract::<PyReadonlyArray2<Complex64>>() {
+            require_contiguous_2d(&input64, "ifft input")?;
+            require_profile_matches_f64(self.inner.precision_profile(), "ifft")?;
+            Ok(
+                PyArray2::from_owned_array(py, self.inner.inverse(&input64.as_array().to_owned()))
+                    .into_any()
+                    .unbind(),
+            )
+        } else {
+            let input32 = input.extract::<PyReadonlyArray2<Complex32>>()?;
+            require_contiguous_2d(&input32, "ifft input")?;
+            match self.inner.precision_profile().storage {
+                StoragePrecision::F16 => Ok(PyArray2::from_owned_array(
+                    py,
+                    self.inner
+                        .inverse_typed::<f16>(&input32.as_array().to_owned())
+                        .mapv(|value: f16| value.to_f32()),
+                )
+                .into_any()
+                .unbind()),
+                _ => {
+                    require_profile_matches_f32(self.inner.precision_profile(), "ifft")?;
+                    Ok(PyArray2::from_owned_array(
+                        py,
+                        self.inner
+                            .inverse_typed::<f32>(&input32.as_array().to_owned()),
+                    )
+                    .into_any()
+                    .unbind())
+                }
+            }
+        }
     }
 }
 
@@ -141,34 +283,84 @@ struct PyFftPlan3D {
 #[pymethods]
 impl PyFftPlan3D {
     #[new]
-    fn new(nx: usize, ny: usize, nz: usize) -> Self {
-        Self {
-            inner: FftPlan3D::new(nx, ny, nz),
+    #[pyo3(signature = (nx, ny, nz, precision=None))]
+    fn new(nx: usize, ny: usize, nz: usize, precision: Option<&str>) -> PyResult<Self> {
+        let profile = parse_precision(precision)?;
+        Ok(Self {
+            inner: FftPlan3D::with_precision(nx, ny, nz, profile),
+        })
+    }
+
+    fn fft<'py>(&self, py: Python<'py>, input: &Bound<'py, PyAny>) -> PyResult<PyObject> {
+        if let Ok(input64) = input.extract::<PyReadonlyArray3<f64>>() {
+            require_contiguous_3d(&input64, "fft input")?;
+            require_profile_matches_f64(self.inner.precision_profile(), "fft")?;
+            Ok(
+                PyArray3::from_owned_array(py, self.inner.forward(&input64.as_array().to_owned()))
+                    .into_any()
+                    .unbind(),
+            )
+        } else {
+            match self.inner.precision_profile().storage {
+                StoragePrecision::F16 => {
+                    let input32 = input.extract::<PyReadonlyArray3<f32>>()?;
+                    require_contiguous_3d(&input32, "fft input")?;
+                    Ok(PyArray3::from_owned_array(
+                        py,
+                        self.inner
+                            .forward_typed(&input32.as_array().mapv(f16::from_f32)),
+                    )
+                    .into_any()
+                    .unbind())
+                }
+                _ => {
+                    let input32 = input.extract::<PyReadonlyArray3<f32>>()?;
+                    require_contiguous_3d(&input32, "fft input")?;
+                    require_profile_matches_f32(self.inner.precision_profile(), "fft")?;
+                    Ok(PyArray3::from_owned_array(
+                        py,
+                        self.inner.forward_typed(&input32.as_array().to_owned()),
+                    )
+                    .into_any()
+                    .unbind())
+                }
+            }
         }
     }
 
-    fn fft<'py>(
-        &self,
-        py: Python<'py>,
-        input: PyReadonlyArray3<f64>,
-    ) -> PyResult<Bound<'py, PyArray3<Complex64>>> {
-        require_contiguous_3d(&input, "fft input")?;
-        Ok(PyArray3::from_owned_array(
-            py,
-            self.inner.forward(&input.as_array().to_owned()),
-        ))
-    }
-
-    fn ifft<'py>(
-        &self,
-        py: Python<'py>,
-        input: PyReadonlyArray3<Complex64>,
-    ) -> PyResult<Bound<'py, PyArray3<f64>>> {
-        require_contiguous_3d(&input, "ifft input")?;
-        Ok(PyArray3::from_owned_array(
-            py,
-            self.inner.inverse(&input.as_array().to_owned()),
-        ))
+    fn ifft<'py>(&self, py: Python<'py>, input: &Bound<'py, PyAny>) -> PyResult<PyObject> {
+        if let Ok(input64) = input.extract::<PyReadonlyArray3<Complex64>>() {
+            require_contiguous_3d(&input64, "ifft input")?;
+            require_profile_matches_f64(self.inner.precision_profile(), "ifft")?;
+            Ok(
+                PyArray3::from_owned_array(py, self.inner.inverse(&input64.as_array().to_owned()))
+                    .into_any()
+                    .unbind(),
+            )
+        } else {
+            let input32 = input.extract::<PyReadonlyArray3<Complex32>>()?;
+            require_contiguous_3d(&input32, "ifft input")?;
+            match self.inner.precision_profile().storage {
+                StoragePrecision::F16 => Ok(PyArray3::from_owned_array(
+                    py,
+                    self.inner
+                        .inverse_typed::<f16>(&input32.as_array().to_owned())
+                        .mapv(|value: f16| value.to_f32()),
+                )
+                .into_any()
+                .unbind()),
+                _ => {
+                    require_profile_matches_f32(self.inner.precision_profile(), "ifft")?;
+                    Ok(PyArray3::from_owned_array(
+                        py,
+                        self.inner
+                            .inverse_typed::<f32>(&input32.as_array().to_owned()),
+                    )
+                    .into_any()
+                    .unbind())
+                }
+            }
+        }
     }
 
     fn rfft<'py>(
@@ -205,86 +397,266 @@ impl PyFftPlan3D {
 
 /// Forward 1D FFT of a real signal.
 #[pyfunction]
+#[pyo3(signature = (input, precision=None))]
 fn fft1<'py>(
     py: Python<'py>,
-    input: PyReadonlyArray1<f64>,
-) -> PyResult<Bound<'py, PyArray1<Complex64>>> {
-    require_contiguous_1d(&input, "fft1 input")?;
-    let owned = input.as_array().to_owned();
-    Ok(PyArray1::from_owned_array(
-        py,
-        apollofft::fft_1d_array(&owned),
-    ))
+    input: &Bound<'py, PyAny>,
+    precision: Option<&str>,
+) -> PyResult<PyObject> {
+    let profile = parse_precision(precision)?;
+    if let Ok(input64) = input.extract::<PyReadonlyArray1<f64>>() {
+        require_contiguous_1d(&input64, "fft1 input")?;
+        require_profile_matches_f64(profile, "fft1")?;
+        Ok(
+            PyArray1::from_owned_array(py, apollofft::fft_1d_array(&input64.as_array().to_owned()))
+                .into_any()
+                .unbind(),
+        )
+    } else {
+        match profile.storage {
+            StoragePrecision::F16 => {
+                let input32 = input.extract::<PyReadonlyArray1<f32>>()?;
+                require_contiguous_1d(&input32, "fft1 input")?;
+                Ok(PyArray1::from_owned_array(
+                    py,
+                    apollofft::fft_1d_array_typed(&input32.as_array().mapv(f16::from_f32), profile),
+                )
+                .into_any()
+                .unbind())
+            }
+            _ => {
+                let input32 = input.extract::<PyReadonlyArray1<f32>>()?;
+                require_contiguous_1d(&input32, "fft1 input")?;
+                require_profile_matches_f32(profile, "fft1")?;
+                Ok(PyArray1::from_owned_array(
+                    py,
+                    apollofft::fft_1d_array_typed(&input32.as_array().to_owned(), profile),
+                )
+                .into_any()
+                .unbind())
+            }
+        }
+    }
 }
 
 /// Inverse 1D FFT of a complex spectrum.
 #[pyfunction]
+#[pyo3(signature = (input, precision=None))]
 fn ifft1<'py>(
     py: Python<'py>,
-    input: PyReadonlyArray1<Complex64>,
-) -> PyResult<Bound<'py, PyArray1<f64>>> {
-    require_contiguous_1d(&input, "ifft1 input")?;
-    let owned = input.as_array().to_owned();
-    Ok(PyArray1::from_owned_array(
-        py,
-        apollofft::ifft_1d_array(&owned),
-    ))
+    input: &Bound<'py, PyAny>,
+    precision: Option<&str>,
+) -> PyResult<PyObject> {
+    let profile = parse_precision(precision)?;
+    if let Ok(input64) = input.extract::<PyReadonlyArray1<Complex64>>() {
+        require_contiguous_1d(&input64, "ifft1 input")?;
+        require_profile_matches_f64(profile, "ifft1")?;
+        Ok(
+            PyArray1::from_owned_array(
+                py,
+                apollofft::ifft_1d_array(&input64.as_array().to_owned()),
+            )
+            .into_any()
+            .unbind(),
+        )
+    } else {
+        let input32 = input.extract::<PyReadonlyArray1<Complex32>>()?;
+        require_contiguous_1d(&input32, "ifft1 input")?;
+        match profile.storage {
+            StoragePrecision::F16 => Ok(PyArray1::from_owned_array(
+                py,
+                apollofft::ifft_1d_array_typed::<f16>(&input32.as_array().to_owned(), profile)
+                    .mapv(|value: f16| value.to_f32()),
+            )
+            .into_any()
+            .unbind()),
+            _ => {
+                require_profile_matches_f32(profile, "ifft1")?;
+                Ok(PyArray1::from_owned_array(
+                    py,
+                    apollofft::ifft_1d_array_typed::<f32>(&input32.as_array().to_owned(), profile),
+                )
+                .into_any()
+                .unbind())
+            }
+        }
+    }
 }
 
 /// Forward 2D FFT of a real array.
 #[pyfunction]
+#[pyo3(signature = (input, precision=None))]
 fn fft2<'py>(
     py: Python<'py>,
-    input: PyReadonlyArray2<f64>,
-) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
-    require_contiguous_2d(&input, "fft2 input")?;
-    let owned = input.as_array().to_owned();
-    Ok(PyArray2::from_owned_array(
-        py,
-        apollofft::fft_2d_array(&owned),
-    ))
+    input: &Bound<'py, PyAny>,
+    precision: Option<&str>,
+) -> PyResult<PyObject> {
+    let profile = parse_precision(precision)?;
+    if let Ok(input64) = input.extract::<PyReadonlyArray2<f64>>() {
+        require_contiguous_2d(&input64, "fft2 input")?;
+        require_profile_matches_f64(profile, "fft2")?;
+        Ok(
+            PyArray2::from_owned_array(py, apollofft::fft_2d_array(&input64.as_array().to_owned()))
+                .into_any()
+                .unbind(),
+        )
+    } else {
+        match profile.storage {
+            StoragePrecision::F16 => {
+                let input32 = input.extract::<PyReadonlyArray2<f32>>()?;
+                require_contiguous_2d(&input32, "fft2 input")?;
+                Ok(PyArray2::from_owned_array(
+                    py,
+                    apollofft::fft_2d_array_typed(&input32.as_array().mapv(f16::from_f32), profile),
+                )
+                .into_any()
+                .unbind())
+            }
+            _ => {
+                let input32 = input.extract::<PyReadonlyArray2<f32>>()?;
+                require_contiguous_2d(&input32, "fft2 input")?;
+                require_profile_matches_f32(profile, "fft2")?;
+                Ok(PyArray2::from_owned_array(
+                    py,
+                    apollofft::fft_2d_array_typed(&input32.as_array().to_owned(), profile),
+                )
+                .into_any()
+                .unbind())
+            }
+        }
+    }
 }
 
 /// Inverse 2D FFT of a complex spectrum.
 #[pyfunction]
+#[pyo3(signature = (input, precision=None))]
 fn ifft2<'py>(
     py: Python<'py>,
-    input: PyReadonlyArray2<Complex64>,
-) -> PyResult<Bound<'py, PyArray2<f64>>> {
-    require_contiguous_2d(&input, "ifft2 input")?;
-    let owned = input.as_array().to_owned();
-    Ok(PyArray2::from_owned_array(
-        py,
-        apollofft::ifft_2d_array(&owned),
-    ))
+    input: &Bound<'py, PyAny>,
+    precision: Option<&str>,
+) -> PyResult<PyObject> {
+    let profile = parse_precision(precision)?;
+    if let Ok(input64) = input.extract::<PyReadonlyArray2<Complex64>>() {
+        require_contiguous_2d(&input64, "ifft2 input")?;
+        require_profile_matches_f64(profile, "ifft2")?;
+        Ok(
+            PyArray2::from_owned_array(
+                py,
+                apollofft::ifft_2d_array(&input64.as_array().to_owned()),
+            )
+            .into_any()
+            .unbind(),
+        )
+    } else {
+        let input32 = input.extract::<PyReadonlyArray2<Complex32>>()?;
+        require_contiguous_2d(&input32, "ifft2 input")?;
+        match profile.storage {
+            StoragePrecision::F16 => Ok(PyArray2::from_owned_array(
+                py,
+                apollofft::ifft_2d_array_typed::<f16>(&input32.as_array().to_owned(), profile)
+                    .mapv(|value: f16| value.to_f32()),
+            )
+            .into_any()
+            .unbind()),
+            _ => {
+                require_profile_matches_f32(profile, "ifft2")?;
+                Ok(PyArray2::from_owned_array(
+                    py,
+                    apollofft::ifft_2d_array_typed::<f32>(&input32.as_array().to_owned(), profile),
+                )
+                .into_any()
+                .unbind())
+            }
+        }
+    }
 }
 
 /// Forward 3D FFT of a real array.
 #[pyfunction]
+#[pyo3(signature = (input, precision=None))]
 fn fft3<'py>(
     py: Python<'py>,
-    input: PyReadonlyArray3<f64>,
-) -> PyResult<Bound<'py, PyArray3<Complex64>>> {
-    require_contiguous_3d(&input, "fft3 input")?;
-    let owned = input.as_array().to_owned();
-    Ok(PyArray3::from_owned_array(
-        py,
-        apollofft::fft_3d_array(&owned),
-    ))
+    input: &Bound<'py, PyAny>,
+    precision: Option<&str>,
+) -> PyResult<PyObject> {
+    let profile = parse_precision(precision)?;
+    if let Ok(input64) = input.extract::<PyReadonlyArray3<f64>>() {
+        require_contiguous_3d(&input64, "fft3 input")?;
+        require_profile_matches_f64(profile, "fft3")?;
+        Ok(
+            PyArray3::from_owned_array(py, apollofft::fft_3d_array(&input64.as_array().to_owned()))
+                .into_any()
+                .unbind(),
+        )
+    } else {
+        match profile.storage {
+            StoragePrecision::F16 => {
+                let input32 = input.extract::<PyReadonlyArray3<f32>>()?;
+                require_contiguous_3d(&input32, "fft3 input")?;
+                Ok(PyArray3::from_owned_array(
+                    py,
+                    apollofft::fft_3d_array_typed(&input32.as_array().mapv(f16::from_f32), profile),
+                )
+                .into_any()
+                .unbind())
+            }
+            _ => {
+                let input32 = input.extract::<PyReadonlyArray3<f32>>()?;
+                require_contiguous_3d(&input32, "fft3 input")?;
+                require_profile_matches_f32(profile, "fft3")?;
+                Ok(PyArray3::from_owned_array(
+                    py,
+                    apollofft::fft_3d_array_typed(&input32.as_array().to_owned(), profile),
+                )
+                .into_any()
+                .unbind())
+            }
+        }
+    }
 }
 
 /// Inverse 3D FFT of a complex spectrum.
 #[pyfunction]
+#[pyo3(signature = (input, precision=None))]
 fn ifft3<'py>(
     py: Python<'py>,
-    input: PyReadonlyArray3<Complex64>,
-) -> PyResult<Bound<'py, PyArray3<f64>>> {
-    require_contiguous_3d(&input, "ifft3 input")?;
-    let owned = input.as_array().to_owned();
-    Ok(PyArray3::from_owned_array(
-        py,
-        apollofft::ifft_3d_array(&owned),
-    ))
+    input: &Bound<'py, PyAny>,
+    precision: Option<&str>,
+) -> PyResult<PyObject> {
+    let profile = parse_precision(precision)?;
+    if let Ok(input64) = input.extract::<PyReadonlyArray3<Complex64>>() {
+        require_contiguous_3d(&input64, "ifft3 input")?;
+        require_profile_matches_f64(profile, "ifft3")?;
+        Ok(
+            PyArray3::from_owned_array(
+                py,
+                apollofft::ifft_3d_array(&input64.as_array().to_owned()),
+            )
+            .into_any()
+            .unbind(),
+        )
+    } else {
+        let input32 = input.extract::<PyReadonlyArray3<Complex32>>()?;
+        require_contiguous_3d(&input32, "ifft3 input")?;
+        match profile.storage {
+            StoragePrecision::F16 => Ok(PyArray3::from_owned_array(
+                py,
+                apollofft::ifft_3d_array_typed::<f16>(&input32.as_array().to_owned(), profile)
+                    .mapv(|value: f16| value.to_f32()),
+            )
+            .into_any()
+            .unbind()),
+            _ => {
+                require_profile_matches_f32(profile, "ifft3")?;
+                Ok(PyArray3::from_owned_array(
+                    py,
+                    apollofft::ifft_3d_array_typed::<f32>(&input32.as_array().to_owned(), profile),
+                )
+                .into_any()
+                .unbind())
+            }
+        }
+    }
 }
 
 /// Forward 3D real-to-complex half-spectrum FFT.
@@ -539,35 +911,81 @@ fn available_backends() -> Vec<String> {
 
 /// Return backend capability metadata for Python callers.
 #[pyfunction]
-fn backend_capabilities() -> BTreeMap<String, BTreeMap<String, bool>> {
-    let mut backends = BTreeMap::new();
+fn backend_capabilities(py: Python<'_>) -> PyResult<PyObject> {
+    let backends = PyDict::new(py);
 
-    let mut cpu = BTreeMap::new();
-    cpu.insert("available".to_string(), true);
-    cpu.insert("supports_1d".to_string(), true);
-    cpu.insert("supports_2d".to_string(), true);
-    cpu.insert("supports_3d".to_string(), true);
-    cpu.insert("supports_real_to_complex".to_string(), true);
-    backends.insert("cpu".to_string(), cpu);
+    let cpu_caps = CpuBackend.capabilities();
+    let cpu = PyDict::new(py);
+    cpu.set_item("available", true)?;
+    cpu.set_item("supports_1d", cpu_caps.supports_1d)?;
+    cpu.set_item("supports_2d", cpu_caps.supports_2d)?;
+    cpu.set_item("supports_3d", cpu_caps.supports_3d)?;
+    cpu.set_item(
+        "supports_real_to_complex",
+        cpu_caps.supports_real_to_complex,
+    )?;
+    cpu.set_item(
+        "supports_mixed_precision",
+        cpu_caps.supports_mixed_precision,
+    )?;
+    cpu.set_item(
+        "default_precision_profile",
+        precision_name(cpu_caps.default_precision_profile),
+    )?;
+    cpu.set_item(
+        "supported_precision_profiles",
+        cpu_caps
+            .supported_precision_profiles
+            .iter()
+            .map(|profile| precision_name(*profile))
+            .collect::<Vec<_>>(),
+    )?;
+    backends.set_item("cpu", cpu)?;
 
-    let wgpu_usable = wgpu_backend_usable();
-    let mut wgpu = BTreeMap::new();
-    wgpu.insert("available".to_string(), wgpu_usable);
-    wgpu.insert("supports_1d".to_string(), false);
-    wgpu.insert("supports_2d".to_string(), false);
-    wgpu.insert("supports_3d".to_string(), wgpu_usable);
-    wgpu.insert("supports_real_to_complex".to_string(), false);
-    backends.insert("wgpu".to_string(), wgpu);
+    let wgpu = PyDict::new(py);
+    if let Ok(backend) = apollofft_wgpu::WgpuBackend::try_default() {
+        let caps = backend.capabilities();
+        wgpu.set_item("available", true)?;
+        wgpu.set_item("supports_1d", caps.supports_1d)?;
+        wgpu.set_item("supports_2d", caps.supports_2d)?;
+        wgpu.set_item("supports_3d", caps.supports_3d)?;
+        wgpu.set_item("supports_real_to_complex", caps.supports_real_to_complex)?;
+        wgpu.set_item("supports_mixed_precision", caps.supports_mixed_precision)?;
+        wgpu.set_item(
+            "default_precision_profile",
+            precision_name(caps.default_precision_profile),
+        )?;
+        wgpu.set_item(
+            "supported_precision_profiles",
+            caps.supported_precision_profiles
+                .iter()
+                .map(|profile| precision_name(*profile))
+                .collect::<Vec<_>>(),
+        )?;
+    } else {
+        wgpu.set_item("available", false)?;
+        wgpu.set_item("supports_1d", false)?;
+        wgpu.set_item("supports_2d", false)?;
+        wgpu.set_item("supports_3d", false)?;
+        wgpu.set_item("supports_real_to_complex", false)?;
+        wgpu.set_item("supports_mixed_precision", false)?;
+        wgpu.set_item("default_precision_profile", "low_precision")?;
+        wgpu.set_item("supported_precision_profiles", vec!["low_precision"])?;
+    }
+    backends.set_item("wgpu", wgpu)?;
 
-    let mut cudatile = BTreeMap::new();
-    cudatile.insert("available".to_string(), false);
-    cudatile.insert("supports_1d".to_string(), false);
-    cudatile.insert("supports_2d".to_string(), false);
-    cudatile.insert("supports_3d".to_string(), false);
-    cudatile.insert("supports_real_to_complex".to_string(), false);
-    backends.insert("cudatile".to_string(), cudatile);
+    let cudatile = PyDict::new(py);
+    cudatile.set_item("available", false)?;
+    cudatile.set_item("supports_1d", false)?;
+    cudatile.set_item("supports_2d", false)?;
+    cudatile.set_item("supports_3d", false)?;
+    cudatile.set_item("supports_real_to_complex", false)?;
+    cudatile.set_item("supports_mixed_precision", false)?;
+    cudatile.set_item("default_precision_profile", "high_accuracy")?;
+    cudatile.set_item("supported_precision_profiles", Vec::<&str>::new())?;
+    backends.set_item("cudatile", cudatile)?;
 
-    backends
+    Ok(backends.into_any().unbind())
 }
 
 /// Python module entry point.

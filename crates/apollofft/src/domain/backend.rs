@@ -1,10 +1,12 @@
 //! Backend traits and capability descriptors.
 
 use crate::domain::error::ApolloResult;
-use crate::domain::types::{BackendKind, Normalization, Shape1D, Shape2D, Shape3D};
+use crate::domain::types::{
+    BackendKind, Normalization, PrecisionProfile, Shape1D, Shape2D, Shape3D,
+};
 
 /// Capability descriptor advertised by a backend.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendCapabilities {
     /// Backend family.
     pub kind: BackendKind,
@@ -18,6 +20,12 @@ pub struct BackendCapabilities {
     pub supports_3d: bool,
     /// Whether the backend supports real-to-complex half-spectrum transforms.
     pub supports_real_to_complex: bool,
+    /// Whether the backend implements at least one mixed-precision profile.
+    pub supports_mixed_precision: bool,
+    /// Default precision profile used by compatibility constructors.
+    pub default_precision_profile: PrecisionProfile,
+    /// Precision profiles truthfully implemented by this backend.
+    pub supported_precision_profiles: Vec<PrecisionProfile>,
 }
 
 /// Backend trait used by consumers that want backend selection via dependency inversion.

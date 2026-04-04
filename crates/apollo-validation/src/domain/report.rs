@@ -32,6 +32,8 @@ pub struct CpuFftReport {
     pub non_finite_input_propagates: bool,
     /// Whether the CPU validation thresholds passed.
     pub passed: bool,
+    /// Precision-profile validation results.
+    pub precision_profiles: Vec<PrecisionRunReport>,
 }
 
 /// GPU FFT validation results.
@@ -49,6 +51,8 @@ pub struct GpuFftReport {
     pub inverse_max_abs_error: Option<f64>,
     /// Optional note explaining skip/failure details.
     pub note: Option<String>,
+    /// Precision-profile validation results.
+    pub precision_profiles: Vec<PrecisionRunReport>,
 }
 
 /// NUFFT validation results.
@@ -108,6 +112,8 @@ pub struct ExternalComparisonReport {
     pub pyfftw: ExternalBackendReport,
     /// Whether adversarial robustness probes passed.
     pub robustness_passed: bool,
+    /// Precision-specific comparison results.
+    pub precision_comparisons: Vec<PrecisionRunReport>,
     /// Optional note explaining skipped comparisons.
     pub note: Option<String>,
 }
@@ -143,6 +149,40 @@ pub struct BenchmarkReport {
     pub gpu_fft_forward_ms: Option<f64>,
     /// GPU FFT inverse wall time in milliseconds when attempted.
     pub gpu_fft_inverse_ms: Option<f64>,
+    /// Precision-specific benchmark timings.
+    pub precision_benchmarks: Vec<PrecisionBenchmarkReport>,
+}
+
+/// Precision-specific validation results.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrecisionRunReport {
+    /// Precision profile name.
+    pub profile: String,
+    /// Whether the run was attempted.
+    pub attempted: bool,
+    /// Whether the profile-specific thresholds passed.
+    pub passed: bool,
+    /// Forward max absolute error for this profile.
+    pub forward_max_abs_error: Option<f64>,
+    /// Inverse max absolute error for this profile.
+    pub inverse_max_abs_error: Option<f64>,
+    /// Relative roundtrip error or reference-relative error.
+    pub relative_error: Option<f64>,
+    /// Optional note explaining skip or behavior.
+    pub note: Option<String>,
+}
+
+/// Precision-specific benchmark timing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrecisionBenchmarkReport {
+    /// Precision profile name.
+    pub profile: String,
+    /// Representative forward timing in milliseconds.
+    pub forward_ms: Option<f64>,
+    /// Representative inverse timing in milliseconds.
+    pub inverse_ms: Option<f64>,
+    /// Optional note explaining skipped timings.
+    pub note: Option<String>,
 }
 
 /// Environment metadata captured during a validation run.

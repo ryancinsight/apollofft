@@ -2,7 +2,7 @@ struct FftParams {
     n: u32,
     stage: u32,
     inverse: u32,
-    _pad: u32,
+    batch_count: u32,
 }
 
 @group(0) @binding(0)
@@ -42,9 +42,12 @@ fn bit_reverse(x: u32, bits: u32) -> u32 {
 @compute @workgroup_size(256, 1, 1)
 fn fft_bitrev(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    if i >= params.n {
+    let total = params.n * params.batch_count;
+    if i >= total {
         return;
     }
+    let row = i / params.n;
+    let local_i = i % params.n;
 
     var log2n: u32 = 0u;
     var tmp = params.n >> 1u;
@@ -56,14 +59,17 @@ fn fft_bitrev(@builtin(global_invocation_id) gid: vec3<u32>) {
         tmp >>= 1u;
     }
 
-    let j = bit_reverse(i, log2n);
-    if j > i {
-        let re_i = data_re[i];
-        let im_i = data_im[i];
-        data_re[i] = data_re[j];
-        data_im[i] = data_im[j];
-        data_re[j] = re_i;
-        data_im[j] = im_i;
+    let local_j = bit_reverse(local_i, log2n);
+    if local_j > local_i {
+        let base = row * params.n;
+        let i_idx = base + local_i;
+        let j_idx = base + local_j;
+        let re_i = data_re[i_idx];
+        let im_i = data_im[i_idx];
+        data_re[i_idx] = data_re[j_idx];
+        data_im[i_idx] = data_im[j_idx];
+        data_re[j_idx] = re_i;
+        data_im[j_idx] = im_i;
     }
 }
 
@@ -71,15 +77,19 @@ fn fft_bitrev(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn fft_forward(@builtin(global_invocation_id) gid: vec3<u32>) {
     let id = gid.x;
     let half_n = params.n >> 1u;
-    if id >= half_n {
+    let total = half_n * params.batch_count;
+    if id >= total {
         return;
     }
+    let row = id / half_n;
+    let local_id = id % half_n;
 
     let h = 1u << params.stage;
     let group_size = h << 1u;
-    let group_idx = id / h;
-    let local_idx = id % h;
-    let even = group_idx * group_size + local_idx;
+    let group_idx = local_id / h;
+    let local_idx = local_id % h;
+    let base = row * params.n;
+    let even = base + group_idx * group_size + local_idx;
     let odd = even + h;
 
     var angle = -TWO_PI * f32(local_idx) / f32(group_size);
@@ -107,7 +117,8 @@ fn fft_forward(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(256, 1, 1)
 fn fft_scale(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    if i >= params.n {
+    let total = params.n * params.batch_count;
+    if i >= total {
         return;
     }
     let inv_n = 1.0 / f32(params.n);

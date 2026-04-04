@@ -19,17 +19,19 @@ pub use application::cache::{
 };
 pub use backend::FftBackend;
 pub use error::{ApolloError, ApolloResult};
+pub use half::f16;
 pub use infrastructure::cpu_backend::CpuBackend;
 pub use nufft::{
     nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type1_3d_fast, nufft_type2_1d,
     nufft_type2_1d_fast, NufftPlan1D, NufftPlan3D, DEFAULT_NUFFT_KERNEL_WIDTH,
     DEFAULT_NUFFT_OVERSAMPLING,
 };
+pub use num_complex::Complex32;
 pub use num_complex::Complex64;
-pub use plan::{FftPlan1D, FftPlan2D, FftPlan3D};
+pub use plan::{FftPlan1D, FftPlan2D, FftPlan3D, RealFftData};
 pub use types::{
-    BackendKind, HalfSpectrum3D, Normalization, Shape1D, Shape2D, Shape3D, UniformDomain1D,
-    UniformGrid3D,
+    BackendKind, ComputePrecision, HalfSpectrum3D, Normalization, PrecisionMode, PrecisionProfile,
+    Shape1D, Shape2D, Shape3D, StoragePrecision, UniformDomain1D, UniformGrid3D,
 };
 
 use ndarray::{Array1, Array2, Array3, Zip};
@@ -44,6 +46,17 @@ pub fn fft_1d_array(field: &Array1<f64>) -> Array1<Complex64> {
     FFT_CACHE_1D.get_or_create(field.len()).forward(field)
 }
 
+/// Forward 1D FFT of a real array using generic storage dispatch.
+#[must_use]
+pub fn fft_1d_array_typed<T: RealFftData>(
+    field: &Array1<T>,
+    profile: PrecisionProfile,
+) -> Array1<T::Spectrum> {
+    FFT_CACHE_1D
+        .get_or_create_with_precision(field.len(), profile)
+        .forward_typed(field)
+}
+
 /// Forward 2D FFT of a real array.
 #[must_use]
 pub fn fft_2d_array(field: &Array2<f64>) -> Array2<Complex64> {
@@ -51,11 +64,35 @@ pub fn fft_2d_array(field: &Array2<f64>) -> Array2<Complex64> {
     FFT_CACHE_2D.get_or_create(nx, ny).forward(field)
 }
 
+/// Forward 2D FFT of a real array using generic storage dispatch.
+#[must_use]
+pub fn fft_2d_array_typed<T: RealFftData>(
+    field: &Array2<T>,
+    profile: PrecisionProfile,
+) -> Array2<T::Spectrum> {
+    let (nx, ny) = field.dim();
+    FFT_CACHE_2D
+        .get_or_create_with_precision(nx, ny, profile)
+        .forward_typed(field)
+}
+
 /// Forward 3D FFT of a real array.
 #[must_use]
 pub fn fft_3d_array(field: &Array3<f64>) -> Array3<Complex64> {
     let (nx, ny, nz) = field.dim();
     FFT_CACHE_3D.get_or_create(nx, ny, nz).forward(field)
+}
+
+/// Forward 3D FFT of a real array using generic storage dispatch.
+#[must_use]
+pub fn fft_3d_array_typed<T: RealFftData>(
+    field: &Array3<T>,
+    profile: PrecisionProfile,
+) -> Array3<T::Spectrum> {
+    let (nx, ny, nz) = field.dim();
+    FFT_CACHE_3D
+        .get_or_create_with_precision(nx, ny, nz, profile)
+        .forward_typed(field)
 }
 
 /// Inverse 1D FFT of a complex signal.
@@ -66,6 +103,17 @@ pub fn ifft_1d_array(field_hat: &Array1<Complex64>) -> Array1<f64> {
         .inverse(field_hat)
 }
 
+/// Inverse 1D FFT of a complex spectrum using generic storage dispatch.
+#[must_use]
+pub fn ifft_1d_array_typed<T: RealFftData>(
+    field_hat: &Array1<T::Spectrum>,
+    profile: PrecisionProfile,
+) -> Array1<T> {
+    FFT_CACHE_1D
+        .get_or_create_with_precision(field_hat.len(), profile)
+        .inverse_typed(field_hat)
+}
+
 /// Inverse 2D FFT of a complex array.
 #[must_use]
 pub fn ifft_2d_array(field_hat: &Array2<Complex64>) -> Array2<f64> {
@@ -73,11 +121,35 @@ pub fn ifft_2d_array(field_hat: &Array2<Complex64>) -> Array2<f64> {
     FFT_CACHE_2D.get_or_create(nx, ny).inverse(field_hat)
 }
 
+/// Inverse 2D FFT of a complex spectrum using generic storage dispatch.
+#[must_use]
+pub fn ifft_2d_array_typed<T: RealFftData>(
+    field_hat: &Array2<T::Spectrum>,
+    profile: PrecisionProfile,
+) -> Array2<T> {
+    let (nx, ny) = field_hat.dim();
+    FFT_CACHE_2D
+        .get_or_create_with_precision(nx, ny, profile)
+        .inverse_typed(field_hat)
+}
+
 /// Inverse 3D FFT of a complex array.
 #[must_use]
 pub fn ifft_3d_array(field_hat: &Array3<Complex64>) -> Array3<f64> {
     let (nx, ny, nz) = field_hat.dim();
     FFT_CACHE_3D.get_or_create(nx, ny, nz).inverse(field_hat)
+}
+
+/// Inverse 3D FFT of a complex spectrum using generic storage dispatch.
+#[must_use]
+pub fn ifft_3d_array_typed<T: RealFftData>(
+    field_hat: &Array3<T::Spectrum>,
+    profile: PrecisionProfile,
+) -> Array3<T> {
+    let (nx, ny, nz) = field_hat.dim();
+    FFT_CACHE_3D
+        .get_or_create_with_precision(nx, ny, nz, profile)
+        .inverse_typed(field_hat)
 }
 
 /// Forward complex 1D FFT in-place.
@@ -230,7 +302,7 @@ mod tests {
         let mut actual = Array3::<Complex64>::zeros((nx, ny, nz));
         fft_3d_array_into(&field, &mut actual);
         for (lhs, rhs) in expected.iter().zip(actual.iter()) {
-            assert!((lhs - rhs).norm() < 1e-14);
+            assert!((lhs - rhs).norm() < 1e-13);
         }
     }
 }

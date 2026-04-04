@@ -1,0 +1,180 @@
+    Finished `release` profile [optimized] target(s) in 3.92s
+     Running `target\release\apollo-validation.exe`
+{
+  "fft_cpu": {
+    "roundtrip_max_abs_error": 6.661338147750939e-16,
+    "parseval_relative_error": 0.0,
+    "stability_max_abs_delta": 0.0,
+    "non_finite_input_propagates": true,
+    "passed": true,
+    "precision_profiles": [
+      {
+        "profile": "high_accuracy",
+        "attempted": true,
+        "passed": true,
+        "forward_max_abs_error": 0.0,
+        "inverse_max_abs_error": 6.661338147750939e-16,
+        "relative_error": 6.661338147750939e-16,
+        "note": "reference f64 path"
+      },
+      {
+        "profile": "low_precision",
+        "attempted": true,
+        "passed": true,
+        "forward_max_abs_error": 7.864199687901419e-6,
+        "inverse_max_abs_error": 2.384185791015625e-7,
+        "relative_error": 1.9111787328617436e-7,
+        "note": "f32 storage and f32 compute"
+      },
+      {
+        "profile": "mixed_precision",
+        "attempted": true,
+        "passed": true,
+        "forward_max_abs_error": 0.009132974781095982,
+        "inverse_max_abs_error": 0.0,
+        "relative_error": 0.0,
+        "note": "f16 storage with f32 compute"
+      }
+    ]
+  },
+  "fft_gpu": {
+    "surface_reported_available": true,
+    "attempted": true,
+    "passed": true,
+    "forward_max_abs_error": 0.000028292684338296086,
+    "inverse_max_abs_error": 5.288650417600849e-7,
+    "note": null,
+    "precision_profiles": [
+      {
+        "profile": "low_precision",
+        "attempted": true,
+        "passed": true,
+        "forward_max_abs_error": 0.000028292684338296086,
+        "inverse_max_abs_error": 5.288650417600849e-7,
+        "relative_error": null,
+        "note": "wgpu backend currently exposes only the f32 path"
+      },
+      {
+        "profile": "mixed_precision",
+        "attempted": false,
+        "passed": false,
+        "forward_max_abs_error": null,
+        "inverse_max_abs_error": null,
+        "relative_error": null,
+        "note": "mixed precision is not implemented for the wgpu backend"
+      }
+    ]
+  },
+  "nufft": {
+    "type1_1d_max_relative_error": 3.377304058197213e-8,
+    "type2_1d_max_relative_error": 3.1443785403646266e-8,
+    "type1_3d_max_relative_error": 1.1200593755117693e-7,
+    "irrational_positions_max_relative_error": 3.6773060440095774e-8,
+    "clustered_positions_max_relative_error": 3.808567282258733e-8,
+    "passed": true
+  },
+  "external": {
+    "passed": true,
+    "rustfft_checkout_present": false,
+    "pyfftw_checkout_present": false,
+    "rustfft": {
+      "backend": "rustfft",
+      "available": true,
+      "attempted": true,
+      "fft1_max_abs_error": 0.0,
+      "fft1_prime_max_abs_error": 0.0,
+      "fft3_max_abs_error": 7.944109290391274e-15,
+      "stability_max_abs_delta": 0.0,
+      "version": null,
+      "note": null
+    },
+    "numpy": {
+      "backend": "numpy",
+      "available": false,
+      "attempted": false,
+      "fft1_max_abs_error": null,
+      "fft1_prime_max_abs_error": null,
+      "fft3_max_abs_error": null,
+      "stability_max_abs_delta": null,
+      "version": null,
+      "note": "python or numpy was unavailable"
+    },
+    "pyfftw": {
+      "backend": "pyfftw",
+      "available": false,
+      "attempted": false,
+      "fft1_max_abs_error": null,
+      "fft1_prime_max_abs_error": null,
+      "fft3_max_abs_error": null,
+      "stability_max_abs_delta": null,
+      "version": null,
+      "note": "pyfftw was unavailable"
+    },
+    "robustness_passed": true,
+    "precision_comparisons": [
+      {
+        "profile": "low_precision",
+        "attempted": true,
+        "passed": true,
+        "forward_max_abs_error": 7.864199687901419e-6,
+        "inverse_max_abs_error": null,
+        "relative_error": 7.864199687901419e-6,
+        "note": "compared against the Apollo f64 reference because external float32 probes are not yet wired"
+      },
+      {
+        "profile": "mixed_precision",
+        "attempted": true,
+        "passed": true,
+        "forward_max_abs_error": 0.009132974781095982,
+        "inverse_max_abs_error": null,
+        "relative_error": 0.009132974781095982,
+        "note": "compared against the Apollo f64 reference after f16 quantization"
+      }
+    ],
+    "note": "only the built-in rustfft reference path was available; python comparators were skipped"
+  },
+  "benchmarks": {
+    "apollo_fft1_ms": 0.0002625,
+    "apollo_fft3_forward_ms": 0.013437499999999998,
+    "apollo_fft3_inverse_ms": 0.016975,
+    "rustfft_fft1_ms": 0.00027916666666666666,
+    "rustfft_fft3_ms": 0.020079166666666665,
+    "numpy_fft1_ms": null,
+    "numpy_fft3_ms": null,
+    "pyfftw_fft1_ms": null,
+    "pyfftw_fft3_ms": null,
+    "nufft_exact_type1_1d_ms": 0.004208333333333334,
+    "nufft_fast_type1_1d_ms": 0.0038375,
+    "nufft_fast_type1_3d_ms": 0.04950833333333333,
+    "gpu_fft_forward_ms": 0.18500416666666666,
+    "gpu_fft_inverse_ms": 0.19463333333333335,
+    "precision_benchmarks": [
+      {
+        "profile": "high_accuracy",
+        "forward_ms": 0.013437499999999998,
+        "inverse_ms": 0.016975,
+        "note": "f64 storage and f64 compute"
+      },
+      {
+        "profile": "low_precision",
+        "forward_ms": 0.008491666666666666,
+        "inverse_ms": 0.008929166666666667,
+        "note": "f32 storage and f32 compute"
+      },
+      {
+        "profile": "mixed_precision",
+        "forward_ms": 0.008666666666666666,
+        "inverse_ms": 0.0095375,
+        "note": "f16 storage with f32 compute"
+      }
+    ]
+  },
+  "environment": {
+    "os": "windows",
+    "arch": "x86_64",
+    "debug_build": false,
+    "python_version": null,
+    "numpy_version": null,
+    "pyfftw_version": null
+  }
+}

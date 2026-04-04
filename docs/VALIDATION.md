@@ -29,6 +29,30 @@ The `external` section now contains per-backend subreports (`rustfft`, `numpy`, 
 1D, prime-sized 1D, and 3D max-absolute-error measurements together with repeated-run stability
 metrics.
 
+The FFT sections also include precision-aware detail:
+
+- `fft_cpu.precision_profiles`
+- `fft_gpu.precision_profiles`
+- `external.precision_comparisons`
+- `benchmarks.precision_benchmarks`
+
+These report `high_accuracy`, `low_precision`, and `mixed_precision` runs when implemented by the
+backend. Apollo currently reports CPU support for all three FFT profiles and WGPU support only for
+`low_precision`.
+
+## Precision Thresholds
+
+Apollo stores mixed-precision validation thresholds centrally in the validation suite:
+
+- CPU `high_accuracy`: current machine-precision thresholds.
+- CPU `low_precision`: relative error target below `1e-5`.
+- CPU `mixed_precision`: relative error target below `1e-2`.
+- WGPU `low_precision`: current forward/inverse parity envelope against the Apollo CPU reference.
+- WGPU `mixed_precision`: not attempted because it is not implemented yet.
+
+The current CPU `mixed_precision` FFT path means `half::f16` storage with `f32` compute. Apollo
+does not use that label for WGPU because the current shader path is `f32` only.
+
 ## Adversarial Coverage
 
 - Degenerate dimensions.
@@ -39,6 +63,7 @@ metrics.
 - Non-finite signal propagation checks in Apollo CPU FFT.
 - Prime-sized and mixed-shape external parity checks.
 - Clustered and wrapped NUFFT point distributions.
+- Precision-profile comparisons against the Apollo `f64` reference for implemented lower-precision FFT paths.
 - Backend-unavailable paths with explicit notes instead of silent fallbacks.
 - Cache reuse under contention.
 

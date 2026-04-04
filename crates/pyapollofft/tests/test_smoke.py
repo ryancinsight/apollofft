@@ -63,5 +63,51 @@ def test_non_contiguous_input_is_rejected():
 
 def test_dtype_validation_rejects_wrong_real_dtype():
     signal = np.arange(8, dtype=np.float32)
-    with pytest.raises(TypeError):
+    with pytest.raises(ValueError, match="expects float64/complex128 storage"):
         afft.fft1(signal)
+
+
+def test_fft1_low_precision_roundtrip_float32():
+    signal = np.linspace(0.0, 1.0, 16, dtype=np.float32)
+    spectrum = afft.fft1(signal, precision="low_precision")
+    reconstructed = afft.ifft1(spectrum, precision="low_precision")
+    assert spectrum.dtype == np.complex64
+    assert reconstructed.dtype == np.float32
+    assert np.allclose(signal, reconstructed, atol=1e-5)
+
+
+def test_fft3_mixed_precision_roundtrip_float32():
+    field = np.arange(64, dtype=np.float32).reshape(4, 4, 4)
+    spectrum = afft.fft3(field, precision="mixed_precision")
+    reconstructed = afft.ifft3(spectrum, precision="mixed_precision")
+    assert spectrum.dtype == np.complex64
+    assert reconstructed.dtype == np.float32
+    assert np.allclose(field, reconstructed, atol=5e-3)
+
+
+def test_precision_dtype_mismatch_is_rejected():
+    signal64 = np.linspace(0.0, 1.0, 8, dtype=np.float64)
+    with pytest.raises(ValueError, match="expects float32/complex64 storage"):
+        afft.fft1(signal64, precision="low_precision")
+
+    signal32 = np.linspace(0.0, 1.0, 8, dtype=np.float32)
+    with pytest.raises(ValueError, match="expects float64/complex128 storage"):
+        afft.fft1(signal32, precision="high_accuracy")
+
+
+def test_plan_precision_dispatches_by_dtype():
+    signal32 = np.linspace(0.0, 1.0, 8, dtype=np.float32)
+    plan = afft.FftPlan1D(8, precision="mixed_precision")
+    spectrum = plan.fft(signal32)
+    reconstructed = plan.ifft(spectrum)
+    assert spectrum.dtype == np.complex64
+    assert reconstructed.dtype == np.float32
+    assert np.allclose(signal32, reconstructed, atol=5e-3)
+
+
+def test_backend_capabilities_report_precision_profiles():
+    capabilities = afft.backend_capabilities()
+    assert capabilities["cpu"]["supports_mixed_precision"] is True
+    assert capabilities["cpu"]["default_precision_profile"] == "high_accuracy"
+    assert "low_precision" in capabilities["cpu"]["supported_precision_profiles"]
+    assert "mixed_precision" in capabilities["cpu"]["supported_precision_profiles"]

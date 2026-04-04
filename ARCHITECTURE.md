@@ -23,6 +23,16 @@ Infrastructure implementations may depend on shared traits and shared data contr
 - Dependency inversion: consumers program against `FftBackend`, not against CPU or GPU internals.
 - Do not repeat yourself: helper constructors and shared validation live centrally and are reused by all crates.
 
+## Precision Model
+
+- Precision is a domain-level contract, not an incidental backend detail.
+- `PrecisionMode`, `StoragePrecision`, `ComputePrecision`, and `PrecisionProfile` are defined once
+  in Apollo domain types and reused across Rust, Python, validation, and compatibility layers.
+- Backends must advertise only the precision profiles they truly implement.
+- Apollo never silently upgrades or downgrades a caller into mixed precision; lower-precision paths
+  are explicit plan or API choices.
+- Apollo currently defines `mixed_precision` for CPU FFT as `half::f16` storage with `f32` compute.
+
 ## Documentation Standard
 
 All public types and methods must document:
@@ -33,4 +43,3 @@ All public types and methods must document:
 - Complexity and allocation behavior.
 - Normalization rules.
 - Failure modes.
-
