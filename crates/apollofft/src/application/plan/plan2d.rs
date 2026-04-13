@@ -1,6 +1,8 @@
 //! 2D FFT plan.
 
-use super::{RealFftData, AXIS_BUF, AXIS_BUF_32, AXIS_SCRATCH, AXIS_SCRATCH_32, VOLUME_COMPLEX_BUF};
+use super::{
+    RealFftData, AXIS_BUF, AXIS_BUF_32, AXIS_SCRATCH, AXIS_SCRATCH_32, VOLUME_COMPLEX_BUF,
+};
 use crate::types::PrecisionProfile;
 use half::f16;
 use ndarray::{Array2, ArrayBase, ArrayViewMut2, Axis, DataMut, Ix2, Zip};
@@ -23,10 +25,18 @@ pub struct FftPlan2D {
     fft_y: Arc<dyn Fft<f64>>,
     ifft_x: Arc<dyn Fft<f64>>,
     ifft_y: Arc<dyn Fft<f64>>,
+    fft_x_scratch_len: usize,
+    fft_y_scratch_len: usize,
+    ifft_x_scratch_len: usize,
+    ifft_y_scratch_len: usize,
     fft_x_f32: Arc<dyn Fft<f32>>,
     fft_y_f32: Arc<dyn Fft<f32>>,
     ifft_x_f32: Arc<dyn Fft<f32>>,
     ifft_y_f32: Arc<dyn Fft<f32>>,
+    fft_x_f32_scratch_len: usize,
+    fft_y_f32_scratch_len: usize,
+    ifft_x_f32_scratch_len: usize,
+    ifft_y_f32_scratch_len: usize,
 }
 
 impl std::fmt::Debug for FftPlan2D {
@@ -50,18 +60,34 @@ impl FftPlan2D {
     pub fn with_precision(nx: usize, ny: usize, precision: PrecisionProfile) -> Self {
         let mut planner = FftPlanner::new();
         let mut planner_f32 = FftPlanner::<f32>::new();
+        let fft_x = planner.plan_fft_forward(nx);
+        let fft_y = planner.plan_fft_forward(ny);
+        let ifft_x = planner.plan_fft_inverse(nx);
+        let ifft_y = planner.plan_fft_inverse(ny);
+        let fft_x_f32 = planner_f32.plan_fft_forward(nx);
+        let fft_y_f32 = planner_f32.plan_fft_forward(ny);
+        let ifft_x_f32 = planner_f32.plan_fft_inverse(nx);
+        let ifft_y_f32 = planner_f32.plan_fft_inverse(ny);
         Self {
             nx,
             ny,
             precision,
-            fft_x: planner.plan_fft_forward(nx),
-            fft_y: planner.plan_fft_forward(ny),
-            ifft_x: planner.plan_fft_inverse(nx),
-            ifft_y: planner.plan_fft_inverse(ny),
-            fft_x_f32: planner_f32.plan_fft_forward(nx),
-            fft_y_f32: planner_f32.plan_fft_forward(ny),
-            ifft_x_f32: planner_f32.plan_fft_inverse(nx),
-            ifft_y_f32: planner_f32.plan_fft_inverse(ny),
+            fft_x_scratch_len: fft_x.get_inplace_scratch_len(),
+            fft_y_scratch_len: fft_y.get_inplace_scratch_len(),
+            ifft_x_scratch_len: ifft_x.get_inplace_scratch_len(),
+            ifft_y_scratch_len: ifft_y.get_inplace_scratch_len(),
+            fft_x_f32_scratch_len: fft_x_f32.get_inplace_scratch_len(),
+            fft_y_f32_scratch_len: fft_y_f32.get_inplace_scratch_len(),
+            ifft_x_f32_scratch_len: ifft_x_f32.get_inplace_scratch_len(),
+            ifft_y_f32_scratch_len: ifft_y_f32.get_inplace_scratch_len(),
+            fft_x,
+            fft_y,
+            ifft_x,
+            ifft_y,
+            fft_x_f32,
+            fft_y_f32,
+            ifft_x_f32,
+            ifft_y_f32,
         }
     }
 
@@ -148,10 +174,20 @@ impl FftPlan2D {
         input: &Array2<Complex64>,
         output: &mut Array2<f64>,
     ) {
-        assert_eq!(input.dim(), (self.nx, self.ny), "inverse input shape mismatch");
-        assert_eq!(output.dim(), (self.nx, self.ny), "inverse output shape mismatch");
+        assert_eq!(
+            input.dim(),
+            (self.nx, self.ny),
+            "inverse input shape mismatch"
+        );
+        assert_eq!(
+            output.dim(),
+            (self.nx, self.ny),
+            "inverse output shape mismatch"
+        );
         let total = self.nx * self.ny;
-        let input_slice = input.as_slice_memory_order().expect("Array must be contiguous");
+        let input_slice = input
+            .as_slice_memory_order()
+            .expect("Array must be contiguous");
         let output_slice = output
             .as_slice_memory_order_mut()
             .expect("Array must be contiguous");
@@ -191,7 +227,7 @@ impl FftPlan2D {
                 let buffer = row.as_slice_mut().expect("row must be contiguous");
                 AXIS_SCRATCH.with(|cell| {
                     let mut scratch = cell.borrow_mut();
-                    let len = fft_x.get_inplace_scratch_len();
+                    let len = self.fft_x_scratch_len;
                     if scratch.len() < len {
                         scratch.resize(len, Complex64::default());
                     }
@@ -212,7 +248,7 @@ impl FftPlan2D {
                     }
                     AXIS_SCRATCH.with(|scratch_cell| {
                         let mut scratch = scratch_cell.borrow_mut();
-                        let len = fft_y.get_inplace_scratch_len();
+                        let len = self.fft_y_scratch_len;
                         if scratch.len() < len {
                             scratch.resize(len, Complex64::default());
                         }
@@ -250,7 +286,7 @@ impl FftPlan2D {
                     }
                     AXIS_SCRATCH.with(|scratch_cell| {
                         let mut scratch = scratch_cell.borrow_mut();
-                        let len = ifft_y.get_inplace_scratch_len();
+                        let len = self.ifft_y_scratch_len;
                         if scratch.len() < len {
                             scratch.resize(len, Complex64::default());
                         }
@@ -267,7 +303,7 @@ impl FftPlan2D {
                 let buffer = row.as_slice_mut().expect("row must be contiguous");
                 AXIS_SCRATCH.with(|cell| {
                     let mut scratch = cell.borrow_mut();
-                    let len = ifft_x.get_inplace_scratch_len();
+                    let len = self.ifft_x_scratch_len;
                     if scratch.len() < len {
                         scratch.resize(len, Complex64::default());
                     }
@@ -342,7 +378,7 @@ impl FftPlan2D {
             .for_each(|mut row| {
                 AXIS_SCRATCH_32.with(|cell| {
                     let mut scratch = cell.borrow_mut();
-                    let len = fft_x.get_inplace_scratch_len();
+                    let len = self.fft_x_f32_scratch_len;
                     if scratch.len() < len {
                         scratch.resize(len, Complex32::default());
                     }
@@ -366,7 +402,7 @@ impl FftPlan2D {
                     }
                     AXIS_SCRATCH_32.with(|scratch_cell| {
                         let mut scratch = scratch_cell.borrow_mut();
-                        let len = fft_y.get_inplace_scratch_len();
+                        let len = self.fft_y_f32_scratch_len;
                         if scratch.len() < len {
                             scratch.resize(len, Complex32::default());
                         }
@@ -396,7 +432,7 @@ impl FftPlan2D {
                     }
                     AXIS_SCRATCH_32.with(|scratch_cell| {
                         let mut scratch = scratch_cell.borrow_mut();
-                        let len = ifft_y.get_inplace_scratch_len();
+                        let len = self.ifft_y_f32_scratch_len;
                         if scratch.len() < len {
                             scratch.resize(len, Complex32::default());
                         }
@@ -412,7 +448,7 @@ impl FftPlan2D {
             .for_each(|mut row| {
                 AXIS_SCRATCH_32.with(|cell| {
                     let mut scratch = cell.borrow_mut();
-                    let len = ifft_x.get_inplace_scratch_len();
+                    let len = self.ifft_x_f32_scratch_len;
                     if scratch.len() < len {
                         scratch.resize(len, Complex32::default());
                     }

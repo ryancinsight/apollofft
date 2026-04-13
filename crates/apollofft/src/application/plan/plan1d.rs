@@ -19,8 +19,12 @@ pub struct FftPlan1D {
     precision: PrecisionProfile,
     fft: Arc<dyn Fft<f64>>,
     ifft: Arc<dyn Fft<f64>>,
+    fft_scratch_len: usize,
+    ifft_scratch_len: usize,
     fft_f32: Arc<dyn Fft<f32>>,
     ifft_f32: Arc<dyn Fft<f32>>,
+    fft_f32_scratch_len: usize,
+    ifft_f32_scratch_len: usize,
 }
 
 impl std::fmt::Debug for FftPlan1D {
@@ -41,13 +45,21 @@ impl FftPlan1D {
     pub fn with_precision(n: usize, precision: PrecisionProfile) -> Self {
         let mut planner = FftPlanner::new();
         let mut planner_f32 = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(n);
+        let ifft = planner.plan_fft_inverse(n);
+        let fft_f32 = planner_f32.plan_fft_forward(n);
+        let ifft_f32 = planner_f32.plan_fft_inverse(n);
         Self {
             n,
             precision,
-            fft: planner.plan_fft_forward(n),
-            ifft: planner.plan_fft_inverse(n),
-            fft_f32: planner_f32.plan_fft_forward(n),
-            ifft_f32: planner_f32.plan_fft_inverse(n),
+            fft_scratch_len: fft.get_inplace_scratch_len(),
+            ifft_scratch_len: ifft.get_inplace_scratch_len(),
+            fft_f32_scratch_len: fft_f32.get_inplace_scratch_len(),
+            ifft_f32_scratch_len: ifft_f32.get_inplace_scratch_len(),
+            fft,
+            ifft,
+            fft_f32,
+            ifft_f32,
         }
     }
 
@@ -99,7 +111,7 @@ impl FftPlan1D {
         let mut data = input.mapv(|value| Complex64::new(value, 0.0));
         AXIS_SCRATCH.with(|cell| {
             let mut scratch = cell.borrow_mut();
-            let len = self.fft.get_inplace_scratch_len();
+            let len = self.fft_scratch_len;
             if scratch.len() < len {
                 scratch.resize(len, Complex64::default());
             }
@@ -122,7 +134,7 @@ impl FftPlan1D {
         });
         AXIS_SCRATCH.with(|cell| {
             let mut scratch = cell.borrow_mut();
-            let len = self.fft.get_inplace_scratch_len();
+            let len = self.fft_scratch_len;
             if scratch.len() < len {
                 scratch.resize(len, Complex64::default());
             }
@@ -156,7 +168,7 @@ impl FftPlan1D {
         scratch.assign(input);
         AXIS_SCRATCH.with(|cell| {
             let mut fft_scratch = cell.borrow_mut();
-            let len = self.ifft.get_inplace_scratch_len();
+            let len = self.ifft_scratch_len;
             if fft_scratch.len() < len {
                 fft_scratch.resize(len, Complex64::default());
             }
@@ -188,7 +200,7 @@ impl FftPlan1D {
             workspace[..self.n].copy_from_slice(input_slice);
             AXIS_SCRATCH.with(|scratch_cell| {
                 let mut scratch = scratch_cell.borrow_mut();
-                let len = self.ifft.get_inplace_scratch_len();
+                let len = self.ifft_scratch_len;
                 if scratch.len() < len {
                     scratch.resize(len, Complex64::default());
                 }
@@ -216,7 +228,7 @@ impl FftPlan1D {
     pub fn forward_complex_inplace(&self, data: &mut Array1<Complex64>) {
         AXIS_SCRATCH.with(|cell| {
             let mut scratch = cell.borrow_mut();
-            let len = self.fft.get_inplace_scratch_len();
+            let len = self.fft_scratch_len;
             if scratch.len() < len {
                 scratch.resize(len, Complex64::default());
             }
@@ -231,7 +243,7 @@ impl FftPlan1D {
     pub fn inverse_complex_inplace(&self, data: &mut Array1<Complex64>) {
         AXIS_SCRATCH.with(|cell| {
             let mut scratch = cell.borrow_mut();
-            let len = self.ifft.get_inplace_scratch_len();
+            let len = self.ifft_scratch_len;
             if scratch.len() < len {
                 scratch.resize(len, Complex64::default());
             }
@@ -245,98 +257,110 @@ impl FftPlan1D {
     /// Forward transform of a real signal stored as `f32`.
     #[must_use]
     pub(crate) fn forward_f32(&self, input: &Array1<f32>) -> Array1<Complex32> {
-        if self.precision == PrecisionProfile::LOW_PRECISION_F32 {
-            let mut data = input.mapv(|value| Complex32::new(value, 0.0));
-            AXIS_SCRATCH_32.with(|cell| {
-                let mut scratch = cell.borrow_mut();
-                let len = self.fft_f32.get_inplace_scratch_len();
-                if scratch.len() < len {
-                    scratch.resize(len, Complex32::default());
-                }
-                self.fft_f32.process_with_scratch(
-                    data.as_slice_mut().expect("Array must be contiguous"),
-                    &mut scratch[..len],
-                );
-            });
-            data
-        } else {
-            let promoted = input.mapv(f64::from);
-            self.forward_real_to_complex(&promoted)
-                .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
+        match self.precision {
+            PrecisionProfile::LOW_PRECISION_F32 => {
+                let mut data = input.mapv(|value| Complex32::new(value, 0.0));
+                AXIS_SCRATCH_32.with(|cell| {
+                    let mut scratch = cell.borrow_mut();
+                    let len = self.fft_f32_scratch_len;
+                    if scratch.len() < len {
+                        scratch.resize(len, Complex32::default());
+                    }
+                    self.fft_f32.process_with_scratch(
+                        data.as_slice_mut().expect("Array must be contiguous"),
+                        &mut scratch[..len],
+                    );
+                });
+                data
+            }
+            _ => {
+                let promoted = input.mapv(f64::from);
+                self.forward_real_to_complex(&promoted)
+                    .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
+            }
         }
     }
 
     /// Inverse transform of an `f32`-storage complex spectrum.
     #[must_use]
     pub(crate) fn inverse_f32(&self, input: &Array1<Complex32>) -> Array1<f32> {
-        if self.precision == PrecisionProfile::LOW_PRECISION_F32 {
-            let mut data = input.clone();
-            AXIS_SCRATCH_32.with(|cell| {
-                let mut scratch = cell.borrow_mut();
-                let len = self.ifft_f32.get_inplace_scratch_len();
-                if scratch.len() < len {
-                    scratch.resize(len, Complex32::default());
-                }
-                self.ifft_f32.process_with_scratch(
-                    data.as_slice_mut().expect("Array must be contiguous"),
-                    &mut scratch[..len],
-                );
-            });
-            let norm = 1.0 / self.n as f32;
-            data.mapv(|value| value.re * norm)
-        } else {
-            let promoted = input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
-            self.inverse_complex_to_real(&promoted)
-                .mapv(|value| value as f32)
+        match self.precision {
+            PrecisionProfile::LOW_PRECISION_F32 => {
+                let mut data = input.clone();
+                AXIS_SCRATCH_32.with(|cell| {
+                    let mut scratch = cell.borrow_mut();
+                    let len = self.ifft_f32_scratch_len;
+                    if scratch.len() < len {
+                        scratch.resize(len, Complex32::default());
+                    }
+                    self.ifft_f32.process_with_scratch(
+                        data.as_slice_mut().expect("Array must be contiguous"),
+                        &mut scratch[..len],
+                    );
+                });
+                let norm = 1.0 / self.n as f32;
+                data.mapv(|value| value.re * norm)
+            }
+            _ => {
+                let promoted = input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
+                self.inverse_complex_to_real(&promoted)
+                    .mapv(|value| value as f32)
+            }
         }
     }
 
     /// Forward transform of a real signal stored as `f16`.
     #[must_use]
     pub(crate) fn forward_f16(&self, input: &Array1<f16>) -> Array1<Complex32> {
-        if self.precision == PrecisionProfile::MIXED_PRECISION_F16_F32 {
-            let mut data = input.mapv(|value| Complex32::new(value.to_f32(), 0.0));
-            AXIS_SCRATCH_32.with(|cell| {
-                let mut scratch = cell.borrow_mut();
-                let len = self.fft_f32.get_inplace_scratch_len();
-                if scratch.len() < len {
-                    scratch.resize(len, Complex32::default());
-                }
-                self.fft_f32.process_with_scratch(
-                    data.as_slice_mut().expect("Array must be contiguous"),
-                    &mut scratch[..len],
-                );
-            });
-            data
-        } else {
-            let promoted = input.mapv(|value| f64::from(value.to_f32()));
-            self.forward_real_to_complex(&promoted)
-                .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
+        match self.precision {
+            PrecisionProfile::MIXED_PRECISION_F16_F32 => {
+                let mut data = input.mapv(|value| Complex32::new(value.to_f32(), 0.0));
+                AXIS_SCRATCH_32.with(|cell| {
+                    let mut scratch = cell.borrow_mut();
+                    let len = self.fft_f32_scratch_len;
+                    if scratch.len() < len {
+                        scratch.resize(len, Complex32::default());
+                    }
+                    self.fft_f32.process_with_scratch(
+                        data.as_slice_mut().expect("Array must be contiguous"),
+                        &mut scratch[..len],
+                    );
+                });
+                data
+            }
+            _ => {
+                let promoted = input.mapv(|value| f64::from(value.to_f32()));
+                self.forward_real_to_complex(&promoted)
+                    .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
+            }
         }
     }
 
     /// Inverse transform of a complex spectrum to `f16` storage.
     #[must_use]
     pub(crate) fn inverse_f16(&self, input: &Array1<Complex32>) -> Array1<f16> {
-        if self.precision == PrecisionProfile::MIXED_PRECISION_F16_F32 {
-            let mut data = input.clone();
-            AXIS_SCRATCH_32.with(|cell| {
-                let mut scratch = cell.borrow_mut();
-                let len = self.ifft_f32.get_inplace_scratch_len();
-                if scratch.len() < len {
-                    scratch.resize(len, Complex32::default());
-                }
-                self.ifft_f32.process_with_scratch(
-                    data.as_slice_mut().expect("Array must be contiguous"),
-                    &mut scratch[..len],
-                );
-            });
-            let norm = 1.0 / self.n as f32;
-            data.mapv(|value| f16::from_f32(value.re * norm))
-        } else {
-            let promoted = input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
-            self.inverse_complex_to_real(&promoted)
-                .mapv(|value| f16::from_f32(value as f32))
+        match self.precision {
+            PrecisionProfile::MIXED_PRECISION_F16_F32 => {
+                let mut data = input.clone();
+                AXIS_SCRATCH_32.with(|cell| {
+                    let mut scratch = cell.borrow_mut();
+                    let len = self.ifft_f32_scratch_len;
+                    if scratch.len() < len {
+                        scratch.resize(len, Complex32::default());
+                    }
+                    self.ifft_f32.process_with_scratch(
+                        data.as_slice_mut().expect("Array must be contiguous"),
+                        &mut scratch[..len],
+                    );
+                });
+                let norm = 1.0 / self.n as f32;
+                data.mapv(|value| f16::from_f32(value.re * norm))
+            }
+            _ => {
+                let promoted = input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
+                self.inverse_complex_to_real(&promoted)
+                    .mapv(|value| f16::from_f32(value as f32))
+            }
         }
     }
 }
