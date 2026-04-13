@@ -6,6 +6,7 @@ use std::f64::consts::PI;
 /// Approximates the modified Bessel function of order zero (I0).
 /// This implementation relies on a highly optimized polynomial fit.
 #[inline]
+#[must_use]
 pub fn i0(z: f64) -> f64 {
     let t = z.abs();
     if t < 3.75 {
@@ -30,6 +31,7 @@ pub fn i0(z: f64) -> f64 {
 
 /// Evaluates the Kaiser-Bessel spreading kernel.
 #[inline]
+#[must_use]
 pub fn kb_kernel(x: f64, w: f64, beta: f64, i0_beta: f64) -> f64 {
     let u2 = (x / w) * (x / w);
     if u2 >= 1.0 {
@@ -40,6 +42,7 @@ pub fn kb_kernel(x: f64, w: f64, beta: f64, i0_beta: f64) -> f64 {
 }
 
 /// Evaluates the analytical Fourier Transform of the Kaiser-Bessel kernel.
+#[must_use]
 pub fn kb_kernel_ft(xi: f64, w: usize, beta: f64, i0_beta: f64) -> f64 {
     let two_pi_w_xi = 2.0 * PI * w as f64 * xi;
     let z_sq = beta * beta - two_pi_w_xi * two_pi_w_xi;
@@ -56,6 +59,7 @@ pub fn kb_kernel_ft(xi: f64, w: usize, beta: f64, i0_beta: f64) -> f64 {
 }
 
 /// Precomputes the 1D deconvolution array across the active dimension.
+#[must_use]
 pub fn axis_deconv(
     n: usize,
     m: usize,
@@ -70,6 +74,7 @@ pub fn axis_deconv(
 }
 
 /// Maps an unsigned index from `[0..N]` to a signed Fourier-centric integer inside `[-N/2..N/2]`.
+#[must_use]
 pub fn fft_signed_index(index: usize, len: usize) -> i64 {
     if index <= len / 2 {
         index as i64
@@ -79,6 +84,7 @@ pub fn fft_signed_index(index: usize, len: usize) -> i64 {
 }
 
 /// Calculates the ideal bucket allocation length mapping kernel domains.
+#[must_use]
 pub fn bucket_count(len: usize, kernel_width: usize) -> usize {
     len.max(1).div_ceil((2 * kernel_width + 1).max(1)).max(1)
 }

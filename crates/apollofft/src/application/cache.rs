@@ -2,7 +2,6 @@
 
 use crate::application::plan::{FftPlan1D, FftPlan2D, FftPlan3D};
 use crate::types::PrecisionProfile;
-use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -154,17 +153,17 @@ impl Fft3dCache {
 }
 
 /// Process-wide 1D plan cache.
-pub static FFT_CACHE_1D: Lazy<Fft1dCache> = Lazy::new(|| Fft1dCache {
+pub static FFT_CACHE_1D: std::sync::LazyLock<Fft1dCache> = std::sync::LazyLock::new(|| Fft1dCache {
     cache: RwLock::new(HashMap::new()),
 });
 
 /// Process-wide 2D plan cache.
-pub static FFT_CACHE_2D: Lazy<Fft2dCache> = Lazy::new(|| Fft2dCache {
+pub static FFT_CACHE_2D: std::sync::LazyLock<Fft2dCache> = std::sync::LazyLock::new(|| Fft2dCache {
     cache: RwLock::new(HashMap::new()),
 });
 
 /// Process-wide 3D plan cache.
-pub static FFT_CACHE_3D: Lazy<Fft3dCache> = Lazy::new(|| Fft3dCache {
+pub static FFT_CACHE_3D: std::sync::LazyLock<Fft3dCache> = std::sync::LazyLock::new(|| Fft3dCache {
     cache: RwLock::new(HashMap::new()),
 });
 

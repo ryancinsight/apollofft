@@ -546,7 +546,7 @@ impl FftPlan3D {
                                 .as_slice_mut()
                                 .expect("inverse_c2r_inplace: z row must be contiguous");
                             row[0].im = 0.0;
-                            if nz % 2 == 0 {
+                            if nz.is_multiple_of(2) {
                                 row[nz_c - 1].im = 0.0;
                             }
                         }
@@ -652,7 +652,7 @@ impl FftPlan3D {
                     }
                 });
         } else {
-            data.outer_iter_mut().into_iter().for_each(|mut x_slice| {
+            data.outer_iter_mut().for_each(|mut x_slice| {
                 for mut row in x_slice.outer_iter_mut() {
                     AXIS_SCRATCH.with(|scratch_cell| {
                         let mut scratch = scratch_cell.borrow_mut();
@@ -698,7 +698,6 @@ impl FftPlan3D {
                 });
         } else {
             data.axis_iter_mut(Axis(0))
-                .into_iter()
                 .for_each(|mut x_slice| {
                     for k in 0..nz {
                         AXIS_BUF.with(|cell| {
@@ -754,7 +753,6 @@ impl FftPlan3D {
                 });
         } else {
             data.axis_iter_mut(Axis(1))
-                .into_iter()
                 .for_each(|mut y_slice| {
                     for k in 0..nz {
                         AXIS_BUF.with(|cell| {
@@ -835,7 +833,6 @@ impl FftPlan3D {
                 });
         } else {
             data.axis_iter_mut(Axis(1))
-                .into_iter()
                 .for_each(|mut y_slice| {
                     for k in 0..nz {
                         AXIS_BUF.with(|cell| {
@@ -891,7 +888,6 @@ impl FftPlan3D {
                 });
         } else {
             data.axis_iter_mut(Axis(0))
-                .into_iter()
                 .for_each(|mut x_slice| {
                     for k in 0..nz {
                         AXIS_BUF.with(|cell| {
@@ -937,7 +933,7 @@ impl FftPlan3D {
                     }
                 });
         } else {
-            data.outer_iter_mut().into_iter().for_each(|mut x_slice| {
+            data.outer_iter_mut().for_each(|mut x_slice| {
                 for mut row in x_slice.outer_iter_mut() {
                     AXIS_SCRATCH.with(|scratch_cell| {
                         let mut scratch = scratch_cell.borrow_mut();
@@ -1039,70 +1035,58 @@ impl FftPlan3D {
     /// Forward transform of a real 3D field stored as `f32`.
     #[must_use]
     pub(crate) fn forward_f32(&self, input: &Array3<f32>) -> Array3<Complex32> {
-        match self.precision {
-            PrecisionProfile::LOW_PRECISION_F32 => {
-                let mut data = input.mapv(|value| Complex32::new(value, 0.0));
-                self.forward_complex_inplace_f32(&mut data);
-                data
-            }
-            _ => {
-                let promoted = input.mapv(f64::from);
-                self.forward_real_to_complex(&promoted)
-                    .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
-            }
+        if self.precision == PrecisionProfile::LOW_PRECISION_F32 {
+            let mut data = input.mapv(|value| Complex32::new(value, 0.0));
+            self.forward_complex_inplace_f32(&mut data);
+            data
+        } else {
+            let promoted = input.mapv(f64::from);
+            self.forward_real_to_complex(&promoted)
+                .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
         }
     }
 
     /// Forward transform of a real 3D field stored as `f16`.
     #[must_use]
     pub(crate) fn forward_f16(&self, input: &Array3<f16>) -> Array3<Complex32> {
-        match self.precision {
-            PrecisionProfile::MIXED_PRECISION_F16_F32 => {
-                let mut data = input.mapv(|value| Complex32::new(value.to_f32(), 0.0));
-                self.forward_complex_inplace_f32(&mut data);
-                data
-            }
-            _ => {
-                let promoted = input.mapv(|value| f64::from(value.to_f32()));
-                self.forward_real_to_complex(&promoted)
-                    .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
-            }
+        if self.precision == PrecisionProfile::MIXED_PRECISION_F16_F32 {
+            let mut data = input.mapv(|value| Complex32::new(value.to_f32(), 0.0));
+            self.forward_complex_inplace_f32(&mut data);
+            data
+        } else {
+            let promoted = input.mapv(|value| f64::from(value.to_f32()));
+            self.forward_real_to_complex(&promoted)
+                .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
         }
     }
 
     /// Inverse transform of a full `f32`-storage complex spectrum.
     #[must_use]
     pub(crate) fn inverse_f32(&self, input: &Array3<Complex32>) -> Array3<f32> {
-        match self.precision {
-            PrecisionProfile::LOW_PRECISION_F32 => {
-                let mut data = input.clone();
-                self.inverse_complex_inplace_f32(&mut data);
-                let norm = 1.0 / (self.nx * self.ny * self.nz) as f32;
-                data.mapv(|value| value.re * norm)
-            }
-            _ => {
-                let promoted = input.mapv(|value| Complex64::new(value.re as f64, value.im as f64));
-                self.inverse_complex_to_real(&promoted)
-                    .mapv(|value| value as f32)
-            }
+        if self.precision == PrecisionProfile::LOW_PRECISION_F32 {
+            let mut data = input.clone();
+            self.inverse_complex_inplace_f32(&mut data);
+            let norm = 1.0 / (self.nx * self.ny * self.nz) as f32;
+            data.mapv(|value| value.re * norm)
+        } else {
+            let promoted = input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
+            self.inverse_complex_to_real(&promoted)
+                .mapv(|value| value as f32)
         }
     }
 
     /// Inverse transform of a full `f32`-storage complex spectrum to `f16` storage.
     #[must_use]
     pub(crate) fn inverse_f16(&self, input: &Array3<Complex32>) -> Array3<f16> {
-        match self.precision {
-            PrecisionProfile::MIXED_PRECISION_F16_F32 => {
-                let mut data = input.clone();
-                self.inverse_complex_inplace_f32(&mut data);
-                let norm = 1.0 / (self.nx * self.ny * self.nz) as f32;
-                data.mapv(|value| f16::from_f32(value.re * norm))
-            }
-            _ => {
-                let promoted = input.mapv(|value| Complex64::new(value.re as f64, value.im as f64));
-                self.inverse_complex_to_real(&promoted)
-                    .mapv(|value| f16::from_f32(value as f32))
-            }
+        if self.precision == PrecisionProfile::MIXED_PRECISION_F16_F32 {
+            let mut data = input.clone();
+            self.inverse_complex_inplace_f32(&mut data);
+            let norm = 1.0 / (self.nx * self.ny * self.nz) as f32;
+            data.mapv(|value| f16::from_f32(value.re * norm))
+        } else {
+            let promoted = input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
+            self.inverse_complex_to_real(&promoted)
+                .mapv(|value| f16::from_f32(value as f32))
         }
     }
 
@@ -1441,7 +1425,7 @@ impl FftPlan3D {
                 if input_slice[base].im.abs() > HERMITIAN_TOLERANCE {
                     return false;
                 }
-                if nz % 2 == 0 && input_slice[base + nz_c - 1].im.abs() > HERMITIAN_TOLERANCE {
+                if nz.is_multiple_of(2) && input_slice[base + nz_c - 1].im.abs() > HERMITIAN_TOLERANCE {
                     return false;
                 }
                 for k in nz_c..nz {
@@ -1542,7 +1526,7 @@ impl FftPlan3D {
                 {
                     let row = &mut spectrum[spec_row..spec_row + nz_c];
                     row[0].im = 0.0;
-                    if nz % 2 == 0 {
+                    if nz.is_multiple_of(2) {
                         row[nz_c - 1].im = 0.0;
                     }
                 }
@@ -1597,7 +1581,7 @@ impl FftPlan3D {
                     }
                 });
         } else {
-            data.outer_iter_mut().into_iter().for_each(|mut x_slice| {
+            data.outer_iter_mut().for_each(|mut x_slice| {
                 for mut row in x_slice.outer_iter_mut() {
                     AXIS_SCRATCH_32.with(|scratch_cell| {
                         let mut scratch = scratch_cell.borrow_mut();
@@ -1641,7 +1625,7 @@ impl FftPlan3D {
         if self.use_parallel_axis(self.nx) {
             data.axis_iter_mut(Axis(0)).into_par_iter().for_each(x_pass);
         } else {
-            data.axis_iter_mut(Axis(0)).into_iter().for_each(x_pass);
+            data.axis_iter_mut(Axis(0)).for_each(x_pass);
         }
 
         let y_pass = |mut y_slice: ndarray::ArrayViewMut2<'_, Complex32>| {
@@ -1671,7 +1655,7 @@ impl FftPlan3D {
         if self.use_parallel_axis(self.ny) {
             data.axis_iter_mut(Axis(1)).into_par_iter().for_each(y_pass);
         } else {
-            data.axis_iter_mut(Axis(1)).into_iter().for_each(y_pass);
+            data.axis_iter_mut(Axis(1)).for_each(y_pass);
         }
     }
 
@@ -1715,7 +1699,7 @@ impl FftPlan3D {
         if self.use_parallel_axis(self.ny) {
             data.axis_iter_mut(Axis(1)).into_par_iter().for_each(y_pass);
         } else {
-            data.axis_iter_mut(Axis(1)).into_iter().for_each(y_pass);
+            data.axis_iter_mut(Axis(1)).for_each(y_pass);
         }
 
         let x_pass = |mut x_slice: ndarray::ArrayViewMut2<'_, Complex32>| {
@@ -1745,7 +1729,7 @@ impl FftPlan3D {
         if self.use_parallel_axis(self.nx) {
             data.axis_iter_mut(Axis(0)).into_par_iter().for_each(x_pass);
         } else {
-            data.axis_iter_mut(Axis(0)).into_iter().for_each(x_pass);
+            data.axis_iter_mut(Axis(0)).for_each(x_pass);
         }
 
         if self.use_parallel_axis(self.nx) {
@@ -1767,7 +1751,7 @@ impl FftPlan3D {
                     }
                 });
         } else {
-            data.outer_iter_mut().into_iter().for_each(|mut x_slice| {
+            data.outer_iter_mut().for_each(|mut x_slice| {
                 for mut row in x_slice.outer_iter_mut() {
                     AXIS_SCRATCH_32.with(|scratch_cell| {
                         let mut scratch = scratch_cell.borrow_mut();

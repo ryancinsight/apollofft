@@ -279,70 +279,58 @@ impl FftPlan2D {
     /// Forward transform of a real array stored as `f32`.
     #[must_use]
     pub(crate) fn forward_f32(&self, input: &Array2<f32>) -> Array2<Complex32> {
-        match self.precision {
-            PrecisionProfile::LOW_PRECISION_F32 => {
-                let mut data = input.mapv(|value| Complex32::new(value, 0.0));
-                self.forward_complex_inplace_f32(&mut data);
-                data
-            }
-            _ => {
-                let promoted = input.mapv(f64::from);
-                self.forward_real_to_complex(&promoted)
-                    .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
-            }
+        if self.precision == PrecisionProfile::LOW_PRECISION_F32 {
+            let mut data = input.mapv(|value| Complex32::new(value, 0.0));
+            self.forward_complex_inplace_f32(&mut data);
+            data
+        } else {
+            let promoted = input.mapv(f64::from);
+            self.forward_real_to_complex(&promoted)
+                .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
         }
     }
 
     /// Inverse transform of an `f32`-storage complex spectrum.
     #[must_use]
     pub(crate) fn inverse_f32(&self, input: &Array2<Complex32>) -> Array2<f32> {
-        match self.precision {
-            PrecisionProfile::LOW_PRECISION_F32 => {
-                let mut data = input.clone();
-                self.inverse_complex_inplace_f32(&mut data);
-                let norm = 1.0 / (self.nx * self.ny) as f32;
-                data.mapv(|value| value.re * norm)
-            }
-            _ => {
-                let promoted = input.mapv(|value| Complex64::new(value.re as f64, value.im as f64));
-                self.inverse_complex_to_real(&promoted)
-                    .mapv(|value| value as f32)
-            }
+        if self.precision == PrecisionProfile::LOW_PRECISION_F32 {
+            let mut data = input.clone();
+            self.inverse_complex_inplace_f32(&mut data);
+            let norm = 1.0 / (self.nx * self.ny) as f32;
+            data.mapv(|value| value.re * norm)
+        } else {
+            let promoted = input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
+            self.inverse_complex_to_real(&promoted)
+                .mapv(|value| value as f32)
         }
     }
 
     /// Forward transform of a real array stored as `f16`.
     #[must_use]
     pub(crate) fn forward_f16(&self, input: &Array2<f16>) -> Array2<Complex32> {
-        match self.precision {
-            PrecisionProfile::MIXED_PRECISION_F16_F32 => {
-                let mut data = input.mapv(|value| Complex32::new(value.to_f32(), 0.0));
-                self.forward_complex_inplace_f32(&mut data);
-                data
-            }
-            _ => {
-                let promoted = input.mapv(|value| f64::from(value.to_f32()));
-                self.forward_real_to_complex(&promoted)
-                    .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
-            }
+        if self.precision == PrecisionProfile::MIXED_PRECISION_F16_F32 {
+            let mut data = input.mapv(|value| Complex32::new(value.to_f32(), 0.0));
+            self.forward_complex_inplace_f32(&mut data);
+            data
+        } else {
+            let promoted = input.mapv(|value| f64::from(value.to_f32()));
+            self.forward_real_to_complex(&promoted)
+                .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
         }
     }
 
     /// Inverse transform of a complex spectrum to `f16` storage.
     #[must_use]
     pub(crate) fn inverse_f16(&self, input: &Array2<Complex32>) -> Array2<f16> {
-        match self.precision {
-            PrecisionProfile::MIXED_PRECISION_F16_F32 => {
-                let mut data = input.clone();
-                self.inverse_complex_inplace_f32(&mut data);
-                let norm = 1.0 / (self.nx * self.ny) as f32;
-                data.mapv(|value| f16::from_f32(value.re * norm))
-            }
-            _ => {
-                let promoted = input.mapv(|value| Complex64::new(value.re as f64, value.im as f64));
-                self.inverse_complex_to_real(&promoted)
-                    .mapv(|value| f16::from_f32(value as f32))
-            }
+        if self.precision == PrecisionProfile::MIXED_PRECISION_F16_F32 {
+            let mut data = input.clone();
+            self.inverse_complex_inplace_f32(&mut data);
+            let norm = 1.0 / (self.nx * self.ny) as f32;
+            data.mapv(|value| f16::from_f32(value.re * norm))
+        } else {
+            let promoted = input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
+            self.inverse_complex_to_real(&promoted)
+                .mapv(|value| f16::from_f32(value as f32))
         }
     }
 

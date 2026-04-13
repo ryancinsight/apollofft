@@ -28,8 +28,8 @@ fn sort_points_1d(
     let mut indexed: Vec<_> = positions
         .iter()
         .zip(values.iter())
-        .enumerate()
-        .map(|(_original_index, (&x, &value))| {
+        
+        .map(|(&x, &value)| {
             let x_mod = x.rem_euclid(domain.length());
             let bucket = ((x_mod * bucket_scale).floor() as usize).min(buckets - 1);
             IndexedPoint1D {
@@ -39,7 +39,7 @@ fn sort_points_1d(
             }
         })
         .collect();
-    indexed.sort_unstable_by(|lhs, rhs| lhs.bucket.cmp(&rhs.bucket));
+    indexed.sort_unstable_by_key(|lhs| lhs.bucket);
     indexed
 }
 
@@ -60,7 +60,7 @@ fn sort_positions_1d(
             (original_index, x_mod, bucket)
         })
         .collect();
-    indexed.sort_unstable_by(|lhs, rhs| lhs.2.cmp(&rhs.2));
+    indexed.sort_unstable_by_key(|lhs| lhs.2);
     indexed
 }
 
