@@ -284,6 +284,52 @@ pub fn nufft_type1_3d_fast(
     NufftPlan3D::new(grid, DEFAULT_NUFFT_OVERSAMPLING, kernel_width).type1(positions, values)
 }
 
+/// Exact direct 3D type-2 NUFFT.
+#[must_use]
+pub fn nufft_type2_3d(
+    fourier_coeffs: &Array3<Complex64>,
+    positions: &[(f64, f64, f64)],
+    grid: UniformGrid3D,
+) -> Vec<Complex64> {
+    assert_eq!(
+        fourier_coeffs.dim(),
+        (grid.nx, grid.ny, grid.nz),
+        "fourier_coeffs shape mismatch"
+    );
+
+    let (lx, ly, lz) = grid.lengths();
+    let two_pi_over_lx = 2.0 * PI / lx;
+    let two_pi_over_ly = 2.0 * PI / ly;
+    let two_pi_over_lz = 2.0 * PI / lz;
+
+    positions
+        .iter()
+        .map(|&(x, y, z)| {
+            let x_mod = x.rem_euclid(lx);
+            let y_mod = y.rem_euclid(ly);
+            let z_mod = z.rem_euclid(lz);
+            let mut value = Complex64::new(0.0, 0.0);
+
+            for kx in 0..grid.nx {
+                let kx_signed = fft_signed_index(kx, grid.nx);
+                let phase_x = two_pi_over_lx * kx_signed as f64 * x_mod;
+                for ky in 0..grid.ny {
+                    let ky_signed = fft_signed_index(ky, grid.ny);
+                    let phase_xy = phase_x + two_pi_over_ly * ky_signed as f64 * y_mod;
+                    for kz in 0..grid.nz {
+                        let kz_signed = fft_signed_index(kz, grid.nz);
+                        let angle = phase_xy + two_pi_over_lz * kz_signed as f64 * z_mod;
+                        let basis = Complex64::new(angle.cos(), angle.sin());
+                        value += fourier_coeffs[[kx, ky, kz]] * basis;
+                    }
+                }
+            }
+
+            value
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,5 +360,22 @@ mod tests {
             .map(|(lhs, rhs)| (lhs - rhs).norm())
             .fold(0.0, f64::max);
         assert!(max_err / scale < 1e-6);
+    }
+
+    #[test]
+    fn exact_3d_type2_tracks_single_mode() {
+        let grid = UniformGrid3D::new(6, 5, 4, 0.25, 0.4, 0.5).unwrap();
+        let mut coeffs = Array3::<Complex64>::zeros((grid.nx, grid.ny, grid.nz));
+        let mode = Complex64::new(1.5, -0.25);
+        coeffs[[1, 0, 0]] = mode;
+        let positions = vec![(0.13, 0.27, 0.41), (0.61, 0.19, 0.03)];
+
+        let samples = nufft_type2_3d(&coeffs, &positions, grid);
+
+        for (position, sample) in positions.iter().zip(samples.iter()) {
+            let angle = 2.0 * PI * position.0 / grid.lengths().0;
+            let expected = mode * Complex64::new(angle.cos(), angle.sin());
+            assert!((sample - expected).norm() < 1e-10);
+        }
     }
 }
