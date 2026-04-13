@@ -38,6 +38,12 @@ pub struct FftPlan3D {
     ifft_x: Arc<dyn Fft<f64>>,
     ifft_y: Arc<dyn Fft<f64>>,
     ifft_z: Arc<dyn Fft<f64>>,
+    fft_x_scratch_len: usize,
+    fft_y_scratch_len: usize,
+    fft_z_scratch_len: usize,
+    ifft_x_scratch_len: usize,
+    ifft_y_scratch_len: usize,
+    ifft_z_scratch_len: usize,
     rfft_z: Arc<dyn RealToComplex<f64>>,
     irfft_z: Arc<dyn ComplexToReal<f64>>,
     fft_x_f32: Arc<dyn Fft<f32>>,
@@ -46,6 +52,12 @@ pub struct FftPlan3D {
     ifft_x_f32: Arc<dyn Fft<f32>>,
     ifft_y_f32: Arc<dyn Fft<f32>>,
     ifft_z_f32: Arc<dyn Fft<f32>>,
+    fft_x_f32_scratch_len: usize,
+    fft_y_f32_scratch_len: usize,
+    fft_z_f32_scratch_len: usize,
+    ifft_x_f32_scratch_len: usize,
+    ifft_y_f32_scratch_len: usize,
+    ifft_z_f32_scratch_len: usize,
 }
 
 impl std::fmt::Debug for FftPlan3D {
@@ -73,26 +85,50 @@ impl FftPlan3D {
         let mut planner_f32 = FftPlanner::<f32>::new();
         let mut real_planner = RealFftPlanner::<f64>::new();
         let nz_c = nz / 2 + 1;
+        let fft_x = planner.plan_fft_forward(nx);
+        let fft_y = planner.plan_fft_forward(ny);
+        let fft_z = planner.plan_fft_forward(nz);
+        let ifft_x = planner.plan_fft_inverse(nx);
+        let ifft_y = planner.plan_fft_inverse(ny);
+        let ifft_z = planner.plan_fft_inverse(nz);
+        let fft_x_f32 = planner_f32.plan_fft_forward(nx);
+        let fft_y_f32 = planner_f32.plan_fft_forward(ny);
+        let fft_z_f32 = planner_f32.plan_fft_forward(nz);
+        let ifft_x_f32 = planner_f32.plan_fft_inverse(nx);
+        let ifft_y_f32 = planner_f32.plan_fft_inverse(ny);
+        let ifft_z_f32 = planner_f32.plan_fft_inverse(nz);
         Self {
             nx,
             ny,
             nz,
             nz_c,
             precision,
-            fft_x: planner.plan_fft_forward(nx),
-            fft_y: planner.plan_fft_forward(ny),
-            fft_z: planner.plan_fft_forward(nz),
-            ifft_x: planner.plan_fft_inverse(nx),
-            ifft_y: planner.plan_fft_inverse(ny),
-            ifft_z: planner.plan_fft_inverse(nz),
+            fft_x_scratch_len: fft_x.get_inplace_scratch_len(),
+            fft_y_scratch_len: fft_y.get_inplace_scratch_len(),
+            fft_z_scratch_len: fft_z.get_inplace_scratch_len(),
+            ifft_x_scratch_len: ifft_x.get_inplace_scratch_len(),
+            ifft_y_scratch_len: ifft_y.get_inplace_scratch_len(),
+            ifft_z_scratch_len: ifft_z.get_inplace_scratch_len(),
+            fft_x,
+            fft_y,
+            fft_z,
+            ifft_x,
+            ifft_y,
+            ifft_z,
             rfft_z: real_planner.plan_fft_forward(nz),
             irfft_z: real_planner.plan_fft_inverse(nz),
-            fft_x_f32: planner_f32.plan_fft_forward(nx),
-            fft_y_f32: planner_f32.plan_fft_forward(ny),
-            fft_z_f32: planner_f32.plan_fft_forward(nz),
-            ifft_x_f32: planner_f32.plan_fft_inverse(nx),
-            ifft_y_f32: planner_f32.plan_fft_inverse(ny),
-            ifft_z_f32: planner_f32.plan_fft_inverse(nz),
+            fft_x_f32_scratch_len: fft_x_f32.get_inplace_scratch_len(),
+            fft_y_f32_scratch_len: fft_y_f32.get_inplace_scratch_len(),
+            fft_z_f32_scratch_len: fft_z_f32.get_inplace_scratch_len(),
+            ifft_x_f32_scratch_len: ifft_x_f32.get_inplace_scratch_len(),
+            ifft_y_f32_scratch_len: ifft_y_f32.get_inplace_scratch_len(),
+            ifft_z_f32_scratch_len: ifft_z_f32.get_inplace_scratch_len(),
+            fft_x_f32,
+            fft_y_f32,
+            fft_z_f32,
+            ifft_x_f32,
+            ifft_y_f32,
+            ifft_z_f32,
         }
     }
 
@@ -396,7 +432,7 @@ impl FftPlan3D {
                         }
                         AXIS_SCRATCH.with(|scratch_cell| {
                             let mut scratch = scratch_cell.borrow_mut();
-                            let len = fft_y.get_inplace_scratch_len();
+                            let len = self.fft_y_scratch_len;
                             if scratch.len() < len {
                                 scratch.resize(len, Complex64::default());
                             }
@@ -424,7 +460,7 @@ impl FftPlan3D {
                         }
                         AXIS_SCRATCH.with(|scratch_cell| {
                             let mut scratch = scratch_cell.borrow_mut();
-                            let len = fft_x.get_inplace_scratch_len();
+                            let len = self.fft_x_scratch_len;
                             if scratch.len() < len {
                                 scratch.resize(len, Complex64::default());
                             }
@@ -488,7 +524,7 @@ impl FftPlan3D {
                         }
                         AXIS_SCRATCH.with(|scratch_cell| {
                             let mut scratch = scratch_cell.borrow_mut();
-                            let len = ifft_x.get_inplace_scratch_len();
+                            let len = self.ifft_x_scratch_len;
                             if scratch.len() < len {
                                 scratch.resize(len, Complex64::default());
                             }
@@ -515,7 +551,7 @@ impl FftPlan3D {
                         }
                         AXIS_SCRATCH.with(|scratch_cell| {
                             let mut scratch = scratch_cell.borrow_mut();
-                            let len = ifft_y.get_inplace_scratch_len();
+                            let len = self.ifft_y_scratch_len;
                             if scratch.len() < len {
                                 scratch.resize(len, Complex64::default());
                             }
@@ -640,7 +676,7 @@ impl FftPlan3D {
                     for mut row in x_slice.outer_iter_mut() {
                         AXIS_SCRATCH.with(|scratch_cell| {
                             let mut scratch = scratch_cell.borrow_mut();
-                            let len = fft_z.get_inplace_scratch_len();
+                            let len = self.fft_z_scratch_len;
                             if scratch.len() < len {
                                 scratch.resize(len, Complex64::default());
                             }
@@ -656,7 +692,7 @@ impl FftPlan3D {
                 for mut row in x_slice.outer_iter_mut() {
                     AXIS_SCRATCH.with(|scratch_cell| {
                         let mut scratch = scratch_cell.borrow_mut();
-                        let len = fft_z.get_inplace_scratch_len();
+                        let len = self.fft_z_scratch_len;
                         if scratch.len() < len {
                             scratch.resize(len, Complex64::default());
                         }
@@ -684,7 +720,7 @@ impl FftPlan3D {
                             }
                             AXIS_SCRATCH.with(|scratch_cell| {
                                 let mut scratch = scratch_cell.borrow_mut();
-                                let len = fft_y.get_inplace_scratch_len();
+                                let len = self.fft_y_scratch_len;
                                 if scratch.len() < len {
                                     scratch.resize(len, Complex64::default());
                                 }
@@ -711,7 +747,7 @@ impl FftPlan3D {
                             }
                             AXIS_SCRATCH.with(|scratch_cell| {
                                 let mut scratch = scratch_cell.borrow_mut();
-                                let len = fft_y.get_inplace_scratch_len();
+                                let len = self.fft_y_scratch_len;
                                 if scratch.len() < len {
                                     scratch.resize(len, Complex64::default());
                                 }
@@ -740,7 +776,7 @@ impl FftPlan3D {
                             }
                             AXIS_SCRATCH.with(|scratch_cell| {
                                 let mut scratch = scratch_cell.borrow_mut();
-                                let len = fft_x.get_inplace_scratch_len();
+                                let len = self.fft_x_scratch_len;
                                 if scratch.len() < len {
                                     scratch.resize(len, Complex64::default());
                                 }
@@ -767,7 +803,7 @@ impl FftPlan3D {
                             }
                             AXIS_SCRATCH.with(|scratch_cell| {
                                 let mut scratch = scratch_cell.borrow_mut();
-                                let len = fft_x.get_inplace_scratch_len();
+                                let len = self.fft_x_scratch_len;
                                 if scratch.len() < len {
                                     scratch.resize(len, Complex64::default());
                                 }
@@ -821,7 +857,7 @@ impl FftPlan3D {
                             }
                             AXIS_SCRATCH.with(|scratch_cell| {
                                 let mut scratch = scratch_cell.borrow_mut();
-                                let len = ifft_x.get_inplace_scratch_len();
+                                let len = self.ifft_x_scratch_len;
                                 if scratch.len() < len {
                                     scratch.resize(len, Complex64::default());
                                 }
@@ -848,7 +884,7 @@ impl FftPlan3D {
                             }
                             AXIS_SCRATCH.with(|scratch_cell| {
                                 let mut scratch = scratch_cell.borrow_mut();
-                                let len = ifft_x.get_inplace_scratch_len();
+                                let len = self.ifft_x_scratch_len;
                                 if scratch.len() < len {
                                     scratch.resize(len, Complex64::default());
                                 }
@@ -877,7 +913,7 @@ impl FftPlan3D {
                             }
                             AXIS_SCRATCH.with(|scratch_cell| {
                                 let mut scratch = scratch_cell.borrow_mut();
-                                let len = ifft_y.get_inplace_scratch_len();
+                                let len = self.ifft_y_scratch_len;
                                 if scratch.len() < len {
                                     scratch.resize(len, Complex64::default());
                                 }
@@ -904,7 +940,7 @@ impl FftPlan3D {
                             }
                             AXIS_SCRATCH.with(|scratch_cell| {
                                 let mut scratch = scratch_cell.borrow_mut();
-                                let len = ifft_y.get_inplace_scratch_len();
+                                let len = self.ifft_y_scratch_len;
                                 if scratch.len() < len {
                                     scratch.resize(len, Complex64::default());
                                 }
@@ -925,7 +961,7 @@ impl FftPlan3D {
                     for mut row in x_slice.outer_iter_mut() {
                         AXIS_SCRATCH.with(|scratch_cell| {
                             let mut scratch = scratch_cell.borrow_mut();
-                            let len = ifft_z.get_inplace_scratch_len();
+                            let len = self.ifft_z_scratch_len;
                             if scratch.len() < len {
                                 scratch.resize(len, Complex64::default());
                             }
@@ -941,7 +977,7 @@ impl FftPlan3D {
                 for mut row in x_slice.outer_iter_mut() {
                     AXIS_SCRATCH.with(|scratch_cell| {
                         let mut scratch = scratch_cell.borrow_mut();
-                        let len = ifft_z.get_inplace_scratch_len();
+                        let len = self.ifft_z_scratch_len;
                         if scratch.len() < len {
                             scratch.resize(len, Complex64::default());
                         }
@@ -979,7 +1015,7 @@ impl FftPlan3D {
             }
             AXIS_SCRATCH.with(|scratch_cell| {
                 let mut scratch = scratch_cell.borrow_mut();
-                let len = ifft_x.get_inplace_scratch_len();
+                let len = self.ifft_x_scratch_len;
                 if scratch.len() < len {
                     scratch.resize(len, Complex64::default());
                 }
@@ -1010,7 +1046,7 @@ impl FftPlan3D {
             }
             AXIS_SCRATCH.with(|scratch_cell| {
                 let mut scratch = scratch_cell.borrow_mut();
-                let len = ifft_y.get_inplace_scratch_len();
+                let len = self.ifft_y_scratch_len;
                 if scratch.len() < len {
                     scratch.resize(len, Complex64::default());
                 }
@@ -1028,7 +1064,7 @@ impl FftPlan3D {
 
         AXIS_SCRATCH.with(|cell| {
             let mut scratch = cell.borrow_mut();
-            let len = ifft_z.get_inplace_scratch_len();
+            let len = self.ifft_z_scratch_len;
             if scratch.len() < len {
                 scratch.resize(len, Complex64::default());
             }
@@ -1250,7 +1286,7 @@ impl FftPlan3D {
             }
             AXIS_SCRATCH.with(|scratch_cell| {
                 let mut scratch = scratch_cell.borrow_mut();
-                let len = self.fft_y.get_inplace_scratch_len();
+                let len = self.fft_y_scratch_len;
                 if scratch.len() < len {
                     scratch.resize(len, Complex64::default());
                 }
@@ -1282,7 +1318,7 @@ impl FftPlan3D {
             }
             AXIS_SCRATCH.with(|scratch_cell| {
                 let mut scratch = scratch_cell.borrow_mut();
-                let len = self.fft_x.get_inplace_scratch_len();
+                let len = self.fft_x_scratch_len;
                 if scratch.len() < len {
                     scratch.resize(len, Complex64::default());
                 }
@@ -1360,7 +1396,7 @@ impl FftPlan3D {
             }
             AXIS_SCRATCH.with(|scratch_cell| {
                 let mut scratch = scratch_cell.borrow_mut();
-                let len = self.fft_y.get_inplace_scratch_len();
+                let len = self.fft_y_scratch_len;
                 if scratch.len() < len {
                     scratch.resize(len, Complex64::default());
                 }
@@ -1392,7 +1428,7 @@ impl FftPlan3D {
             }
             AXIS_SCRATCH.with(|scratch_cell| {
                 let mut scratch = scratch_cell.borrow_mut();
-                let len = self.fft_x.get_inplace_scratch_len();
+                let len = self.fft_x_scratch_len;
                 if scratch.len() < len {
                     scratch.resize(len, Complex64::default());
                 }
@@ -1482,7 +1518,7 @@ impl FftPlan3D {
             }
             AXIS_SCRATCH.with(|scratch_cell| {
                 let mut scratch = scratch_cell.borrow_mut();
-                let len = self.ifft_x.get_inplace_scratch_len();
+                let len = self.ifft_x_scratch_len;
                 if scratch.len() < len {
                     scratch.resize(len, Complex64::default());
                 }
@@ -1514,7 +1550,7 @@ impl FftPlan3D {
             }
             AXIS_SCRATCH.with(|scratch_cell| {
                 let mut scratch = scratch_cell.borrow_mut();
-                let len = self.ifft_y.get_inplace_scratch_len();
+                let len = self.ifft_y_scratch_len;
                 if scratch.len() < len {
                     scratch.resize(len, Complex64::default());
                 }
@@ -1585,7 +1621,7 @@ impl FftPlan3D {
                     for mut row in x_slice.outer_iter_mut() {
                         AXIS_SCRATCH_32.with(|scratch_cell| {
                             let mut scratch = scratch_cell.borrow_mut();
-                            let len = fft_z.get_inplace_scratch_len();
+                            let len = self.fft_z_f32_scratch_len;
                             if scratch.len() < len {
                                 scratch.resize(len, Complex32::default());
                             }
@@ -1601,7 +1637,7 @@ impl FftPlan3D {
                 for mut row in x_slice.outer_iter_mut() {
                     AXIS_SCRATCH_32.with(|scratch_cell| {
                         let mut scratch = scratch_cell.borrow_mut();
-                        let len = fft_z.get_inplace_scratch_len();
+                        let len = self.fft_z_f32_scratch_len;
                         if scratch.len() < len {
                             scratch.resize(len, Complex32::default());
                         }
@@ -1626,7 +1662,7 @@ impl FftPlan3D {
                     }
                     AXIS_SCRATCH_32.with(|scratch_cell| {
                         let mut scratch = scratch_cell.borrow_mut();
-                        let len = fft_y.get_inplace_scratch_len();
+                        let len = self.fft_y_f32_scratch_len;
                         if scratch.len() < len {
                             scratch.resize(len, Complex32::default());
                         }
@@ -1656,7 +1692,7 @@ impl FftPlan3D {
                     }
                     AXIS_SCRATCH_32.with(|scratch_cell| {
                         let mut scratch = scratch_cell.borrow_mut();
-                        let len = fft_x.get_inplace_scratch_len();
+                        let len = self.fft_x_f32_scratch_len;
                         if scratch.len() < len {
                             scratch.resize(len, Complex32::default());
                         }
@@ -1700,7 +1736,7 @@ impl FftPlan3D {
                     }
                     AXIS_SCRATCH_32.with(|scratch_cell| {
                         let mut scratch = scratch_cell.borrow_mut();
-                        let len = ifft_x.get_inplace_scratch_len();
+                        let len = self.ifft_x_f32_scratch_len;
                         if scratch.len() < len {
                             scratch.resize(len, Complex32::default());
                         }
@@ -1730,7 +1766,7 @@ impl FftPlan3D {
                     }
                     AXIS_SCRATCH_32.with(|scratch_cell| {
                         let mut scratch = scratch_cell.borrow_mut();
-                        let len = ifft_y.get_inplace_scratch_len();
+                        let len = self.ifft_y_f32_scratch_len;
                         if scratch.len() < len {
                             scratch.resize(len, Complex32::default());
                         }
@@ -1755,7 +1791,7 @@ impl FftPlan3D {
                     for mut row in x_slice.outer_iter_mut() {
                         AXIS_SCRATCH_32.with(|scratch_cell| {
                             let mut scratch = scratch_cell.borrow_mut();
-                            let len = ifft_z.get_inplace_scratch_len();
+                            let len = self.ifft_z_f32_scratch_len;
                             if scratch.len() < len {
                                 scratch.resize(len, Complex32::default());
                             }
@@ -1771,7 +1807,7 @@ impl FftPlan3D {
                 for mut row in x_slice.outer_iter_mut() {
                     AXIS_SCRATCH_32.with(|scratch_cell| {
                         let mut scratch = scratch_cell.borrow_mut();
-                        let len = ifft_z.get_inplace_scratch_len();
+                        let len = self.ifft_z_f32_scratch_len;
                         if scratch.len() < len {
                             scratch.resize(len, Complex32::default());
                         }
@@ -1824,7 +1860,7 @@ impl FftPlan3D {
 
         AXIS_SCRATCH.with(|cell| {
             let mut scratch = cell.borrow_mut();
-            let len = fft_z.get_inplace_scratch_len();
+            let len = self.fft_z_scratch_len;
             if scratch.len() < len {
                 scratch.resize(len, Complex64::default());
             }
@@ -1846,7 +1882,7 @@ impl FftPlan3D {
             }
             AXIS_SCRATCH.with(|scratch_cell| {
                 let mut scratch = scratch_cell.borrow_mut();
-                let len = fft_y.get_inplace_scratch_len();
+                let len = self.fft_y_scratch_len;
                 if scratch.len() < len {
                     scratch.resize(len, Complex64::default());
                 }
@@ -1877,7 +1913,7 @@ impl FftPlan3D {
             }
             AXIS_SCRATCH.with(|scratch_cell| {
                 let mut scratch = scratch_cell.borrow_mut();
-                let len = fft_x.get_inplace_scratch_len();
+                let len = self.fft_x_scratch_len;
                 if scratch.len() < len {
                     scratch.resize(len, Complex64::default());
                 }
@@ -1909,7 +1945,7 @@ impl FftPlan3D {
 
         AXIS_SCRATCH_32.with(|cell| {
             let mut scratch = cell.borrow_mut();
-            let len = fft_z.get_inplace_scratch_len();
+            let len = self.fft_z_f32_scratch_len;
             if scratch.len() < len {
                 scratch.resize(len, Complex32::default());
             }
@@ -1931,7 +1967,7 @@ impl FftPlan3D {
             }
             AXIS_SCRATCH_32.with(|scratch_cell| {
                 let mut scratch = scratch_cell.borrow_mut();
-                let len = fft_y.get_inplace_scratch_len();
+                let len = self.fft_y_f32_scratch_len;
                 if scratch.len() < len {
                     scratch.resize(len, Complex32::default());
                 }
@@ -1962,7 +1998,7 @@ impl FftPlan3D {
             }
             AXIS_SCRATCH_32.with(|scratch_cell| {
                 let mut scratch = scratch_cell.borrow_mut();
-                let len = fft_x.get_inplace_scratch_len();
+                let len = self.fft_x_f32_scratch_len;
                 if scratch.len() < len {
                     scratch.resize(len, Complex32::default());
                 }
@@ -2007,7 +2043,7 @@ impl FftPlan3D {
             }
             AXIS_SCRATCH_32.with(|scratch_cell| {
                 let mut scratch = scratch_cell.borrow_mut();
-                let len = ifft_x.get_inplace_scratch_len();
+                let len = self.ifft_x_f32_scratch_len;
                 if scratch.len() < len {
                     scratch.resize(len, Complex32::default());
                 }
@@ -2038,7 +2074,7 @@ impl FftPlan3D {
             }
             AXIS_SCRATCH_32.with(|scratch_cell| {
                 let mut scratch = scratch_cell.borrow_mut();
-                let len = ifft_y.get_inplace_scratch_len();
+                let len = self.ifft_y_f32_scratch_len;
                 if scratch.len() < len {
                     scratch.resize(len, Complex32::default());
                 }
@@ -2056,7 +2092,7 @@ impl FftPlan3D {
 
         AXIS_SCRATCH_32.with(|cell| {
             let mut scratch = cell.borrow_mut();
-            let len = ifft_z.get_inplace_scratch_len();
+            let len = self.ifft_z_f32_scratch_len;
             if scratch.len() < len {
                 scratch.resize(len, Complex32::default());
             }
