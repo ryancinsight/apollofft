@@ -68,7 +68,9 @@ pub type ProcessorFft3d = FftPlan3D;
 /// Forward 1D FFT of a real signal.
 #[must_use]
 pub fn fft_1d_array(field: &Array1<f64>) -> Array1<Complex64> {
-    FFT_CACHE_1D.get_or_create(field.len()).forward(field)
+    FFT_CACHE_1D
+        .get_or_create(Shape1D::new(field.len()).expect("fft_1d_array requires non-zero length"))
+        .forward(field)
 }
 
 /// Forward 1D FFT of a real array using generic storage dispatch.
@@ -78,7 +80,10 @@ pub fn fft_1d_array_typed<T: RealFftData>(
     profile: PrecisionProfile,
 ) -> Array1<T::Spectrum> {
     FFT_CACHE_1D
-        .get_or_create_with_precision(field.len(), profile)
+        .get_or_create_with_precision(
+            Shape1D::new(field.len()).expect("fft_1d_array_typed requires non-zero length"),
+            profile,
+        )
         .forward_typed(field)
 }
 
@@ -86,7 +91,9 @@ pub fn fft_1d_array_typed<T: RealFftData>(
 #[must_use]
 pub fn fft_2d_array(field: &Array2<f64>) -> Array2<Complex64> {
     let (nx, ny) = field.dim();
-    FFT_CACHE_2D.get_or_create(nx, ny).forward(field)
+    FFT_CACHE_2D
+        .get_or_create(Shape2D::new(nx, ny).expect("fft_2d_array requires non-zero dimensions"))
+        .forward(field)
 }
 
 /// Forward 2D FFT of a real array using generic storage dispatch.
@@ -97,7 +104,10 @@ pub fn fft_2d_array_typed<T: RealFftData>(
 ) -> Array2<T::Spectrum> {
     let (nx, ny) = field.dim();
     FFT_CACHE_2D
-        .get_or_create_with_precision(nx, ny, profile)
+        .get_or_create_with_precision(
+            Shape2D::new(nx, ny).expect("fft_2d_array_typed requires non-zero dimensions"),
+            profile,
+        )
         .forward_typed(field)
 }
 
@@ -105,7 +115,9 @@ pub fn fft_2d_array_typed<T: RealFftData>(
 #[must_use]
 pub fn fft_3d_array(field: &Array3<f64>) -> Array3<Complex64> {
     let (nx, ny, nz) = field.dim();
-    FFT_CACHE_3D.get_or_create(nx, ny, nz).forward(field)
+    FFT_CACHE_3D
+        .get_or_create(Shape3D::new(nx, ny, nz).expect("fft_3d_array requires non-zero dimensions"))
+        .forward(field)
 }
 
 /// Forward 3D FFT of a real array using generic storage dispatch.
@@ -116,7 +128,10 @@ pub fn fft_3d_array_typed<T: RealFftData>(
 ) -> Array3<T::Spectrum> {
     let (nx, ny, nz) = field.dim();
     FFT_CACHE_3D
-        .get_or_create_with_precision(nx, ny, nz, profile)
+        .get_or_create_with_precision(
+            Shape3D::new(nx, ny, nz).expect("fft_3d_array_typed requires non-zero dimensions"),
+            profile,
+        )
         .forward_typed(field)
 }
 
@@ -124,7 +139,9 @@ pub fn fft_3d_array_typed<T: RealFftData>(
 #[must_use]
 pub fn ifft_1d_array(field_hat: &Array1<Complex64>) -> Array1<f64> {
     FFT_CACHE_1D
-        .get_or_create(field_hat.len())
+        .get_or_create(
+            Shape1D::new(field_hat.len()).expect("ifft_1d_array requires non-zero length"),
+        )
         .inverse(field_hat)
 }
 
@@ -135,7 +152,10 @@ pub fn ifft_1d_array_typed<T: RealFftData>(
     profile: PrecisionProfile,
 ) -> Array1<T> {
     FFT_CACHE_1D
-        .get_or_create_with_precision(field_hat.len(), profile)
+        .get_or_create_with_precision(
+            Shape1D::new(field_hat.len()).expect("ifft_1d_array_typed requires non-zero length"),
+            profile,
+        )
         .inverse_typed(field_hat)
 }
 
@@ -143,7 +163,9 @@ pub fn ifft_1d_array_typed<T: RealFftData>(
 #[must_use]
 pub fn ifft_2d_array(field_hat: &Array2<Complex64>) -> Array2<f64> {
     let (nx, ny) = field_hat.dim();
-    FFT_CACHE_2D.get_or_create(nx, ny).inverse(field_hat)
+    FFT_CACHE_2D
+        .get_or_create(Shape2D::new(nx, ny).expect("ifft_2d_array requires non-zero dimensions"))
+        .inverse(field_hat)
 }
 
 /// Inverse 2D FFT of a complex spectrum using generic storage dispatch.
@@ -154,7 +176,10 @@ pub fn ifft_2d_array_typed<T: RealFftData>(
 ) -> Array2<T> {
     let (nx, ny) = field_hat.dim();
     FFT_CACHE_2D
-        .get_or_create_with_precision(nx, ny, profile)
+        .get_or_create_with_precision(
+            Shape2D::new(nx, ny).expect("ifft_2d_array_typed requires non-zero dimensions"),
+            profile,
+        )
         .inverse_typed(field_hat)
 }
 
@@ -162,7 +187,11 @@ pub fn ifft_2d_array_typed<T: RealFftData>(
 #[must_use]
 pub fn ifft_3d_array(field_hat: &Array3<Complex64>) -> Array3<f64> {
     let (nx, ny, nz) = field_hat.dim();
-    FFT_CACHE_3D.get_or_create(nx, ny, nz).inverse(field_hat)
+    FFT_CACHE_3D
+        .get_or_create(
+            Shape3D::new(nx, ny, nz).expect("ifft_3d_array requires non-zero dimensions"),
+        )
+        .inverse(field_hat)
 }
 
 /// Inverse 3D FFT of a complex spectrum using generic storage dispatch.
@@ -173,21 +202,28 @@ pub fn ifft_3d_array_typed<T: RealFftData>(
 ) -> Array3<T> {
     let (nx, ny, nz) = field_hat.dim();
     FFT_CACHE_3D
-        .get_or_create_with_precision(nx, ny, nz, profile)
+        .get_or_create_with_precision(
+            Shape3D::new(nx, ny, nz).expect("ifft_3d_array_typed requires non-zero dimensions"),
+            profile,
+        )
         .inverse_typed(field_hat)
 }
 
 /// Forward complex 1D FFT in-place.
 pub fn fft_1d_complex_inplace(data: &mut Array1<Complex64>) {
     FFT_CACHE_1D
-        .get_or_create(data.len())
+        .get_or_create(
+            Shape1D::new(data.len()).expect("fft_1d_complex_inplace requires non-zero length"),
+        )
         .forward_complex_inplace(data);
 }
 
 /// Inverse complex 1D FFT in-place with FFTW-compatible normalization.
 pub fn ifft_1d_complex_inplace(data: &mut Array1<Complex64>) {
     let n = data.len();
-    FFT_CACHE_1D.get_or_create(n).inverse_complex_inplace(data);
+    FFT_CACHE_1D
+        .get_or_create(Shape1D::new(n).expect("ifft_1d_complex_inplace requires non-zero length"))
+        .inverse_complex_inplace(data);
     let norm = 1.0 / n as f64;
     data.par_iter_mut().for_each(|value| *value *= norm);
 }
@@ -212,7 +248,9 @@ pub fn ifft_1d_complex(field_hat: &Array1<Complex64>) -> Array1<Complex64> {
 pub fn fft_2d_complex_inplace(data: &mut Array2<Complex64>) {
     let (nx, ny) = data.dim();
     FFT_CACHE_2D
-        .get_or_create(nx, ny)
+        .get_or_create(
+            Shape2D::new(nx, ny).expect("fft_2d_complex_inplace requires non-zero dimensions"),
+        )
         .forward_complex_inplace(data);
 }
 
@@ -220,7 +258,9 @@ pub fn fft_2d_complex_inplace(data: &mut Array2<Complex64>) {
 pub fn ifft_2d_complex_inplace(data: &mut Array2<Complex64>) {
     let (nx, ny) = data.dim();
     FFT_CACHE_2D
-        .get_or_create(nx, ny)
+        .get_or_create(
+            Shape2D::new(nx, ny).expect("ifft_2d_complex_inplace requires non-zero dimensions"),
+        )
         .inverse_complex_inplace(data);
     let norm = 1.0 / (nx * ny) as f64;
     data.par_iter_mut().for_each(|value| *value *= norm);
@@ -246,7 +286,9 @@ pub fn ifft_2d_complex(field_hat: &Array2<Complex64>) -> Array2<Complex64> {
 pub fn fft_3d_complex_inplace(data: &mut Array3<Complex64>) {
     let (nx, ny, nz) = data.dim();
     FFT_CACHE_3D
-        .get_or_create(nx, ny, nz)
+        .get_or_create(
+            Shape3D::new(nx, ny, nz).expect("fft_3d_complex_inplace requires non-zero dimensions"),
+        )
         .forward_complex_inplace(data);
 }
 
@@ -254,7 +296,9 @@ pub fn fft_3d_complex_inplace(data: &mut Array3<Complex64>) {
 pub fn ifft_3d_complex_inplace(data: &mut Array3<Complex64>) {
     let (nx, ny, nz) = data.dim();
     FFT_CACHE_3D
-        .get_or_create(nx, ny, nz)
+        .get_or_create(
+            Shape3D::new(nx, ny, nz).expect("ifft_3d_complex_inplace requires non-zero dimensions"),
+        )
         .inverse_complex_inplace(data);
     let norm = 1.0 / (nx * ny * nz) as f64;
     data.par_iter_mut().for_each(|value| *value *= norm);
@@ -286,7 +330,9 @@ pub fn fft_3d_array_into(field: &Array3<f64>, out: &mut Array3<Complex64>) {
         });
     let (nx, ny, nz) = field.dim();
     FFT_CACHE_3D
-        .get_or_create(nx, ny, nz)
+        .get_or_create(
+            Shape3D::new(nx, ny, nz).expect("fft_3d_array_into requires non-zero dimensions"),
+        )
         .forward_complex_inplace(out);
 }
 
@@ -299,7 +345,9 @@ pub fn ifft_3d_array_into(field_hat: &mut Array3<Complex64>, out: &mut Array3<f6
         "ifft_3d_array_into: shape mismatch"
     );
     FFT_CACHE_3D
-        .get_or_create(nx, ny, nz)
+        .get_or_create(
+            Shape3D::new(nx, ny, nz).expect("ifft_3d_array_into requires non-zero dimensions"),
+        )
         .inverse_complex_inplace(field_hat);
     let norm = 1.0 / (nx * ny * nz) as f64;
     Zip::from(out.view_mut())

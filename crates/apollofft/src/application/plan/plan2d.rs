@@ -3,7 +3,7 @@
 use super::{
     RealFftData, AXIS_BUF, AXIS_BUF_32, AXIS_SCRATCH, AXIS_SCRATCH_32, VOLUME_COMPLEX_BUF,
 };
-use crate::types::PrecisionProfile;
+use crate::types::{PrecisionProfile, Shape2D};
 use half::f16;
 use ndarray::{Array2, ArrayBase, ArrayViewMut2, Axis, DataMut, Ix2, Zip};
 use num_complex::Complex32;
@@ -51,13 +51,15 @@ impl std::fmt::Debug for FftPlan2D {
 impl FftPlan2D {
     /// Create a new 2D plan.
     #[must_use]
-    pub fn new(nx: usize, ny: usize) -> Self {
-        Self::with_precision(nx, ny, PrecisionProfile::HIGH_ACCURACY_F64)
+    pub fn new(shape: Shape2D) -> Self {
+        Self::with_precision(shape, PrecisionProfile::HIGH_ACCURACY_F64)
     }
 
     /// Create a new 2D plan with an explicit precision profile.
     #[must_use]
-    pub fn with_precision(nx: usize, ny: usize, precision: PrecisionProfile) -> Self {
+    pub fn with_precision(shape: Shape2D, precision: PrecisionProfile) -> Self {
+        let nx = shape.nx;
+        let ny = shape.ny;
         let mut planner = FftPlanner::new();
         let mut planner_f32 = FftPlanner::<f32>::new();
         let fft_x = planner.plan_fft_forward(nx);
@@ -95,6 +97,15 @@ impl FftPlan2D {
     #[must_use]
     pub fn precision_profile(&self) -> PrecisionProfile {
         self.precision
+    }
+
+    /// Return the validated shape owned by this plan.
+    #[must_use]
+    pub fn shape(&self) -> Shape2D {
+        Shape2D {
+            nx: self.nx,
+            ny: self.ny,
+        }
     }
 
     /// Forward transform of a real array.
@@ -335,7 +346,8 @@ impl FftPlan2D {
             let norm = 1.0 / (self.nx * self.ny) as f32;
             data.mapv(|value| value.re * norm)
         } else {
-            let promoted = input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
+            let promoted =
+                input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
             self.inverse_complex_to_real(&promoted)
                 .mapv(|value| value as f32)
         }
@@ -364,7 +376,8 @@ impl FftPlan2D {
             let norm = 1.0 / (self.nx * self.ny) as f32;
             data.mapv(|value| f16::from_f32(value.re * norm))
         } else {
-            let promoted = input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
+            let promoted =
+                input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
             self.inverse_complex_to_real(&promoted)
                 .mapv(|value| f16::from_f32(value as f32))
         }

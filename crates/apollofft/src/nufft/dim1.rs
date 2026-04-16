@@ -28,7 +28,6 @@ fn sort_points_1d(
     let mut indexed: Vec<_> = positions
         .iter()
         .zip(values.iter())
-        
         .map(|(&x, &value)| {
             let x_mod = x.rem_euclid(domain.length());
             let bucket = ((x_mod * bucket_scale).floor() as usize).min(buckets - 1);

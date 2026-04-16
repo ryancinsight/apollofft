@@ -5,7 +5,7 @@ use super::{
     HALF_SPECTRUM_BUF, RFFT_REAL_BUF, VOLUME_COMPLEX_BUF,
 };
 use crate::domain::error::{ApolloError, ApolloResult};
-use crate::types::PrecisionProfile;
+use crate::types::{PrecisionProfile, Shape3D};
 use half::f16;
 use ndarray::{Array3, ArrayBase, ArrayViewMut3, Axis, DataMut, Ix3, Zip};
 use num_complex::Complex32;
@@ -74,13 +74,16 @@ impl std::fmt::Debug for FftPlan3D {
 impl FftPlan3D {
     /// Create a new 3D plan.
     #[must_use]
-    pub fn new(nx: usize, ny: usize, nz: usize) -> Self {
-        Self::with_precision(nx, ny, nz, PrecisionProfile::HIGH_ACCURACY_F64)
+    pub fn new(shape: Shape3D) -> Self {
+        Self::with_precision(shape, PrecisionProfile::HIGH_ACCURACY_F64)
     }
 
     /// Create a new 3D plan with an explicit precision profile.
     #[must_use]
-    pub fn with_precision(nx: usize, ny: usize, nz: usize, precision: PrecisionProfile) -> Self {
+    pub fn with_precision(shape: Shape3D, precision: PrecisionProfile) -> Self {
+        let nx = shape.nx;
+        let ny = shape.ny;
+        let nz = shape.nz;
         let mut planner = FftPlanner::new();
         let mut planner_f32 = FftPlanner::<f32>::new();
         let mut real_planner = RealFftPlanner::<f64>::new();
@@ -165,6 +168,16 @@ impl FftPlan3D {
     #[must_use]
     pub fn dimensions(&self) -> (usize, usize, usize) {
         (self.nx, self.ny, self.nz)
+    }
+
+    /// Return the validated shape owned by this plan.
+    #[must_use]
+    pub fn shape(&self) -> Shape3D {
+        Shape3D {
+            nx: self.nx,
+            ny: self.ny,
+            nz: self.nz,
+        }
     }
 
     /// Forward transform of a real 3D field.
@@ -733,31 +746,30 @@ impl FftPlan3D {
                     }
                 });
         } else {
-            data.axis_iter_mut(Axis(0))
-                .for_each(|mut x_slice| {
-                    for k in 0..nz {
-                        AXIS_BUF.with(|cell| {
-                            let mut buffer = cell.borrow_mut();
-                            if buffer.len() < ny {
-                                buffer.resize(ny, Complex64::default());
+            data.axis_iter_mut(Axis(0)).for_each(|mut x_slice| {
+                for k in 0..nz {
+                    AXIS_BUF.with(|cell| {
+                        let mut buffer = cell.borrow_mut();
+                        if buffer.len() < ny {
+                            buffer.resize(ny, Complex64::default());
+                        }
+                        for j in 0..ny {
+                            buffer[j] = x_slice[[j, k]];
+                        }
+                        AXIS_SCRATCH.with(|scratch_cell| {
+                            let mut scratch = scratch_cell.borrow_mut();
+                            let len = self.fft_y_scratch_len;
+                            if scratch.len() < len {
+                                scratch.resize(len, Complex64::default());
                             }
-                            for j in 0..ny {
-                                buffer[j] = x_slice[[j, k]];
-                            }
-                            AXIS_SCRATCH.with(|scratch_cell| {
-                                let mut scratch = scratch_cell.borrow_mut();
-                                let len = self.fft_y_scratch_len;
-                                if scratch.len() < len {
-                                    scratch.resize(len, Complex64::default());
-                                }
-                                fft_y.process_with_scratch(&mut buffer[..ny], &mut scratch[..len]);
-                            });
-                            for j in 0..ny {
-                                x_slice[[j, k]] = buffer[j];
-                            }
+                            fft_y.process_with_scratch(&mut buffer[..ny], &mut scratch[..len]);
                         });
-                    }
-                });
+                        for j in 0..ny {
+                            x_slice[[j, k]] = buffer[j];
+                        }
+                    });
+                }
+            });
         }
 
         if self.use_parallel_axis(self.ny) {
@@ -788,31 +800,30 @@ impl FftPlan3D {
                     }
                 });
         } else {
-            data.axis_iter_mut(Axis(1))
-                .for_each(|mut y_slice| {
-                    for k in 0..nz {
-                        AXIS_BUF.with(|cell| {
-                            let mut buffer = cell.borrow_mut();
-                            if buffer.len() < nx {
-                                buffer.resize(nx, Complex64::default());
+            data.axis_iter_mut(Axis(1)).for_each(|mut y_slice| {
+                for k in 0..nz {
+                    AXIS_BUF.with(|cell| {
+                        let mut buffer = cell.borrow_mut();
+                        if buffer.len() < nx {
+                            buffer.resize(nx, Complex64::default());
+                        }
+                        for i in 0..nx {
+                            buffer[i] = y_slice[[i, k]];
+                        }
+                        AXIS_SCRATCH.with(|scratch_cell| {
+                            let mut scratch = scratch_cell.borrow_mut();
+                            let len = self.fft_x_scratch_len;
+                            if scratch.len() < len {
+                                scratch.resize(len, Complex64::default());
                             }
-                            for i in 0..nx {
-                                buffer[i] = y_slice[[i, k]];
-                            }
-                            AXIS_SCRATCH.with(|scratch_cell| {
-                                let mut scratch = scratch_cell.borrow_mut();
-                                let len = self.fft_x_scratch_len;
-                                if scratch.len() < len {
-                                    scratch.resize(len, Complex64::default());
-                                }
-                                fft_x.process_with_scratch(&mut buffer[..nx], &mut scratch[..len]);
-                            });
-                            for i in 0..nx {
-                                y_slice[[i, k]] = buffer[i];
-                            }
+                            fft_x.process_with_scratch(&mut buffer[..nx], &mut scratch[..len]);
                         });
-                    }
-                });
+                        for i in 0..nx {
+                            y_slice[[i, k]] = buffer[i];
+                        }
+                    });
+                }
+            });
         }
     }
 
@@ -868,31 +879,30 @@ impl FftPlan3D {
                     }
                 });
         } else {
-            data.axis_iter_mut(Axis(1))
-                .for_each(|mut y_slice| {
-                    for k in 0..nz {
-                        AXIS_BUF.with(|cell| {
-                            let mut buffer = cell.borrow_mut();
-                            if buffer.len() < nx {
-                                buffer.resize(nx, Complex64::default());
+            data.axis_iter_mut(Axis(1)).for_each(|mut y_slice| {
+                for k in 0..nz {
+                    AXIS_BUF.with(|cell| {
+                        let mut buffer = cell.borrow_mut();
+                        if buffer.len() < nx {
+                            buffer.resize(nx, Complex64::default());
+                        }
+                        for i in 0..nx {
+                            buffer[i] = y_slice[[i, k]];
+                        }
+                        AXIS_SCRATCH.with(|scratch_cell| {
+                            let mut scratch = scratch_cell.borrow_mut();
+                            let len = self.ifft_x_scratch_len;
+                            if scratch.len() < len {
+                                scratch.resize(len, Complex64::default());
                             }
-                            for i in 0..nx {
-                                buffer[i] = y_slice[[i, k]];
-                            }
-                            AXIS_SCRATCH.with(|scratch_cell| {
-                                let mut scratch = scratch_cell.borrow_mut();
-                                let len = self.ifft_x_scratch_len;
-                                if scratch.len() < len {
-                                    scratch.resize(len, Complex64::default());
-                                }
-                                ifft_x.process_with_scratch(&mut buffer[..nx], &mut scratch[..len]);
-                            });
-                            for i in 0..nx {
-                                y_slice[[i, k]] = buffer[i];
-                            }
+                            ifft_x.process_with_scratch(&mut buffer[..nx], &mut scratch[..len]);
                         });
-                    }
-                });
+                        for i in 0..nx {
+                            y_slice[[i, k]] = buffer[i];
+                        }
+                    });
+                }
+            });
         }
 
         if self.use_parallel_axis(self.nx) {
@@ -923,31 +933,30 @@ impl FftPlan3D {
                     }
                 });
         } else {
-            data.axis_iter_mut(Axis(0))
-                .for_each(|mut x_slice| {
-                    for k in 0..nz {
-                        AXIS_BUF.with(|cell| {
-                            let mut buffer = cell.borrow_mut();
-                            if buffer.len() < ny {
-                                buffer.resize(ny, Complex64::default());
+            data.axis_iter_mut(Axis(0)).for_each(|mut x_slice| {
+                for k in 0..nz {
+                    AXIS_BUF.with(|cell| {
+                        let mut buffer = cell.borrow_mut();
+                        if buffer.len() < ny {
+                            buffer.resize(ny, Complex64::default());
+                        }
+                        for j in 0..ny {
+                            buffer[j] = x_slice[[j, k]];
+                        }
+                        AXIS_SCRATCH.with(|scratch_cell| {
+                            let mut scratch = scratch_cell.borrow_mut();
+                            let len = self.ifft_y_scratch_len;
+                            if scratch.len() < len {
+                                scratch.resize(len, Complex64::default());
                             }
-                            for j in 0..ny {
-                                buffer[j] = x_slice[[j, k]];
-                            }
-                            AXIS_SCRATCH.with(|scratch_cell| {
-                                let mut scratch = scratch_cell.borrow_mut();
-                                let len = self.ifft_y_scratch_len;
-                                if scratch.len() < len {
-                                    scratch.resize(len, Complex64::default());
-                                }
-                                ifft_y.process_with_scratch(&mut buffer[..ny], &mut scratch[..len]);
-                            });
-                            for j in 0..ny {
-                                x_slice[[j, k]] = buffer[j];
-                            }
+                            ifft_y.process_with_scratch(&mut buffer[..ny], &mut scratch[..len]);
                         });
-                    }
-                });
+                        for j in 0..ny {
+                            x_slice[[j, k]] = buffer[j];
+                        }
+                    });
+                }
+            });
         }
 
         if self.use_parallel_axis(self.nx) {
@@ -1105,7 +1114,8 @@ impl FftPlan3D {
             let norm = 1.0 / (self.nx * self.ny * self.nz) as f32;
             data.mapv(|value| value.re * norm)
         } else {
-            let promoted = input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
+            let promoted =
+                input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
             self.inverse_complex_to_real(&promoted)
                 .mapv(|value| value as f32)
         }
@@ -1120,7 +1130,8 @@ impl FftPlan3D {
             let norm = 1.0 / (self.nx * self.ny * self.nz) as f32;
             data.mapv(|value| f16::from_f32(value.re * norm))
         } else {
-            let promoted = input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
+            let promoted =
+                input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
             self.inverse_complex_to_real(&promoted)
                 .mapv(|value| f16::from_f32(value as f32))
         }
@@ -1461,7 +1472,9 @@ impl FftPlan3D {
                 if input_slice[base].im.abs() > HERMITIAN_TOLERANCE {
                     return false;
                 }
-                if nz.is_multiple_of(2) && input_slice[base + nz_c - 1].im.abs() > HERMITIAN_TOLERANCE {
+                if nz.is_multiple_of(2)
+                    && input_slice[base + nz_c - 1].im.abs() > HERMITIAN_TOLERANCE
+                {
                     return false;
                 }
                 for k in nz_c..nz {
@@ -2088,6 +2101,7 @@ impl FftPlan3D {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Shape1D;
     use approx::assert_relative_eq;
     use ndarray::{Array1, Array3};
     use proptest::prelude::*;
@@ -2097,7 +2111,7 @@ mod tests {
         let n = 4usize;
         let mut input = Array3::<f64>::zeros((n, n, n));
         input[[2, 2, 2]] = 1.0;
-        let plan = FftPlan3D::new(n, n, n);
+        let plan = FftPlan3D::new(Shape3D::new(n, n, n).expect("shape"));
         let spectrum = plan.forward(&input);
         let recovered = plan.inverse(&spectrum);
         for (lhs, rhs) in input.iter().zip(recovered.iter()) {
@@ -2108,7 +2122,7 @@ mod tests {
     #[test]
     fn parseval_holds_in_1d_projection() {
         let n = 64usize;
-        let plan = crate::application::plan::FftPlan1D::new(n);
+        let plan = crate::application::plan::FftPlan1D::new(Shape1D::new(n).expect("shape"));
         let data = Array1::from_shape_fn(n, |i| {
             (i as f64 * 0.37).sin() + 0.5 * (i as f64 * 1.1).cos()
         });
@@ -2121,7 +2135,7 @@ mod tests {
     #[test]
     fn r2c_roundtrip_recovers_input() {
         let (nx, ny, nz) = (8, 8, 8);
-        let plan = FftPlan3D::new(nx, ny, nz);
+        let plan = FftPlan3D::new(Shape3D::new(nx, ny, nz).expect("shape"));
         let field = Array3::from_shape_fn((nx, ny, nz), |(i, j, k)| {
             (i as f64 * 0.5 + j as f64 * 0.3 + k as f64 * 0.7).sin()
         });
@@ -2139,7 +2153,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_derivative_axis() {
-        let plan = FftPlan3D::new(4, 4, 4);
+        let plan = FftPlan3D::new(Shape3D::new(4, 4, 4).expect("shape"));
         let field = Array3::<f64>::zeros((4, 4, 4));
         let error = plan.spectral_derivative(&field, 3).unwrap_err();
         assert!(matches!(error, ApolloError::Validation { .. }));
@@ -2147,7 +2161,10 @@ mod tests {
 
     #[test]
     fn low_precision_roundtrip_stays_within_expected_envelope() {
-        let plan = FftPlan3D::with_precision(6, 5, 4, PrecisionProfile::LOW_PRECISION_F32);
+        let plan = FftPlan3D::with_precision(
+            Shape3D::new(6, 5, 4).expect("shape"),
+            PrecisionProfile::LOW_PRECISION_F32,
+        );
         let field = Array3::from_shape_fn((6, 5, 4), |(i, j, k)| {
             ((i as f32) * 0.31 + (j as f32) * 0.27 - (k as f32) * 0.19).sin()
         });
@@ -2166,9 +2183,10 @@ mod tests {
             ((i as f32) * 0.31 + (j as f32) * 0.27 - (k as f32) * 0.19).sin()
         });
         let field = field_f32.mapv(f16::from_f32);
-        let low_plan = FftPlan3D::with_precision(6, 5, 4, PrecisionProfile::LOW_PRECISION_F32);
+        let shape = Shape3D::new(6, 5, 4).expect("shape");
+        let low_plan = FftPlan3D::with_precision(shape, PrecisionProfile::LOW_PRECISION_F32);
         let mixed_plan =
-            FftPlan3D::with_precision(6, 5, 4, PrecisionProfile::MIXED_PRECISION_F16_F32);
+            FftPlan3D::with_precision(shape, PrecisionProfile::MIXED_PRECISION_F16_F32);
         let low_recovered: Array3<f32> =
             low_plan.inverse_typed(&low_plan.forward_typed(&field_f32));
         let mixed_recovered: Array3<f16> =
@@ -2196,7 +2214,7 @@ mod tests {
             n in 2usize..48,
             seed in 0u64..500,
         ) {
-            let plan = crate::application::plan::FftPlan1D::new(n);
+            let plan = crate::application::plan::FftPlan1D::new(Shape1D::new(n).expect("shape"));
             let signal = Array1::from_shape_fn(n, |i| {
                 let x = i as f64 + seed as f64 * 0.01;
                 (x * 0.31).sin() + 0.5 * (x * 0.17).cos()
@@ -2217,7 +2235,7 @@ mod tests {
             nz in 2usize..6,
             seed in 0u64..200,
         ) {
-            let plan = FftPlan3D::new(nx, ny, nz);
+            let plan = FftPlan3D::new(Shape3D::new(nx, ny, nz).expect("shape"));
             let field = Array3::from_shape_fn((nx, ny, nz), |(i, j, k)| {
                 let x = i as f64 + 0.3 * j as f64 + 0.7 * k as f64 + seed as f64 * 0.01;
                 (x * 0.21).sin() - 0.4 * (x * 0.13).cos()

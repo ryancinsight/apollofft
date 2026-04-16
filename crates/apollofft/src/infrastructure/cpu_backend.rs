@@ -41,24 +41,21 @@ impl FftBackend for CpuBackend {
 
     fn plan_1d(&self, shape: Shape1D) -> ApolloResult<Self::Plan1D> {
         Ok(FftPlan1D::with_precision(
-            shape.n,
+            shape,
             PrecisionProfile::HIGH_ACCURACY_F64,
         ))
     }
 
     fn plan_2d(&self, shape: Shape2D) -> ApolloResult<Self::Plan2D> {
         Ok(FftPlan2D::with_precision(
-            shape.nx,
-            shape.ny,
+            shape,
             PrecisionProfile::HIGH_ACCURACY_F64,
         ))
     }
 
     fn plan_3d(&self, shape: Shape3D) -> ApolloResult<Self::Plan3D> {
         Ok(FftPlan3D::with_precision(
-            shape.nx,
-            shape.ny,
-            shape.nz,
+            shape,
             PrecisionProfile::HIGH_ACCURACY_F64,
         ))
     }

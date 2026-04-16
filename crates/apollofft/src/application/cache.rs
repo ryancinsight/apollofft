@@ -1,7 +1,7 @@
 //! Shared cache implementations for reusable FFT plans.
 
 use crate::application::plan::{FftPlan1D, FftPlan2D, FftPlan3D};
-use crate::types::PrecisionProfile;
+use crate::types::{PrecisionProfile, Shape1D, Shape2D, Shape3D};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -68,16 +68,17 @@ impl std::fmt::Debug for Fft3dCache {
 
 impl Fft1dCache {
     /// Return the cached plan or create it on first use.
-    pub fn get_or_create(&self, n: usize) -> Arc<FftPlan1D> {
-        self.get_or_create_with_precision(n, PrecisionProfile::HIGH_ACCURACY_F64)
+    pub fn get_or_create(&self, shape: Shape1D) -> Arc<FftPlan1D> {
+        self.get_or_create_with_precision(shape, PrecisionProfile::HIGH_ACCURACY_F64)
     }
 
     /// Return the cached plan or create it on first use for an explicit precision profile.
     pub fn get_or_create_with_precision(
         &self,
-        n: usize,
+        shape: Shape1D,
         precision: PrecisionProfile,
     ) -> Arc<FftPlan1D> {
+        let n = shape.n;
         let key = Fft1dCacheKey(n, precision);
         if let Some(plan) = self.cache.read().get(&key) {
             return Arc::clone(plan);
@@ -86,7 +87,7 @@ impl Fft1dCache {
         if let Some(plan) = guard.get(&key) {
             return Arc::clone(plan);
         }
-        let plan = Arc::new(FftPlan1D::with_precision(n, precision));
+        let plan = Arc::new(FftPlan1D::with_precision(shape, precision));
         guard.insert(key, Arc::clone(&plan));
         plan
     }
@@ -94,17 +95,18 @@ impl Fft1dCache {
 
 impl Fft2dCache {
     /// Return the cached plan or create it on first use.
-    pub fn get_or_create(&self, nx: usize, ny: usize) -> Arc<FftPlan2D> {
-        self.get_or_create_with_precision(nx, ny, PrecisionProfile::HIGH_ACCURACY_F64)
+    pub fn get_or_create(&self, shape: Shape2D) -> Arc<FftPlan2D> {
+        self.get_or_create_with_precision(shape, PrecisionProfile::HIGH_ACCURACY_F64)
     }
 
     /// Return the cached plan or create it on first use for an explicit precision profile.
     pub fn get_or_create_with_precision(
         &self,
-        nx: usize,
-        ny: usize,
+        shape: Shape2D,
         precision: PrecisionProfile,
     ) -> Arc<FftPlan2D> {
+        let nx = shape.nx;
+        let ny = shape.ny;
         let key = Fft2dCacheKey(nx, ny, precision);
         if let Some(plan) = self.cache.read().get(&key) {
             return Arc::clone(plan);
@@ -113,7 +115,7 @@ impl Fft2dCache {
         if let Some(plan) = guard.get(&key) {
             return Arc::clone(plan);
         }
-        let plan = Arc::new(FftPlan2D::with_precision(nx, ny, precision));
+        let plan = Arc::new(FftPlan2D::with_precision(shape, precision));
         guard.insert(key, Arc::clone(&plan));
         plan
     }
@@ -121,18 +123,19 @@ impl Fft2dCache {
 
 impl Fft3dCache {
     /// Return the cached plan or create it on first use.
-    pub fn get_or_create(&self, nx: usize, ny: usize, nz: usize) -> Arc<FftPlan3D> {
-        self.get_or_create_with_precision(nx, ny, nz, PrecisionProfile::HIGH_ACCURACY_F64)
+    pub fn get_or_create(&self, shape: Shape3D) -> Arc<FftPlan3D> {
+        self.get_or_create_with_precision(shape, PrecisionProfile::HIGH_ACCURACY_F64)
     }
 
     /// Return the cached plan or create it on first use for an explicit precision profile.
     pub fn get_or_create_with_precision(
         &self,
-        nx: usize,
-        ny: usize,
-        nz: usize,
+        shape: Shape3D,
         precision: PrecisionProfile,
     ) -> Arc<FftPlan3D> {
+        let nx = shape.nx;
+        let ny = shape.ny;
+        let nz = shape.nz;
         let key = Fft3dCacheKey {
             nx,
             ny,
@@ -146,33 +149,38 @@ impl Fft3dCache {
         if let Some(plan) = guard.get(&key) {
             return Arc::clone(plan);
         }
-        let plan = Arc::new(FftPlan3D::with_precision(nx, ny, nz, precision));
+        let plan = Arc::new(FftPlan3D::with_precision(shape, precision));
         guard.insert(key, Arc::clone(&plan));
         plan
     }
 }
 
 /// Process-wide 1D plan cache.
-pub static FFT_CACHE_1D: std::sync::LazyLock<Fft1dCache> = std::sync::LazyLock::new(|| Fft1dCache {
-    cache: RwLock::new(HashMap::new()),
-});
+pub static FFT_CACHE_1D: std::sync::LazyLock<Fft1dCache> =
+    std::sync::LazyLock::new(|| Fft1dCache {
+        cache: RwLock::new(HashMap::new()),
+    });
 
 /// Process-wide 2D plan cache.
-pub static FFT_CACHE_2D: std::sync::LazyLock<Fft2dCache> = std::sync::LazyLock::new(|| Fft2dCache {
-    cache: RwLock::new(HashMap::new()),
-});
+pub static FFT_CACHE_2D: std::sync::LazyLock<Fft2dCache> =
+    std::sync::LazyLock::new(|| Fft2dCache {
+        cache: RwLock::new(HashMap::new()),
+    });
 
 /// Process-wide 3D plan cache.
-pub static FFT_CACHE_3D: std::sync::LazyLock<Fft3dCache> = std::sync::LazyLock::new(|| Fft3dCache {
-    cache: RwLock::new(HashMap::new()),
-});
+pub static FFT_CACHE_3D: std::sync::LazyLock<Fft3dCache> =
+    std::sync::LazyLock::new(|| Fft3dCache {
+        cache: RwLock::new(HashMap::new()),
+    });
 
 /// Legacy compatibility alias for the 3D cache.
 pub use FFT_CACHE_3D as FFT_CACHE;
 
 /// Return a cached 3D plan for a given grid.
 pub fn get_fft_for_grid(nx: usize, ny: usize, nz: usize) -> Arc<FftPlan3D> {
-    FFT_CACHE_3D.get_or_create(nx, ny, nz)
+    FFT_CACHE_3D.get_or_create(
+        Shape3D::new(nx, ny, nz).expect("get_fft_for_grid requires non-zero dimensions"),
+    )
 }
 
 #[cfg(test)]
@@ -181,21 +189,19 @@ mod tests {
 
     #[test]
     fn reuses_cached_3d_plan() {
-        let lhs = FFT_CACHE_3D.get_or_create(8, 8, 8);
-        let rhs = FFT_CACHE_3D.get_or_create(8, 8, 8);
+        let shape = Shape3D::new(8, 8, 8).expect("shape");
+        let lhs = FFT_CACHE_3D.get_or_create(shape);
+        let rhs = FFT_CACHE_3D.get_or_create(shape);
         assert!(Arc::ptr_eq(&lhs, &rhs));
     }
 
     #[test]
     fn separates_cache_entries_by_precision() {
+        let shape = Shape3D::new(8, 8, 8).expect("shape");
         let low =
-            FFT_CACHE_3D.get_or_create_with_precision(8, 8, 8, PrecisionProfile::LOW_PRECISION_F32);
-        let mixed = FFT_CACHE_3D.get_or_create_with_precision(
-            8,
-            8,
-            8,
-            PrecisionProfile::MIXED_PRECISION_F16_F32,
-        );
+            FFT_CACHE_3D.get_or_create_with_precision(shape, PrecisionProfile::LOW_PRECISION_F32);
+        let mixed = FFT_CACHE_3D
+            .get_or_create_with_precision(shape, PrecisionProfile::MIXED_PRECISION_F16_F32);
         assert!(!Arc::ptr_eq(&low, &mixed));
     }
 }
