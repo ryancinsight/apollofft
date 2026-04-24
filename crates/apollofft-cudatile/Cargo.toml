@@ -8,7 +8,7 @@ repository = "https://github.com/ryancinsight/kwavers"
 description = "cudatile backend contract surface for Apollo FFT"
 
 [dependencies]
-apollofft = { path = "../apollofft" }
+apollo = { path = "../apollo" }
 serde = { version = "1.0", features = ["derive"] }
 
 [features]

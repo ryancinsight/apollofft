@@ -8,7 +8,7 @@ repository = "https://github.com/ryancinsight/kwavers"
 description = "Validation and benchmark surface for Apollo FFT"
 
 [dependencies]
-apollofft = { path = "../apollofft" }
+apollo = { path = "../apollo" }
 apollofft-wgpu = { path = "../apollofft-wgpu" }
 ndarray = { version = "0.16", features = ["rayon"] }
 num-complex = "0.4"

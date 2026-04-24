@@ -1,7 +1,7 @@
 //! 2D FFT plan.
 
 use super::{
-    RealFftData, AXIS_BUF, AXIS_BUF_32, AXIS_SCRATCH, AXIS_SCRATCH_32, VOLUME_COMPLEX_BUF,
+    RealFftData, AXIS_BUF_2D, AXIS_BUF_2D_32, AXIS_SCRATCH, AXIS_SCRATCH_32, VOLUME_COMPLEX_BUF,
 };
 use crate::types::{PrecisionProfile, Shape2D};
 use half::f16;
@@ -229,47 +229,64 @@ impl FftPlan2D {
     }
 
     /// Forward transform of a complex array in-place.
+    ///
+    /// The 2-D DFT is separable. For input shape `(nx, ny)`:
+    /// - Pass 1: FFT each row (length `ny`) using `fft_y`.
+    /// - Pass 2: FFT each column (length `nx`) using `fft_x`.
     pub fn forward_complex_inplace(&self, data: &mut Array2<Complex64>) {
         let fft_x = Arc::clone(&self.fft_x);
         let fft_y = Arc::clone(&self.fft_y);
+        // Pass 1: row transform — each row has length ny, use fft_y.
         data.axis_iter_mut(Axis(0))
             .into_par_iter()
             .for_each(|mut row| {
                 let buffer = row.as_slice_mut().expect("row must be contiguous");
                 AXIS_SCRATCH.with(|cell| {
                     let mut scratch = cell.borrow_mut();
-                    let len = self.fft_x_scratch_len;
+                    let len = self.fft_y_scratch_len;
                     if scratch.len() < len {
                         scratch.resize(len, Complex64::default());
                     }
-                    fft_x.process_with_scratch(buffer, &mut scratch[..len]);
+                    fft_y.process_with_scratch(buffer, &mut scratch[..len]);
                 });
             });
+        // Pass 2: column transform — gather all columns into a contiguous (ny, nx) buffer,
+        // apply one batched fft_x call (rustfft processes total/nx FFTs per call),
+        // then scatter back. This matches the 3D batched plan pattern and avoids
+        // per-column rayon dispatch overhead.
+        let nx = self.nx;
         let ny = self.ny;
-        data.axis_iter_mut(Axis(1))
-            .into_par_iter()
-            .for_each(|mut column| {
-                AXIS_BUF.with(|cell| {
-                    let mut buffer = cell.borrow_mut();
-                    if buffer.len() < ny {
-                        buffer.resize(ny, Complex64::default());
-                    }
-                    for (index, &value) in column.iter().enumerate() {
-                        buffer[index] = value;
-                    }
-                    AXIS_SCRATCH.with(|scratch_cell| {
-                        let mut scratch = scratch_cell.borrow_mut();
-                        let len = self.fft_y_scratch_len;
-                        if scratch.len() < len {
-                            scratch.resize(len, Complex64::default());
-                        }
-                        fft_y.process_with_scratch(&mut buffer[..ny], &mut scratch[..len]);
-                    });
-                    for (index, value) in column.iter_mut().enumerate() {
-                        *value = buffer[index];
-                    }
-                });
+        let total = nx * ny;
+        let data_slice = data
+            .as_slice_memory_order_mut()
+            .expect("forward data must be contiguous");
+        AXIS_BUF_2D.with(|buf_cell| {
+            let mut lanes = buf_cell.borrow_mut();
+            if lanes.len() < total {
+                lanes.resize(total, Complex64::default());
+            }
+            // Gather: column j → lanes[j*nx..(j+1)*nx]
+            for j in 0..ny {
+                for i in 0..nx {
+                    lanes[j * nx + i] = data_slice[i * ny + j];
+                }
+            }
+            // Single batched FFT over all ny columns.
+            AXIS_SCRATCH.with(|scratch_cell| {
+                let mut scratch = scratch_cell.borrow_mut();
+                let len = self.fft_x_scratch_len;
+                if scratch.len() < len {
+                    scratch.resize(len, Complex64::default());
+                }
+                fft_x.process_with_scratch(&mut lanes[..total], &mut scratch[..len]);
             });
+            // Scatter: lanes[j*nx..(j+1)*nx] → column j
+            for j in 0..ny {
+                for i in 0..nx {
+                    data_slice[i * ny + j] = lanes[j * nx + i];
+                }
+            }
+        });
     }
 
     /// Inverse transform of a complex array in-place without normalization.
@@ -283,42 +300,50 @@ impl FftPlan2D {
     {
         let ifft_x = Arc::clone(&self.ifft_x);
         let ifft_y = Arc::clone(&self.ifft_y);
+        // Pass 1: column inverse transform — batched gather + ifft_x + scatter.
+        // Mirrors the 3D batched plan: one ifft_x call processes ny FFTs of length nx.
+        let nx = self.nx;
         let ny = self.ny;
-        data.axis_iter_mut(Axis(1))
-            .into_par_iter()
-            .for_each(|mut column| {
-                AXIS_BUF.with(|cell| {
-                    let mut buffer = cell.borrow_mut();
-                    if buffer.len() < ny {
-                        buffer.resize(ny, Complex64::default());
-                    }
-                    for (index, &value) in column.iter().enumerate() {
-                        buffer[index] = value;
-                    }
-                    AXIS_SCRATCH.with(|scratch_cell| {
-                        let mut scratch = scratch_cell.borrow_mut();
-                        let len = self.ifft_y_scratch_len;
-                        if scratch.len() < len {
-                            scratch.resize(len, Complex64::default());
-                        }
-                        ifft_y.process_with_scratch(&mut buffer[..ny], &mut scratch[..len]);
-                    });
-                    for (index, value) in column.iter_mut().enumerate() {
-                        *value = buffer[index];
-                    }
-                });
+        let total = nx * ny;
+        let data_slice = data
+            .as_slice_memory_order_mut()
+            .expect("inverse data must be contiguous");
+        AXIS_BUF_2D.with(|buf_cell| {
+            let mut lanes = buf_cell.borrow_mut();
+            if lanes.len() < total {
+                lanes.resize(total, Complex64::default());
+            }
+            for j in 0..ny {
+                for i in 0..nx {
+                    lanes[j * nx + i] = data_slice[i * ny + j];
+                }
+            }
+            AXIS_SCRATCH.with(|scratch_cell| {
+                let mut scratch = scratch_cell.borrow_mut();
+                let len = self.ifft_x_scratch_len;
+                if scratch.len() < len {
+                    scratch.resize(len, Complex64::default());
+                }
+                ifft_x.process_with_scratch(&mut lanes[..total], &mut scratch[..len]);
             });
+            for j in 0..ny {
+                for i in 0..nx {
+                    data_slice[i * ny + j] = lanes[j * nx + i];
+                }
+            }
+        });
+        // Pass 2: row inverse transform — each row has length ny, use ifft_y.
         data.axis_iter_mut(Axis(0))
             .into_par_iter()
             .for_each(|mut row| {
                 let buffer = row.as_slice_mut().expect("row must be contiguous");
                 AXIS_SCRATCH.with(|cell| {
                     let mut scratch = cell.borrow_mut();
-                    let len = self.ifft_x_scratch_len;
+                    let len = self.ifft_y_scratch_len;
                     if scratch.len() < len {
                         scratch.resize(len, Complex64::default());
                     }
-                    ifft_x.process_with_scratch(buffer, &mut scratch[..len]);
+                    ifft_y.process_with_scratch(buffer, &mut scratch[..len]);
                 });
             });
     }
@@ -386,90 +411,152 @@ impl FftPlan2D {
     fn forward_complex_inplace_f32(&self, data: &mut Array2<Complex32>) {
         let fft_x = Arc::clone(&self.fft_x_f32);
         let fft_y = Arc::clone(&self.fft_y_f32);
+        // Pass 1: row transform — each row has length ny, use fft_y_f32.
         data.axis_iter_mut(Axis(0))
             .into_par_iter()
             .for_each(|mut row| {
                 AXIS_SCRATCH_32.with(|cell| {
                     let mut scratch = cell.borrow_mut();
-                    let len = self.fft_x_f32_scratch_len;
+                    let len = self.fft_y_f32_scratch_len;
                     if scratch.len() < len {
                         scratch.resize(len, Complex32::default());
                     }
-                    fft_x.process_with_scratch(
+                    fft_y.process_with_scratch(
                         row.as_slice_mut().expect("row must be contiguous"),
                         &mut scratch[..len],
                     );
                 });
             });
+        // Pass 2: column transform — batched gather + fft_x_f32 + scatter.
+        let nx = self.nx;
         let ny = self.ny;
-        data.axis_iter_mut(Axis(1))
-            .into_par_iter()
-            .for_each(|mut column| {
-                AXIS_BUF_32.with(|cell| {
-                    let mut buffer = cell.borrow_mut();
-                    if buffer.len() < ny {
-                        buffer.resize(ny, Complex32::default());
-                    }
-                    for (index, &value) in column.iter().enumerate() {
-                        buffer[index] = value;
-                    }
-                    AXIS_SCRATCH_32.with(|scratch_cell| {
-                        let mut scratch = scratch_cell.borrow_mut();
-                        let len = self.fft_y_f32_scratch_len;
-                        if scratch.len() < len {
-                            scratch.resize(len, Complex32::default());
-                        }
-                        fft_y.process_with_scratch(&mut buffer[..ny], &mut scratch[..len]);
-                    });
-                    for (index, value) in column.iter_mut().enumerate() {
-                        *value = buffer[index];
-                    }
-                });
+        let total = nx * ny;
+        let data_slice = data
+            .as_slice_memory_order_mut()
+            .expect("forward_f32 data must be contiguous");
+        AXIS_BUF_2D_32.with(|buf_cell| {
+            let mut lanes = buf_cell.borrow_mut();
+            if lanes.len() < total {
+                lanes.resize(total, Complex32::default());
+            }
+            for j in 0..ny {
+                for i in 0..nx {
+                    lanes[j * nx + i] = data_slice[i * ny + j];
+                }
+            }
+            AXIS_SCRATCH_32.with(|scratch_cell| {
+                let mut scratch = scratch_cell.borrow_mut();
+                let len = self.fft_x_f32_scratch_len;
+                if scratch.len() < len {
+                    scratch.resize(len, Complex32::default());
+                }
+                fft_x.process_with_scratch(&mut lanes[..total], &mut scratch[..len]);
             });
+            for j in 0..ny {
+                for i in 0..nx {
+                    data_slice[i * ny + j] = lanes[j * nx + i];
+                }
+            }
+        });
     }
 
     fn inverse_complex_inplace_f32(&self, data: &mut Array2<Complex32>) {
         let ifft_x = Arc::clone(&self.ifft_x_f32);
         let ifft_y = Arc::clone(&self.ifft_y_f32);
+        // Pass 1: column inverse transform — batched gather + ifft_x_f32 + scatter.
+        let nx = self.nx;
         let ny = self.ny;
-        data.axis_iter_mut(Axis(1))
-            .into_par_iter()
-            .for_each(|mut column| {
-                AXIS_BUF_32.with(|cell| {
-                    let mut buffer = cell.borrow_mut();
-                    if buffer.len() < ny {
-                        buffer.resize(ny, Complex32::default());
-                    }
-                    for (index, &value) in column.iter().enumerate() {
-                        buffer[index] = value;
-                    }
-                    AXIS_SCRATCH_32.with(|scratch_cell| {
-                        let mut scratch = scratch_cell.borrow_mut();
-                        let len = self.ifft_y_f32_scratch_len;
-                        if scratch.len() < len {
-                            scratch.resize(len, Complex32::default());
-                        }
-                        ifft_y.process_with_scratch(&mut buffer[..ny], &mut scratch[..len]);
-                    });
-                    for (index, value) in column.iter_mut().enumerate() {
-                        *value = buffer[index];
-                    }
-                });
+        let total = nx * ny;
+        let data_slice = data
+            .as_slice_memory_order_mut()
+            .expect("inverse_f32 data must be contiguous");
+        AXIS_BUF_2D_32.with(|buf_cell| {
+            let mut lanes = buf_cell.borrow_mut();
+            if lanes.len() < total {
+                lanes.resize(total, Complex32::default());
+            }
+            for j in 0..ny {
+                for i in 0..nx {
+                    lanes[j * nx + i] = data_slice[i * ny + j];
+                }
+            }
+            AXIS_SCRATCH_32.with(|scratch_cell| {
+                let mut scratch = scratch_cell.borrow_mut();
+                let len = self.ifft_x_f32_scratch_len;
+                if scratch.len() < len {
+                    scratch.resize(len, Complex32::default());
+                }
+                ifft_x.process_with_scratch(&mut lanes[..total], &mut scratch[..len]);
             });
+            for j in 0..ny {
+                for i in 0..nx {
+                    data_slice[i * ny + j] = lanes[j * nx + i];
+                }
+            }
+        });
+        // Pass 2: row inverse transform — each row has length ny, use ifft_y_f32.
         data.axis_iter_mut(Axis(0))
             .into_par_iter()
             .for_each(|mut row| {
                 AXIS_SCRATCH_32.with(|cell| {
                     let mut scratch = cell.borrow_mut();
-                    let len = self.ifft_x_f32_scratch_len;
+                    let len = self.ifft_y_f32_scratch_len;
                     if scratch.len() < len {
                         scratch.resize(len, Complex32::default());
                     }
-                    ifft_x.process_with_scratch(
+                    ifft_y.process_with_scratch(
                         row.as_slice_mut().expect("row must be contiguous"),
                         &mut scratch[..len],
                     );
                 });
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_abs_diff_eq;
+
+    /// Round-trip: forward then inverse (normalized) must recover the input
+    /// for all four asymmetric shapes to exercise both the row and column batched passes.
+    #[test]
+    fn roundtrip_recovers_input_for_asymmetric_shapes() {
+        for &(nx, ny) in &[(7, 13), (13, 7), (120, 360), (360, 120)] {
+            let plan = FftPlan2D::new(nx, ny);
+            let norm = 1.0 / (nx * ny) as f64;
+            let input = Array2::from_shape_fn((nx, ny), |(i, j)| {
+                // Non-trivial signal: sum of two sinusoidal modes.
+                let x = (i as f64) / (nx as f64);
+                let y = (j as f64) / (ny as f64);
+                (2.0 * std::f64::consts::PI * x).sin()
+                    + 0.5 * (4.0 * std::f64::consts::PI * y).cos()
+            });
+            let mut spectrum = Array2::<Complex64>::zeros((nx, ny));
+            plan.forward_into(&input, &mut spectrum);
+            plan.inverse_complex_inplace(&mut spectrum);
+            // Unnormalized IFFT: divide by N.
+            let recovered = spectrum.mapv(|c| c.re * norm);
+            for ((i, j), &orig) in input.indexed_iter() {
+                let got = recovered[(i, j)];
+                assert_abs_diff_eq!(got, orig, epsilon = 1e-10);
+            }
+        }
+    }
+
+    /// Parseval's theorem: sum |x[i,j]|² = (1/N²) * sum |X[k,l]|²
+    /// where N² = nx*ny.
+    #[test]
+    fn parseval_holds_for_2d_fft() {
+        let (nx, ny) = (16, 24);
+        let plan = FftPlan2D::new(nx, ny);
+        let input = Array2::from_shape_fn((nx, ny), |(i, j)| {
+            ((i * 3 + j * 7) as f64).sin() + 0.3 * ((i + j) as f64).cos()
+        });
+        let spectrum = plan.forward(&input);
+        let energy_spatial: f64 = input.iter().map(|&v| v * v).sum();
+        let energy_spectral: f64 =
+            spectrum.iter().map(|c| c.norm_sqr()).sum::<f64>() / (nx * ny) as f64;
+        assert_abs_diff_eq!(energy_spatial, energy_spectral, epsilon = 1e-8);
     }
 }

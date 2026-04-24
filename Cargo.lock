@@ -18,20 +18,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
-name = "apollo-validation"
-version = "0.1.0"
-dependencies = [
- "apollofft",
- "apollofft-wgpu",
- "ndarray",
- "num-complex",
- "rustfft",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "apollofft"
+name = "apollo"
 version = "0.1.0"
 dependencies = [
  "approx",
@@ -49,10 +36,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "apollo-validation"
+version = "0.1.0"
+dependencies = [
+ "apollo",
+ "apollofft-wgpu",
+ "ndarray",
+ "num-complex",
+ "rustfft",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "apollofft-cudatile"
 version = "0.1.0"
 dependencies = [
- "apollofft",
+ "apollo",
  "serde",
 ]
 
@@ -60,7 +60,7 @@ dependencies = [
 name = "apollofft-wgpu"
 version = "0.1.0"
 dependencies = [
- "apollofft",
+ "apollo",
  "bytemuck",
  "ndarray",
  "num-complex",
@@ -929,7 +929,7 @@ dependencies = [
 name = "pyapollofft"
 version = "0.1.0"
 dependencies = [
- "apollofft",
+ "apollo",
  "apollofft-wgpu",
  "ndarray",
  "num-complex",

@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "crates/apollofft",
+    "crates/apollo",
     "crates/apollofft-wgpu",
     "crates/apollofft-cudatile",
     "crates/apollo-validation",

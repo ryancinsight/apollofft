@@ -5,7 +5,7 @@ pub mod application;
 pub mod domain;
 pub mod infrastructure;
 
-use apollofft::{
+use apollo::{
     f16, nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type1_3d_fast, nufft_type2_1d,
     nufft_type2_1d_fast, Complex32, Complex64, CpuBackend, FftBackend, FftPlan1D, FftPlan2D,
     FftPlan3D, PrecisionMode, PrecisionProfile, StoragePrecision, UniformDomain1D, UniformGrid3D,
@@ -408,7 +408,7 @@ fn fft1<'py>(
         require_contiguous_1d(&input64, "fft1 input")?;
         require_profile_matches_f64(profile, "fft1")?;
         Ok(
-            PyArray1::from_owned_array(py, apollofft::fft_1d_array(&input64.as_array().to_owned()))
+            PyArray1::from_owned_array(py, apollo::fft_1d_array(&input64.as_array().to_owned()))
                 .into_any()
                 .unbind(),
         )
@@ -419,7 +419,7 @@ fn fft1<'py>(
                 require_contiguous_1d(&input32, "fft1 input")?;
                 Ok(PyArray1::from_owned_array(
                     py,
-                    apollofft::fft_1d_array_typed(&input32.as_array().mapv(f16::from_f32), profile),
+                    apollo::fft_1d_array_typed(&input32.as_array().mapv(f16::from_f32), profile),
                 )
                 .into_any()
                 .unbind())
@@ -430,7 +430,7 @@ fn fft1<'py>(
                 require_profile_matches_f32(profile, "fft1")?;
                 Ok(PyArray1::from_owned_array(
                     py,
-                    apollofft::fft_1d_array_typed(&input32.as_array().to_owned(), profile),
+                    apollo::fft_1d_array_typed(&input32.as_array().to_owned(), profile),
                 )
                 .into_any()
                 .unbind())
@@ -454,7 +454,7 @@ fn ifft1<'py>(
         Ok(
             PyArray1::from_owned_array(
                 py,
-                apollofft::ifft_1d_array(&input64.as_array().to_owned()),
+                apollo::ifft_1d_array(&input64.as_array().to_owned()),
             )
             .into_any()
             .unbind(),
@@ -465,7 +465,7 @@ fn ifft1<'py>(
         match profile.storage {
             StoragePrecision::F16 => Ok(PyArray1::from_owned_array(
                 py,
-                apollofft::ifft_1d_array_typed::<f16>(&input32.as_array().to_owned(), profile)
+                apollo::ifft_1d_array_typed::<f16>(&input32.as_array().to_owned(), profile)
                     .mapv(|value: f16| value.to_f32()),
             )
             .into_any()
@@ -474,7 +474,7 @@ fn ifft1<'py>(
                 require_profile_matches_f32(profile, "ifft1")?;
                 Ok(PyArray1::from_owned_array(
                     py,
-                    apollofft::ifft_1d_array_typed::<f32>(&input32.as_array().to_owned(), profile),
+                    apollo::ifft_1d_array_typed::<f32>(&input32.as_array().to_owned(), profile),
                 )
                 .into_any()
                 .unbind())
@@ -496,7 +496,7 @@ fn fft2<'py>(
         require_contiguous_2d(&input64, "fft2 input")?;
         require_profile_matches_f64(profile, "fft2")?;
         Ok(
-            PyArray2::from_owned_array(py, apollofft::fft_2d_array(&input64.as_array().to_owned()))
+            PyArray2::from_owned_array(py, apollo::fft_2d_array(&input64.as_array().to_owned()))
                 .into_any()
                 .unbind(),
         )
@@ -507,7 +507,7 @@ fn fft2<'py>(
                 require_contiguous_2d(&input32, "fft2 input")?;
                 Ok(PyArray2::from_owned_array(
                     py,
-                    apollofft::fft_2d_array_typed(&input32.as_array().mapv(f16::from_f32), profile),
+                    apollo::fft_2d_array_typed(&input32.as_array().mapv(f16::from_f32), profile),
                 )
                 .into_any()
                 .unbind())
@@ -518,7 +518,7 @@ fn fft2<'py>(
                 require_profile_matches_f32(profile, "fft2")?;
                 Ok(PyArray2::from_owned_array(
                     py,
-                    apollofft::fft_2d_array_typed(&input32.as_array().to_owned(), profile),
+                    apollo::fft_2d_array_typed(&input32.as_array().to_owned(), profile),
                 )
                 .into_any()
                 .unbind())
@@ -542,7 +542,7 @@ fn ifft2<'py>(
         Ok(
             PyArray2::from_owned_array(
                 py,
-                apollofft::ifft_2d_array(&input64.as_array().to_owned()),
+                apollo::ifft_2d_array(&input64.as_array().to_owned()),
             )
             .into_any()
             .unbind(),
@@ -553,7 +553,7 @@ fn ifft2<'py>(
         match profile.storage {
             StoragePrecision::F16 => Ok(PyArray2::from_owned_array(
                 py,
-                apollofft::ifft_2d_array_typed::<f16>(&input32.as_array().to_owned(), profile)
+                apollo::ifft_2d_array_typed::<f16>(&input32.as_array().to_owned(), profile)
                     .mapv(|value: f16| value.to_f32()),
             )
             .into_any()
@@ -562,7 +562,7 @@ fn ifft2<'py>(
                 require_profile_matches_f32(profile, "ifft2")?;
                 Ok(PyArray2::from_owned_array(
                     py,
-                    apollofft::ifft_2d_array_typed::<f32>(&input32.as_array().to_owned(), profile),
+                    apollo::ifft_2d_array_typed::<f32>(&input32.as_array().to_owned(), profile),
                 )
                 .into_any()
                 .unbind())
@@ -584,7 +584,7 @@ fn fft3<'py>(
         require_contiguous_3d(&input64, "fft3 input")?;
         require_profile_matches_f64(profile, "fft3")?;
         Ok(
-            PyArray3::from_owned_array(py, apollofft::fft_3d_array(&input64.as_array().to_owned()))
+            PyArray3::from_owned_array(py, apollo::fft_3d_array(&input64.as_array().to_owned()))
                 .into_any()
                 .unbind(),
         )
@@ -595,7 +595,7 @@ fn fft3<'py>(
                 require_contiguous_3d(&input32, "fft3 input")?;
                 Ok(PyArray3::from_owned_array(
                     py,
-                    apollofft::fft_3d_array_typed(&input32.as_array().mapv(f16::from_f32), profile),
+                    apollo::fft_3d_array_typed(&input32.as_array().mapv(f16::from_f32), profile),
                 )
                 .into_any()
                 .unbind())
@@ -606,7 +606,7 @@ fn fft3<'py>(
                 require_profile_matches_f32(profile, "fft3")?;
                 Ok(PyArray3::from_owned_array(
                     py,
-                    apollofft::fft_3d_array_typed(&input32.as_array().to_owned(), profile),
+                    apollo::fft_3d_array_typed(&input32.as_array().to_owned(), profile),
                 )
                 .into_any()
                 .unbind())
@@ -630,7 +630,7 @@ fn ifft3<'py>(
         Ok(
             PyArray3::from_owned_array(
                 py,
-                apollofft::ifft_3d_array(&input64.as_array().to_owned()),
+                apollo::ifft_3d_array(&input64.as_array().to_owned()),
             )
             .into_any()
             .unbind(),
@@ -641,7 +641,7 @@ fn ifft3<'py>(
         match profile.storage {
             StoragePrecision::F16 => Ok(PyArray3::from_owned_array(
                 py,
-                apollofft::ifft_3d_array_typed::<f16>(&input32.as_array().to_owned(), profile)
+                apollo::ifft_3d_array_typed::<f16>(&input32.as_array().to_owned(), profile)
                     .mapv(|value: f16| value.to_f32()),
             )
             .into_any()
@@ -650,7 +650,7 @@ fn ifft3<'py>(
                 require_profile_matches_f32(profile, "ifft3")?;
                 Ok(PyArray3::from_owned_array(
                     py,
-                    apollofft::ifft_3d_array_typed::<f32>(&input32.as_array().to_owned(), profile),
+                    apollo::ifft_3d_array_typed::<f32>(&input32.as_array().to_owned(), profile),
                 )
                 .into_any()
                 .unbind())

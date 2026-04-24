@@ -9,10 +9,10 @@ pub mod application;
 pub mod domain;
 pub mod infrastructure;
 
-use apollofft::backend::FftBackend;
-use apollofft::domain::backend::BackendCapabilities;
-use apollofft::error::{ApolloError, ApolloResult};
-use apollofft::types::{BackendKind, Normalization, PrecisionProfile, Shape1D, Shape2D, Shape3D};
+use apollo::backend::FftBackend;
+use apollo::domain::backend::BackendCapabilities;
+use apollo::error::{ApolloError, ApolloResult};
+use apollo::types::{BackendKind, Normalization, PrecisionProfile, Shape1D, Shape2D, Shape3D};
 pub use infrastructure::gpu_fft::{gpu_fft_available, GpuFft3d};
 
 /// WGPU backend descriptor.

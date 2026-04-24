@@ -6,7 +6,7 @@ use crate::domain::report::{
     PrecisionRunReport, ValidationReport,
 };
 use crate::infrastructure::{numpy, rustfft_reference};
-use apollofft::{
+use apollo::{
     f16, nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type1_3d_fast, nufft_type2_1d,
     nufft_type2_1d_fast, Complex32, Complex64, FftBackend, FftPlan1D, FftPlan3D, PrecisionMode,
     PrecisionProfile, Shape3D, UniformDomain1D, UniformGrid3D, DEFAULT_NUFFT_KERNEL_WIDTH,
