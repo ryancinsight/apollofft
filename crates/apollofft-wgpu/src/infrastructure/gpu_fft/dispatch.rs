@@ -57,26 +57,40 @@ impl GpuFft3d {
             return;
         }
 
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("apollofft-wgpu radix2 pass"),
-            timestamp_writes: None,
-        });
+        let bitrev_total = stages.batch_count * stages.fft_m;
+        let butterfly_total = stages.batch_count * (stages.fft_m / 2);
 
-        pass.set_pipeline(&self.bitrev_pipeline);
-        pass.set_bind_group(0, &self.data_bg, &[]);
-        pass.set_bind_group(1, &stages.bgs[0], &[]);
-        pass.dispatch_workgroups(stages.batch_count, stages.fft_m / 2, 1);
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollofft-wgpu radix2 bitrev pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.bitrev_pipeline);
+            pass.set_bind_group(0, &self.data_bg, &[]);
+            pass.set_bind_group(1, &stages.bgs[0], &[]);
+            pass.dispatch_workgroups(bitrev_total.div_ceil(256), 1, 1);
+        }
 
-        pass.set_pipeline(&self.forward_pipeline);
         for stage_idx in 0..stages.fft_m.trailing_zeros() as usize {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollofft-wgpu radix2 butterfly pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.forward_pipeline);
+            pass.set_bind_group(0, &self.data_bg, &[]);
             pass.set_bind_group(1, &stages.bgs[1 + stage_idx], &[]);
-            pass.dispatch_workgroups(stages.batch_count, stages.fft_m / 2, 1);
+            pass.dispatch_workgroups(butterfly_total.div_ceil(256), 1, 1);
         }
 
         if stages.bgs.len() > 1 + stages.fft_m.trailing_zeros() as usize {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollofft-wgpu radix2 scale pass"),
+                timestamp_writes: None,
+            });
             pass.set_pipeline(&self.scale_pipeline);
+            pass.set_bind_group(0, &self.data_bg, &[]);
             pass.set_bind_group(1, stages.bgs.last().unwrap(), &[]);
-            pass.dispatch_workgroups(stages.batch_count, stages.fft_m, 1);
+            pass.dispatch_workgroups(bitrev_total.div_ceil(256), 1, 1);
         }
     }
 
