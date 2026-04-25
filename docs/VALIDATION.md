@@ -230,8 +230,9 @@ by unit and property tests against analytical identities and direct references.
   inverse sparse reconstruction against the owning CPU crate and reports
   support for the implemented `f32` complex execution surface.
 - `apollo-sht-wgpu` now validates forward and inverse complex SHT execution
-  against the owning CPU crate and reports support for direct GPU matrix sums
-  over owner-derived quadrature and basis buffers.
+  against the owning CPU crate and reports support for direct GPU matrix sums.
+  The WGPU path now receives owner-derived quadrature samples and generates the
+  associated-Legendre/spherical-harmonic basis buffer on GPU before reduction.
 - `apollo-stft-wgpu` now validates forward Hann-windowed STFT execution
   against the owning CPU crate and reports forward-only support for the
   implemented `f32` signal / complex-spectrum surface.

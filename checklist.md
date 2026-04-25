@@ -76,6 +76,7 @@
 - [x] Add forward and inverse Haar DWT WGPU kernels with roundtrip and Parseval energy validation.
 - [x] Add SFT WGPU direct dense DFT forward/inverse execution with sparse top-K CPU parity validation.
 - [x] Add SHT WGPU direct spherical harmonic execution without duplicating CPU-owner basis/quadrature logic.
+- [x] Move SHT WGPU associated Legendre recurrence, harmonic normalization, conjugation, and quadrature weighting into a GPU basis-generation pass.
 - [x] Add NUFFT WGPU fast 1D gridding execution after direct 1D/3D coverage.
 - [x] Add NUFFT WGPU fast 3D gridding execution after fast 1D parity coverage.
 - [x] Audit `realfft` references and document that no additional feature gate is required because `realfft` is not a workspace dependency.

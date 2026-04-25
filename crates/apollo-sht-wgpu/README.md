@@ -18,8 +18,11 @@ It does not move CPU algorithms or validation references out of the owning trans
 ## Execution Contract
 
 The current implementation executes forward and inverse complex SHT by direct
-matrix summation on WGPU. Basis and quadrature values are derived from
-`apollo-sht`, preserving that crate as the mathematical SSOT.
+matrix summation on WGPU. `apollo-sht` remains the mathematical SSOT for
+Gauss-Legendre quadrature nodes and weights. The WGPU backend receives those
+grid samples, evaluates associated Legendre recurrence and spherical harmonic
+basis values in a compute pass, then consumes the generated basis buffer in the
+matrix-reduction pass.
 
 ## Verification
 

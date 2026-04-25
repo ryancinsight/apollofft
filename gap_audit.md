@@ -111,19 +111,16 @@ All items below are implemented, tested, and verified in completed sprints.
 - **NUFFT WGPU**: `apollo-nufft-wgpu` executes exact direct Type-1 and Type-2 summations for 1D and 3D on WGPU; CPU exact-reference parity tested.
 - **NUFFT WGPU Fast 1D**: `apollo-nufft-wgpu` executes fast Kaiser-Bessel Type-1 and Type-2 1D paths with GPU spreading/interpolation, `apollo-fft-wgpu` oversampled FFT dispatch, and GPU deconvolution; CPU gridded-reference parity tested.
 - **NUFFT WGPU Fast 3D**: `apollo-nufft-wgpu` executes fast Kaiser-Bessel Type-1 and Type-2 3D paths with GPU separable spreading/interpolation, `apollo-fft-wgpu` oversampled 3D FFT dispatch, radix-2 support-safe oversampled dimensions, and GPU separable deconvolution; CPU gridded-reference parity tested.
-- **SHT WGPU**: `apollo-sht-wgpu` executes direct complex forward/inverse SHT on WGPU using `apollo-sht` quadrature and basis values as the SSOT; CPU parity tested.
+- **SHT WGPU**: `apollo-sht-wgpu` executes direct complex forward/inverse SHT on WGPU using `apollo-sht` quadrature samples and GPU-generated associated-Legendre/spherical-harmonic basis values; CPU parity tested.
+- **SHT WGPU Basis Generation**: moved associated Legendre recurrence, Condon-Shortley negative-order handling, spherical harmonic normalization, conjugation, and quadrature weighting into the WGPU basis-generation pass while preserving `apollo-sht` as the quadrature SSOT.
 
 ---
 
 ## Remaining Gaps
 
-The following 2 gaps are deferred to future increments. Each requires non-trivial derivation, algorithm work, or specialized GPU infrastructure before implementation.
+The following gap is deferred to a future increment. It requires reference-source selection and validation infrastructure work before implementation.
 
 
 ### 1. Published-Reference Audit
 
 Transform-specific analytical tests exist for all crates, but external published-reference fixtures are still pending for a separate validation increment. No external reference data set has been ingested and no cross-library comparison has been executed. Completion requires selecting reference data from published transform tables or a reference implementation and wiring those into the `apollo-validation` external-reference report path.
-
-### 2. SHT WGPU Basis Generation
-
-`apollo-sht-wgpu` now executes direct forward/inverse GPU reductions using host-side basis and quadrature buffers derived from `apollo-sht`. A future optimization may move associated Legendre recurrence and basis generation onto GPU after a separate proof and parity increment.

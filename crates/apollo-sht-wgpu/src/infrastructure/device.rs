@@ -2,9 +2,7 @@
 
 use std::sync::Arc;
 
-use apollo_sht::infrastructure::kernel::spherical_harmonic::{
-    gauss_legendre_nodes_weights, spherical_harmonic,
-};
+use apollo_sht::infrastructure::kernel::spherical_harmonic::gauss_legendre_nodes_weights;
 use apollo_sht::{SphericalGridSpec, SphericalHarmonicCoefficients};
 use ndarray::Array2;
 use num_complex::{Complex32, Complex64};
@@ -12,7 +10,7 @@ use num_complex::{Complex32, Complex64};
 use crate::application::plan::ShtWgpuPlan;
 use crate::domain::capabilities::WgpuCapabilities;
 use crate::domain::error::{WgpuError, WgpuResult};
-use crate::infrastructure::kernel::ShtGpuKernel;
+use crate::infrastructure::kernel::{GridPod, ShtGpuKernel};
 
 /// Return whether a default WGPU adapter/device can be acquired.
 #[must_use]
@@ -108,7 +106,7 @@ impl ShtWgpuBackend {
                 actual_longitudes,
             });
         }
-        let basis = forward_basis(plan);
+        let grid = grid_samples(plan);
         let input: Vec<Complex32> = samples.iter().copied().collect();
         let raw = self.kernel.execute_forward(
             self.device.as_ref(),
@@ -116,7 +114,7 @@ impl ShtWgpuBackend {
             plan.mode_count(),
             plan.sample_count(),
             &input,
-            &basis,
+            &grid,
         )?;
         Ok(coefficients_from_modes(plan.max_degree(), &raw))
     }
@@ -134,7 +132,7 @@ impl ShtWgpuBackend {
                 actual: coefficients.max_degree(),
             });
         }
-        let basis = inverse_basis(plan);
+        let grid = grid_samples(plan);
         let input = modes_from_coefficients(coefficients);
         let raw = self.kernel.execute_inverse(
             self.device.as_ref(),
@@ -142,7 +140,7 @@ impl ShtWgpuBackend {
             plan.sample_count(),
             plan.mode_count(),
             &input,
-            &basis,
+            &grid,
         )?;
         Array2::from_shape_vec(
             (plan.latitudes(), plan.longitudes()),
@@ -185,44 +183,18 @@ fn mode_pairs(max_degree: usize) -> impl Iterator<Item = (usize, isize)> {
     })
 }
 
-fn grid_angles(plan: &ShtWgpuPlan) -> Vec<(f64, f64, f64)> {
+fn grid_samples(plan: &ShtWgpuPlan) -> Vec<GridPod> {
     let (cos_theta_nodes, theta_weights) = gauss_legendre_nodes_weights(plan.latitudes());
     let longitude_weight = std::f64::consts::TAU / plan.longitudes() as f64;
     (0..plan.latitudes())
         .flat_map(|lat| {
-            let theta = cos_theta_nodes[lat].acos();
+            let cos_theta = cos_theta_nodes[lat];
             let weight = theta_weights[lat] * longitude_weight;
-            (0..plan.longitudes()).map(move |lon| {
-                (
-                    theta,
-                    std::f64::consts::TAU * lon as f64 / plan.longitudes() as f64,
-                    weight,
-                )
-            })
-        })
-        .collect()
-}
-
-fn forward_basis(plan: &ShtWgpuPlan) -> Vec<Complex32> {
-    let grid = grid_angles(plan);
-    mode_pairs(plan.max_degree())
-        .flat_map(|(degree, order)| {
-            grid.iter().map(move |(theta, phi, weight)| {
-                let value = spherical_harmonic(degree, order, *theta, *phi).conj() * *weight;
-                Complex32::new(value.re as f32, value.im as f32)
-            })
-        })
-        .collect()
-}
-
-fn inverse_basis(plan: &ShtWgpuPlan) -> Vec<Complex32> {
-    let grid = grid_angles(plan);
-    (0..plan.sample_count())
-        .flat_map(|sample| {
-            let (theta, phi, _) = grid[sample];
-            mode_pairs(plan.max_degree()).map(move |(degree, order)| {
-                let value = spherical_harmonic(degree, order, theta, phi);
-                Complex32::new(value.re as f32, value.im as f32)
+            (0..plan.longitudes()).map(move |lon| GridPod {
+                cos_theta: cos_theta as f32,
+                phi: (std::f64::consts::TAU * lon as f64 / plan.longitudes() as f64) as f32,
+                weight: weight as f32,
+                _padding: 0.0,
             })
         })
         .collect()
