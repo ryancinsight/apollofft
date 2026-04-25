@@ -19,10 +19,12 @@ FFT reference usage. The current feature-gated Rust reference dependency is
 ## Validation Contract
 
 Validation reports include CPU FFT, GPU surface, NUFFT, optional external
-comparison, benchmarks, and environment sections. Optional dependencies report
-availability and skip notes instead of silently succeeding.
+comparison, published-reference fixtures, benchmarks, and environment sections.
+Optional dependencies report availability and skip notes instead of silently
+succeeding.
 
 ## Verification
 
-Tests serialize the report and assert required schema sections and computed
-value-semantic fields.
+Tests serialize the report and assert required schema sections, computed
+value-semantic fields, and published-reference fixture values for FFT, DHT,
+DCT-II, and DST-II.

@@ -62,4 +62,5 @@
 - [x] Implement forward Hann-windowed STFT WGPU kernels inside `apollo-stft-wgpu` with CPU parity tests before reporting execution support.
 - [x] Implement forward and inverse Haar DWT WGPU kernels inside `apollo-wavelet-wgpu` with CPU parity tests before reporting execution support.
 - [x] Audit and document that `realfft` is not present in the workspace dependency graph; `apollo-validation/external-references` gates only optional `rustfft`.
-- [ ] Audit remaining transform crates against published references and add cross-crate validation fixtures where useful.
+- [x] Add published-reference validation fixtures for DFT, DHT, DCT-II, and DST-II under `apollo-validation::external.published_references`.
+- [x] Audit remaining transform crates against published references and add cross-crate validation fixtures where useful.

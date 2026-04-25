@@ -95,6 +95,34 @@ pub struct ExternalBackendReport {
     pub note: Option<String>,
 }
 
+/// One deterministic published-reference fixture comparison.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublishedFixtureReport {
+    /// Transform or theorem surface under validation.
+    pub transform: String,
+    /// Fixture identifier.
+    pub fixture: String,
+    /// Published or canonical source for the expected values.
+    pub reference: String,
+    /// Maximum absolute error against the expected values.
+    pub max_abs_error: f64,
+    /// Threshold used for this fixture.
+    pub threshold: f64,
+    /// Whether this fixture passed.
+    pub passed: bool,
+}
+
+/// Published-reference fixture validation summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublishedReferenceReport {
+    /// Whether all fixture comparisons passed.
+    pub passed: bool,
+    /// Number of fixture comparisons attempted.
+    pub attempted: usize,
+    /// Per-fixture value-semantic reports.
+    pub fixtures: Vec<PublishedFixtureReport>,
+}
+
 /// Comparison with external FFT implementations or assets.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExternalComparisonReport {
@@ -114,6 +142,8 @@ pub struct ExternalComparisonReport {
     pub robustness_passed: bool,
     /// Precision-specific comparison results.
     pub precision_comparisons: Vec<PrecisionRunReport>,
+    /// Published-reference fixture comparisons.
+    pub published_references: PublishedReferenceReport,
     /// Optional note explaining skipped comparisons.
     pub note: Option<String>,
 }

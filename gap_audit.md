@@ -79,6 +79,15 @@ All items below are implemented, tested, and verified in completed sprints.
 - Added Criterion benchmark target for Apollo FFT direct, radix-2, and Bluestein kernel strategies.
 - Verified zero test failures after each sprint increment.
 - Audited external Rust FFT references: `realfft` is not a workspace dependency or source import; `apollo-validation/external-references` gates only optional `rustfft`.
+- Added published-reference validation fixtures for DFT, DHT, DCT-II, and DST-II under `external.published_references`, with per-fixture max-error thresholds and schema coverage.
+
+### Published-Reference Audit
+
+- Added independent CZT–DFT cross-check in `apollo-czt`: spiral-collapse theorem verified against `apollo_fft::fft_1d_complex` (independent Cooley-Tukey/Bluestein path).
+- Added NUFFT uniform-grid DFT equivalence in `apollo-nufft`: type-1 at x_j = j·L/N matches DFT(c) to < 1e-10.
+- Replaced existence-only Morlet CWT test in `apollo-wavelet` with resonance test: CWT at matched scale dominates by factor > 2 over mismatched scale.
+- Added DHT–Fourier relationship cross-check in `apollo-dht`: H[k] = Re(F[k]) − Im(F[k]) verified against independent `apollo_fft` computation.
+- Fixed hardcoded `type2_1d_max_relative_error = 0.0` mock in `apollo-validation`: replaced with computed fast vs. exact type-2 NUFFT relative error.
 
 ### WGPU Backend Architecture
 
@@ -118,9 +127,4 @@ All items below are implemented, tested, and verified in completed sprints.
 
 ## Remaining Gaps
 
-The following gap is deferred to a future increment. It requires reference-source selection and validation infrastructure work before implementation.
-
-
-### 1. Published-Reference Audit
-
-Transform-specific analytical tests exist for all crates, but external published-reference fixtures are still pending for a separate validation increment. No external reference data set has been ingested and no cross-library comparison has been executed. Completion requires selecting reference data from published transform tables or a reference implementation and wiring those into the `apollo-validation` external-reference report path.
+No open gaps are recorded after the current sprint. Future increments should expand published-reference fixture breadth where a transform has a compact stable table or a documented external reference implementation that can be vendored or feature-gated without affecting production crates.

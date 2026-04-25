@@ -251,6 +251,10 @@ impl NufftPlan1D {
         }
 
         self.fft_plan.inverse_complex_slice_inplace(scratch_spread);
+        let inverse_scale = self.m as f64;
+        scratch_spread
+            .iter_mut()
+            .for_each(|value| *value *= inverse_scale);
         let spread = &*scratch_spread;
 
         let w = self.w as i64;

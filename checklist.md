@@ -55,7 +55,7 @@
 - [x] Add Parseval/Plancherel energy-invariance theorem (with proof sketch) to `radix2.rs` module doc and Unified Twiddle Table theorem.
 - [x] Add I_0 convergence theorem and K=256 sufficiency corollary to `kaiser_bessel.rs`.
 - [x] Derive and verify a correct FFT-based DCT/DST acceleration strategy.
-- [ ] Audit remaining transform crates against published references and cross-crate validation fixtures.
+- [x] Add published-reference validation fixtures for DFT, DHT, DCT-II, and DST-II in `apollo-validation`.
 - [x] Add WGPU NUFFT direct Type-1/Type-2 1D/3D numerical kernels and parity tests.
 - [x] Add direct forward CZT WGPU kernels with CPU parity validation.
 - [x] Add forward Hilbert WGPU kernels with CPU parity validation.
@@ -80,3 +80,9 @@
 - [x] Add NUFFT WGPU fast 1D gridding execution after direct 1D/3D coverage.
 - [x] Add NUFFT WGPU fast 3D gridding execution after fast 1D parity coverage.
 - [x] Audit `realfft` references and document that no additional feature gate is required because `realfft` is not a workspace dependency.
+- [x] Audit remaining transform crates against published references and cross-crate validation fixtures.
+- [x] Fix hardcoded `type2_1d_max_relative_error = 0.0` mock in apollo-validation by computing actual fast vs exact NUFFT type-2 relative error.
+- [x] Add CZT independent DFT cross-check test (CZT vs apollo_fft on same input, not just CZT vs direct-CZT).
+- [x] Add NUFFT uniform-grid DFT equivalence test (type-1 at x_j=j*L/N equals DFT(c)).
+- [x] Replace existence-only Morlet CWT test with value-semantic resonance test.
+- [x] Add DHT–DFT relationship cross-check (H[k] = Re(F[k]) - Im(F[k])).

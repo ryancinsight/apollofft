@@ -500,6 +500,8 @@ dependencies = [
 name = "apollo-validation"
 version = "0.1.0"
 dependencies = [
+ "apollo-dctdst",
+ "apollo-dht",
  "apollo-fft",
  "apollo-fft-wgpu",
  "apollo-nufft",

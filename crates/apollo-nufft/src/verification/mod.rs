@@ -17,8 +17,8 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type2_1d, NufftPlan1D,
-        UniformDomain1D, UniformGrid3D,
+        nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type2_1d, nufft_type2_1d_fast,
+        NufftPlan1D, UniformDomain1D, UniformGrid3D,
     };
     use ndarray::Array1;
     use num_complex::Complex64;
@@ -203,6 +203,36 @@ mod tests {
                 "sigma={sigma}, W={w}: max_err={max_err:.3e} > tol={tol:.0e}"
             );
         }
+    }
+
+    /// Theorem: Type-2 fast path preserves the inverse FFT normalization.
+    ///
+    /// Apollo's `FftPlan1D::inverse_complex_slice_inplace` applies `1/M` for
+    /// an oversampled grid of length `M`. The type-2 NUFFT adjoint requires the
+    /// unnormalized inverse exponential sum before interpolation, so the fast
+    /// path must restore the factor `M` after the inverse FFT.
+    #[test]
+    fn fast_type2_1d_tracks_exact_after_inverse_fft_rescaling() {
+        let domain = UniformDomain1D::new(32, 0.05).expect("domain");
+        let positions: Vec<f64> = (0..20)
+            .map(|i| (i as f64 * 0.137).rem_euclid(domain.length()))
+            .collect();
+        let coefficients = Array1::from_shape_fn(domain.n, |k| {
+            Complex64::new((0.4 * k as f64).cos(), -(0.25 * k as f64).sin())
+        });
+
+        let exact = nufft_type2_1d(&coefficients, &positions, domain);
+        let fast = nufft_type2_1d_fast(&coefficients, &positions, domain, 6);
+        let max_relative_error = exact
+            .iter()
+            .zip(fast.iter())
+            .map(|(lhs, rhs)| (lhs - rhs).norm() / lhs.norm().max(1.0))
+            .fold(0.0_f64, f64::max);
+
+        assert!(
+            max_relative_error <= 1.0e-5,
+            "type-2 fast relative error {max_relative_error:.3e} exceeded tolerance"
+        );
     }
 
     /// Theorem: 3D type-1 DC mode identity.

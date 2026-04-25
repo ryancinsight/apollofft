@@ -7,21 +7,23 @@
 use crate::domain::report::{
     BenchmarkReport, CpuFftReport, EnvironmentReport, ExternalBackendReport,
     ExternalComparisonReport, GpuFftReport, NufftReport, PrecisionBenchmarkReport,
-    PrecisionRunReport, ValidationReport,
+    PrecisionRunReport, PublishedFixtureReport, PublishedReferenceReport, ValidationReport,
 };
 use crate::infrastructure::numpy::{
     benchmark_fft, compare_fft, probe_python_environment, PythonEnvironmentProbe,
 };
 #[cfg(feature = "external-references")]
 use crate::infrastructure::rustfft_reference::{fft1_real, fft3_real};
+use apollo_dctdst::{DctDstPlan, RealTransformKind};
+use apollo_dht::DhtPlan;
 use apollo_fft::f16;
 use apollo_fft::{
     fft_1d_array, fft_1d_array_typed, fft_3d_array, ifft_1d_array, ifft_3d_array,
     ifft_3d_array_typed, PrecisionProfile, Shape3D,
 };
 use apollo_nufft::{
-    nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type1_3d_fast, UniformDomain1D,
-    UniformGrid3D, DEFAULT_NUFFT_KERNEL_WIDTH,
+    nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type1_3d_fast, nufft_type2_1d,
+    nufft_type2_1d_fast, UniformDomain1D, UniformGrid3D, DEFAULT_NUFFT_KERNEL_WIDTH,
 };
 use ndarray::{Array1, Array3};
 use num_complex::{Complex32, Complex64};
@@ -34,6 +36,7 @@ const CPU_PARSEVAL_LIMIT: f64 = 1.0e-10;
 const CPU_STABILITY_LIMIT: f64 = 1.0e-12;
 const EXTERNAL_FFT_LIMIT: f64 = 1.0e-9;
 const NUFFT_FAST_RELATIVE_LIMIT: f64 = 1.0e-5;
+const PUBLISHED_FIXTURE_LIMIT: f64 = 1.0e-12;
 
 type SuiteResult<T> = Result<T, Box<dyn Error>>;
 
@@ -167,7 +170,17 @@ pub fn run_nufft_suite() -> SuiteResult<NufftReport> {
     let fast_1d = nufft_type1_1d_fast(&positions, &values, domain, DEFAULT_NUFFT_KERNEL_WIDTH);
     let type1_1d_max_relative_error = relative_complex_error(exact_1d.iter(), fast_1d.iter());
 
-    let type2_1d_max_relative_error = 0.0;
+    let coefficients = Array1::from_shape_fn(domain.n, |k| {
+        Complex64::new((0.4 * k as f64).cos(), -(0.25 * k as f64).sin())
+    });
+    let exact_type2 = nufft_type2_1d(&coefficients, &positions, domain);
+    let fast_type2 = nufft_type2_1d_fast(
+        &coefficients,
+        &positions,
+        domain,
+        DEFAULT_NUFFT_KERNEL_WIDTH,
+    );
+    let type2_1d_max_relative_error = relative_complex_error(exact_type2.iter(), fast_type2.iter());
 
     let grid = UniformGrid3D::new(8, 8, 8, 0.125, 0.125, 0.125)?;
     let points: Vec<(f64, f64, f64)> = (0..12)
@@ -211,6 +224,7 @@ pub fn run_nufft_suite() -> SuiteResult<NufftReport> {
 
     let passed = [
         type1_1d_max_relative_error,
+        type2_1d_max_relative_error,
         type1_3d_max_relative_error,
         irrational_positions_max_relative_error,
         clustered_positions_max_relative_error,
@@ -304,6 +318,7 @@ pub fn run_external_comparison_suite() -> SuiteResult<ExternalComparisonReport> 
         version: None,
         note: Some("pyfftw is probed through the NumPy harness when installed".to_string()),
     };
+    let published_references = run_published_reference_suite()?;
 
     let passed = (!rustfft_report.attempted
         || (rustfft_report
@@ -318,7 +333,8 @@ pub fn run_external_comparison_suite() -> SuiteResult<ExternalComparisonReport> 
         && (!numpy_report.attempted
             || numpy_report
                 .fft1_max_abs_error
-                .is_some_and(|error| error <= EXTERNAL_FFT_LIMIT));
+                .is_some_and(|error| error <= EXTERNAL_FFT_LIMIT))
+        && published_references.passed;
 
     Ok(ExternalComparisonReport {
         passed,
@@ -329,7 +345,30 @@ pub fn run_external_comparison_suite() -> SuiteResult<ExternalComparisonReport> 
         pyfftw: pyfftw_report,
         robustness_passed: true,
         precision_comparisons: precision_profile_reports(),
+        published_references,
         note: None,
+    })
+}
+
+/// Validate transform outputs against fixed published-reference tables.
+///
+/// The fixtures use canonical definitions from common transform literature:
+/// DFT/DHT root-of-unity and cas matrices, plus the type-II DCT/DST formulae
+/// used in FFTW's real-to-real transform taxonomy. Each expected vector is
+/// written as the closed-form value of the published basis formula for a
+/// non-trivial two- or four-point input.
+pub fn run_published_reference_suite() -> SuiteResult<PublishedReferenceReport> {
+    let fixtures = vec![
+        fft_four_point_difference_fixture(),
+        dht_four_point_difference_fixture()?,
+        dct2_two_point_fixture()?,
+        dst2_two_point_fixture()?,
+    ];
+    let passed = fixtures.iter().all(|fixture| fixture.passed);
+    Ok(PublishedReferenceReport {
+        passed,
+        attempted: fixtures.len(),
+        fixtures,
     })
 }
 
@@ -543,6 +582,110 @@ fn numpy_comparison_report(signal: &Array1<f64>) -> ExternalBackendReport {
     }
 }
 
+fn fft_four_point_difference_fixture() -> PublishedFixtureReport {
+    let signal = Array1::from_vec(vec![1.0, 0.0, -1.0, 0.0]);
+    let actual = fft_1d_array(&signal);
+    let expected = [
+        Complex64::new(0.0, 0.0),
+        Complex64::new(2.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(2.0, 0.0),
+    ];
+    published_complex_fixture(
+        "FFT",
+        "DFT4([1,0,-1,0])",
+        "Cooley and Tukey (1965), finite root-of-unity DFT definition",
+        actual.iter(),
+        expected.iter(),
+    )
+}
+
+fn dht_four_point_difference_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = DhtPlan::new(4)?;
+    let spectrum = plan.forward(&[1.0, 0.0, -1.0, 0.0])?;
+    let expected = [0.0, 2.0, 0.0, 2.0];
+    Ok(published_real_fixture(
+        "DHT",
+        "DHT4([1,0,-1,0])",
+        "Bracewell (1983), cas(theta)=cos(theta)+sin(theta) Hartley definition",
+        spectrum.values(),
+        &expected,
+    ))
+}
+
+fn dct2_two_point_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = DctDstPlan::new(2, RealTransformKind::DctII)?;
+    let actual = plan.forward(&[1.0, 3.0])?;
+    let expected = [4.0, -std::f64::consts::SQRT_2];
+    Ok(published_real_fixture(
+        "DCT-II",
+        "DCT-II2([1,3])",
+        "FFTW real-to-real REDFT10 convention, unnormalized DCT-II basis",
+        &actual,
+        &expected,
+    ))
+}
+
+fn dst2_two_point_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = DctDstPlan::new(2, RealTransformKind::DstII)?;
+    let actual = plan.forward(&[1.0, 3.0])?;
+    let expected = [
+        1.0 * (std::f64::consts::PI / 4.0).sin() + 3.0 * (3.0 * std::f64::consts::PI / 4.0).sin(),
+        -2.0,
+    ];
+    Ok(published_real_fixture(
+        "DST-II",
+        "DST-II2([1,3])",
+        "FFTW real-to-real RODFT10 convention, unnormalized DST-II basis",
+        &actual,
+        &expected,
+    ))
+}
+
+fn published_complex_fixture<'a, I, J>(
+    transform: &str,
+    fixture: &str,
+    reference: &str,
+    actual: I,
+    expected: J,
+) -> PublishedFixtureReport
+where
+    I: IntoIterator<Item = &'a Complex64>,
+    J: IntoIterator<Item = &'a Complex64>,
+{
+    let max_abs_error = max_complex_abs_delta(actual, expected);
+    PublishedFixtureReport {
+        transform: transform.to_string(),
+        fixture: fixture.to_string(),
+        reference: reference.to_string(),
+        max_abs_error,
+        threshold: PUBLISHED_FIXTURE_LIMIT,
+        passed: max_abs_error <= PUBLISHED_FIXTURE_LIMIT,
+    }
+}
+
+fn published_real_fixture(
+    transform: &str,
+    fixture: &str,
+    reference: &str,
+    actual: &[f64],
+    expected: &[f64],
+) -> PublishedFixtureReport {
+    let max_abs_error = actual
+        .iter()
+        .zip(expected.iter())
+        .map(|(lhs, rhs)| (lhs - rhs).abs())
+        .fold(0.0, f64::max);
+    PublishedFixtureReport {
+        transform: transform.to_string(),
+        fixture: fixture.to_string(),
+        reference: reference.to_string(),
+        max_abs_error,
+        threshold: PUBLISHED_FIXTURE_LIMIT,
+        passed: max_abs_error <= PUBLISHED_FIXTURE_LIMIT,
+    }
+}
+
 fn representative_signal_1d(len: usize) -> Array1<f64> {
     Array1::from_vec(
         (0..len)
@@ -618,8 +761,27 @@ mod tests {
         assert!(report.fft_cpu.roundtrip_max_abs_error <= CPU_ROUNDTRIP_LIMIT);
         assert!(report.fft_cpu.parseval_relative_error <= CPU_PARSEVAL_LIMIT);
         assert!(report.nufft.passed);
+        assert!(report.external.published_references.passed);
+        assert_eq!(report.external.published_references.attempted, 4);
         assert_eq!(report.external.rustfft.backend, "rustfft");
         assert_eq!(report.external.numpy.backend, "numpy");
+    }
+
+    #[test]
+    fn published_reference_suite_checks_computed_fixture_values() {
+        let report = run_published_reference_suite().expect("published references");
+        assert_eq!(report.attempted, 4);
+        assert!(report.passed);
+        for fixture in &report.fixtures {
+            assert!(
+                fixture.max_abs_error <= fixture.threshold,
+                "{} exceeded threshold: {} > {}",
+                fixture.fixture,
+                fixture.max_abs_error,
+                fixture.threshold
+            );
+            assert!(!fixture.reference.is_empty());
+        }
     }
 
     #[test]
@@ -667,6 +829,7 @@ mod tests {
             "pyfftw",
             "robustness_passed",
             "precision_comparisons",
+            "published_references",
         ] {
             assert!(external.contains_key(key), "missing external key {key}");
         }

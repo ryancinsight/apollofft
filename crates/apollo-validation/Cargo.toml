@@ -16,6 +16,8 @@ apollo-fft = { path = "../apollo-fft" }
 apollo-nufft = { path = "../apollo-nufft" }
 apollo-fft-wgpu = { path = "../apollo-fft-wgpu" }
 apollo-nufft-wgpu = { path = "../apollo-nufft-wgpu" }
+apollo-dctdst = { path = "../apollo-dctdst" }
+apollo-dht = { path = "../apollo-dht" }
 ndarray = { version = "0.16", features = ["rayon"] }
 num-complex = "0.4"
 serde = { version = "1.0", features = ["derive"] }

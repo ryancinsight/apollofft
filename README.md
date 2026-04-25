@@ -16,7 +16,7 @@ Stage 2 moves Apollo beyond the initial compatibility cut:
 - `apollo-mellin` owns Mellin scale-domain metadata and validation.
 - `apollo-sft` owns the sparse Fourier transform single source of truth.
 - `apollo-fft-wgpu` owns the real shader-backed 3D WGPU FFT path with radix-2 and Bluestein/Chirp-Z axis strategies.
-- `apollo-nufft-wgpu` owns NUFFT GPU execution and now ships exact direct Type-1 and Type-2 WGPU kernels for 1D and 3D; fast gridding paths remain unsupported until GPU spreading/interpolation, oversampled FFT dispatch, and deconvolution land there.
+- `apollo-nufft-wgpu` owns NUFFT GPU execution and ships exact direct Type-1 and Type-2 WGPU kernels for 1D and 3D, plus fast Kaiser-Bessel gridding paths for both 1D and 3D. The fast paths perform GPU spreading or interpolation, dispatch oversampled FFTs through `apollo-fft-wgpu`, and apply GPU deconvolution against the same Kaiser-Bessel metadata used by `apollo-nufft`.
 - Per-transform WGPU crates own GPU backend boundaries for their respective mathematical domains. `apollo-fwht-wgpu` and `apollo-dht-wgpu` ship real 1D `f32` kernels, `apollo-dctdst-wgpu` ships the full real 1D `f32` DCT-II/DCT-III/DST-II/DST-III family, `apollo-czt-wgpu` ships a direct complex forward CZT kernel, `apollo-gft-wgpu` ships forward and inverse graph-basis execution, `apollo-hilbert-wgpu` ships forward analytic/quadrature Hilbert execution, `apollo-mellin-wgpu` ships a forward Mellin log-frequency spectrum kernel, `apollo-ntt-wgpu` ships forward and inverse NTT execution on its supported modulus surface, `apollo-qft-wgpu` ships forward and inverse dense unitary QFT execution, `apollo-radon-wgpu` ships forward parallel-beam projection execution, `apollo-sdft-wgpu` ships forward direct-bin sliding DFT execution, `apollo-sft-wgpu` ships direct dense DFT sparse top-k execution and inverse reconstruction, `apollo-sht-wgpu` ships direct complex SHT forward/inverse execution using owner-derived basis and quadrature buffers, `apollo-stft-wgpu` ships forward Hann-windowed STFT execution, and `apollo-wavelet-wgpu` ships forward and inverse Haar DWT execution.
 - `apollo-wavelet` owns discrete and continuous wavelet transform plans for multiresolution analysis.
 - `apollo-validation` emits structured CPU, GPU, NUFFT, benchmark, and external-comparison reports.
@@ -55,7 +55,7 @@ Mixed precision is now a first-class Apollo concept:
 - `apollo-stft`: short-time Fourier transform plans with centered-frame
   reconstruction, overlap-add normalization, and caller-owned output buffers.
 - `apollo-fft-wgpu`: Real dense FFT WGPU backend and GPU parity surface.
-- `apollo-nufft-wgpu`: exact direct Type-1/Type-2 NUFFT WGPU execution for 1D and 3D plus capability contract surface.
+- `apollo-nufft-wgpu`: exact direct and fast Kaiser-Bessel gridded Type-1/Type-2 NUFFT WGPU execution for 1D and 3D with `apollo-fft-wgpu`-backed oversampled FFT dispatch.
 - `apollo-czt-wgpu`, `apollo-dctdst-wgpu`, `apollo-dht-wgpu`,
   `apollo-frft-wgpu`, `apollo-gft-wgpu`,
   `apollo-hilbert-wgpu`, `apollo-mellin-wgpu`, `apollo-ntt-wgpu`,

@@ -39,7 +39,9 @@ suite checks.
 
 The `external` section contains per-backend subreports for optional comparison engines such as
 `rustfft` and `pyfftw`, plus NumPy-backed comparison data when available. The report records
-availability, whether a comparison was attempted, and any skip or failure notes.
+availability, whether a comparison was attempted, and any skip or failure notes. It also includes
+`external.published_references`, a deterministic fixture suite checked against closed-form tables
+from published transform definitions.
 
 The FFT sections also include precision-aware detail:
 
@@ -90,6 +92,7 @@ does not use that label for WGPU because the current shader path is `f32` only.
 - Non-finite angles and invalid detector geometry in Radon plans.
 - Non-contiguous Python buffers.
 - Repeated-run stability against optional external references.
+- Published-reference fixture parity for DFT, DHT, DCT-II, and DST-II definitions.
 - Non-finite signal propagation checks in Apollo CPU FFT.
 - Prime-sized and mixed-shape external parity checks.
 - Clustered and wrapped NUFFT point distributions.
@@ -98,6 +101,23 @@ does not use that label for WGPU because the current shader path is `f32` only.
 - Cache reuse under contention.
 
 ## Transform-Specific Analytical Checks
+
+## Published-Reference Fixtures
+
+`apollo-validation` now records deterministic published-reference fixtures under
+`external.published_references`. The current fixture set validates:
+
+- DFT4 `[1, 0, -1, 0] -> [0, 2, 0, 2]` from the finite root-of-unity DFT
+  definition used by Cooley and Tukey.
+- DHT4 `[1, 0, -1, 0] -> [0, 2, 0, 2]` from Bracewell's
+  `cas(theta) = cos(theta) + sin(theta)` Hartley basis.
+- DCT-II length-2 `[1, 3] -> [4, -sqrt(2)]` from the unnormalized FFTW REDFT10
+  convention.
+- DST-II length-2 `[1, 3] -> [sqrt(2), -2]` from the unnormalized FFTW RODFT10
+  convention.
+
+These fixtures are version-stable and do not require optional external
+dependencies.
 
 - DHT: impulse response, DC behavior, Parseval scaling, and involution.
 - DCT/DST: two-point analytical projections, inverse-pair scaling, and
@@ -181,7 +201,9 @@ by unit and property tests against analytical identities and direct references.
 - SFT uses non-deprecated ndarray vector extraction and reuses the crate-local
   direct DFT reference in verification.
 - NUFFT 1D type-2 interpolation borrows the inverse oversampled grid as a
-  contiguous slice instead of copying it before interpolation.
+  contiguous slice instead of copying it before interpolation. The fast path
+  restores Apollo FFT's inverse `1/M` normalization before interpolation so the
+  gridded adjoint matches the exact type-2 exponential sum.
 - NUFFT 3D separable FFT passes reuse one `Array1<Complex64>` lane buffer per
   axis pass rather than allocating per transformed lane.
 - NUFFT 3D type-2 interpolation sorts positions directly and writes results
