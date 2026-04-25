@@ -3,8 +3,8 @@
 #[cfg(test)]
 mod tests {
     use apollo_nufft::{
-        nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type2_1d, nufft_type2_1d_fast,
-        nufft_type2_3d, UniformDomain1D, UniformGrid3D,
+        nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type1_3d_fast, nufft_type2_1d,
+        nufft_type2_1d_fast, nufft_type2_3d, nufft_type2_3d_fast, UniformDomain1D, UniformGrid3D,
     };
     use ndarray::{Array1, Array3};
     use num_complex::{Complex32, Complex64};
@@ -26,8 +26,8 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_advertise_fast_1d_when_enabled() {
-        let capabilities = NufftWgpuCapabilities::direct_all_fast_1d(true);
+    fn capabilities_advertise_all_fast_when_enabled() {
+        let capabilities = NufftWgpuCapabilities::direct_all_fast_all(true);
         assert!(capabilities.device_available);
         assert!(capabilities.supports_type1_1d);
         assert!(capabilities.supports_type2_1d);
@@ -35,6 +35,8 @@ mod tests {
         assert!(capabilities.supports_type2_3d);
         assert!(capabilities.supports_fast_type1_1d);
         assert!(capabilities.supports_fast_type2_1d);
+        assert!(capabilities.supports_fast_type1_3d);
+        assert!(capabilities.supports_fast_type2_3d);
     }
 
     #[test]
@@ -275,6 +277,70 @@ mod tests {
         assert_eq!(actual.len(), expected.len());
         for (actual, expected) in actual.iter().zip(expected.iter()) {
             assert_complex64_close(*actual, *expected, 1.5e-3);
+        }
+    }
+
+    #[test]
+    fn fast_type1_3d_matches_cpu_gridded_reference_when_device_exists() {
+        let Some(backend) = backend_or_skip() else {
+            return;
+        };
+        let grid = UniformGrid3D::new(3, 2, 2, 0.5, 0.75, 1.0).expect("grid");
+        let plan = NufftWgpuPlan3D::new(grid, 2, 6);
+        let positions = [(0.0_f32, 0.0, 0.0), (0.35, 0.7, 0.5), (1.1, 0.2, 1.4)];
+        let values = [
+            Complex32::new(1.0, 0.0),
+            Complex32::new(-0.25, 0.5),
+            Complex32::new(0.75, -0.5),
+        ];
+        let expected_positions: Vec<(f64, f64, f64)> = positions
+            .iter()
+            .map(|(x, y, z)| (*x as f64, *y as f64, *z as f64))
+            .collect();
+        let expected_values: Vec<Complex64> = values
+            .iter()
+            .map(|v| Complex64::new(v.re as f64, v.im as f64))
+            .collect();
+        let expected = nufft_type1_3d_fast(&expected_positions, &expected_values, grid, 6);
+
+        let actual = backend
+            .execute_fast_type1_3d(&plan, &positions, &values)
+            .expect("GPU fast type1 3D");
+
+        assert_eq!(actual.dim(), expected.dim());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            assert_complex64_close(*actual, *expected, 2.0e-3);
+        }
+    }
+
+    #[test]
+    fn fast_type2_3d_matches_cpu_gridded_reference_when_device_exists() {
+        let Some(backend) = backend_or_skip() else {
+            return;
+        };
+        let grid = UniformGrid3D::new(3, 2, 2, 0.5, 0.75, 1.0).expect("grid");
+        let plan = NufftWgpuPlan3D::new(grid, 2, 6);
+        let positions = [(0.0_f32, 0.0, 0.0), (0.35, 0.7, 0.5), (1.1, 0.2, 1.4)];
+        let modes = Array3::from_shape_fn((grid.nx, grid.ny, grid.nz), |(kx, ky, kz)| {
+            Complex32::new(
+                0.25 + 0.1 * kx as f32 - 0.05 * ky as f32 + 0.03 * kz as f32,
+                -0.4 + 0.07 * kx as f32 + 0.11 * ky as f32 - 0.02 * kz as f32,
+            )
+        });
+        let expected_positions: Vec<(f64, f64, f64)> = positions
+            .iter()
+            .map(|(x, y, z)| (*x as f64, *y as f64, *z as f64))
+            .collect();
+        let expected_modes = modes.mapv(|v| Complex64::new(v.re as f64, v.im as f64));
+        let expected = nufft_type2_3d_fast(&expected_positions, &expected_modes, grid, 6);
+
+        let actual = backend
+            .execute_fast_type2_3d(&plan, &modes, &positions)
+            .expect("GPU fast type2 3D");
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            assert_complex64_close(*actual, *expected, 2.0e-3);
         }
     }
 

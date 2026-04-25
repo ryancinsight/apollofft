@@ -54,12 +54,35 @@ struct FastNufftParams {
     _pad: f32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct FastNufftParams3D {
+    nx: u32,
+    ny: u32,
+    nz: u32,
+    mx: u32,
+    my: u32,
+    mz: u32,
+    sample_count: u32,
+    kernel_width: u32,
+    lx: f32,
+    ly: f32,
+    lz: f32,
+    beta: f32,
+    i0_beta: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
+}
+
 /// Cached WGPU state for direct and fast-gridded NUFFT dispatches.
 #[derive(Debug)]
 pub struct NufftGpuKernel {
     bind_group_layout: wgpu::BindGroupLayout,
     fast_spread_layout: wgpu::BindGroupLayout,
     fast_extract_layout: wgpu::BindGroupLayout,
+    fast_3d_spread_layout: wgpu::BindGroupLayout,
+    fast_3d_extract_layout: wgpu::BindGroupLayout,
     params_buffer: wgpu::Buffer,
     fast_params_buffer: wgpu::Buffer,
     type1_1d_pipeline: wgpu::ComputePipeline,
@@ -70,6 +93,11 @@ pub struct NufftGpuKernel {
     fast_type1_extract_1d_pipeline: wgpu::ComputePipeline,
     fast_type2_load_1d_pipeline: wgpu::ComputePipeline,
     fast_type2_interpolate_1d_pipeline: wgpu::ComputePipeline,
+    fast_3d_params_buffer: wgpu::Buffer,
+    fast_type1_spread_3d_pipeline: wgpu::ComputePipeline,
+    fast_type1_extract_3d_pipeline: wgpu::ComputePipeline,
+    fast_type2_load_3d_pipeline: wgpu::ComputePipeline,
+    fast_type2_interpolate_3d_pipeline: wgpu::ComputePipeline,
 }
 
 impl NufftGpuKernel {
@@ -83,6 +111,10 @@ impl NufftGpuKernel {
         let fast_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("apollo-nufft-wgpu fast gridding shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/nufft_fast_1d.wgsl").into()),
+        });
+        let fast_3d_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("apollo-nufft-wgpu fast 3d gridding shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/nufft_fast_3d.wgsl").into()),
         });
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("apollo-nufft-wgpu bind group layout"),
@@ -136,6 +168,46 @@ impl NufftGpuKernel {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("apollo-nufft-wgpu fast extract pipeline layout"),
                 bind_group_layouts: &[&fast_extract_layout],
+                push_constant_ranges: &[],
+            });
+        let fast_3d_spread_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("apollo-nufft-wgpu fast 3d spread layout"),
+                entries: &[
+                    storage_layout_entry(0, true),
+                    storage_layout_entry(1, true),
+                    storage_layout_entry(2, false),
+                    storage_layout_entry(3, false),
+                    storage_layout_entry(4, true),
+                    storage_layout_entry(5, false),
+                    storage_layout_entry(6, true),
+                    uniform_layout_entry_3d(7),
+                ],
+            });
+        let fast_3d_extract_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("apollo-nufft-wgpu fast 3d extract layout"),
+                entries: &[
+                    storage_layout_entry(0, true),
+                    storage_layout_entry(1, true),
+                    storage_layout_entry(2, false),
+                    storage_layout_entry(3, false),
+                    storage_layout_entry(4, true),
+                    storage_layout_entry(5, false),
+                    storage_layout_entry(6, true),
+                    uniform_layout_entry_3d(7),
+                ],
+            });
+        let fast_3d_spread_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("apollo-nufft-wgpu fast 3d spread pipeline layout"),
+                bind_group_layouts: &[&fast_3d_spread_layout],
+                push_constant_ranges: &[],
+            });
+        let fast_3d_extract_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("apollo-nufft-wgpu fast 3d extract pipeline layout"),
+                bind_group_layouts: &[&fast_3d_extract_layout],
                 push_constant_ranges: &[],
             });
         let type1_1d_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -206,6 +278,64 @@ impl NufftGpuKernel {
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: None,
             });
+        let fast_3d_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("apollo-nufft-wgpu fast 3d params"),
+            contents: bytemuck::bytes_of(&FastNufftParams3D {
+                nx: 1,
+                ny: 1,
+                nz: 1,
+                mx: 2,
+                my: 2,
+                mz: 2,
+                sample_count: 0,
+                kernel_width: 6,
+                lx: 1.0,
+                ly: 1.0,
+                lz: 1.0,
+                beta: 1.0,
+                i0_beta: 1.0,
+                _pad0: 0.0,
+                _pad1: 0.0,
+                _pad2: 0.0,
+            }),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let fast_type1_spread_3d_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("apollo-nufft-wgpu fast type1 3d spread pipeline"),
+                layout: Some(&fast_3d_spread_pipeline_layout),
+                module: &fast_3d_shader,
+                entry_point: Some("fast_type1_spread_3d"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+        let fast_type1_extract_3d_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("apollo-nufft-wgpu fast type1 3d extract pipeline"),
+                layout: Some(&fast_3d_extract_pipeline_layout),
+                module: &fast_3d_shader,
+                entry_point: Some("fast_type1_extract_3d"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+        let fast_type2_load_3d_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("apollo-nufft-wgpu fast type2 3d load pipeline"),
+                layout: Some(&fast_3d_extract_pipeline_layout),
+                module: &fast_3d_shader,
+                entry_point: Some("fast_type2_load_3d"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+        let fast_type2_interpolate_3d_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("apollo-nufft-wgpu fast type2 3d interpolate pipeline"),
+                layout: Some(&fast_3d_spread_pipeline_layout),
+                module: &fast_3d_shader,
+                entry_point: Some("fast_type2_interpolate_3d"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("apollo-nufft-wgpu params"),
             contents: bytemuck::bytes_of(&NufftParams {
@@ -238,6 +368,8 @@ impl NufftGpuKernel {
             bind_group_layout,
             fast_spread_layout,
             fast_extract_layout,
+            fast_3d_spread_layout,
+            fast_3d_extract_layout,
             params_buffer,
             fast_params_buffer,
             type1_1d_pipeline,
@@ -248,6 +380,11 @@ impl NufftGpuKernel {
             fast_type1_extract_1d_pipeline,
             fast_type2_load_1d_pipeline,
             fast_type2_interpolate_1d_pipeline,
+            fast_3d_params_buffer,
+            fast_type1_spread_3d_pipeline,
+            fast_type1_extract_3d_pipeline,
+            fast_type2_load_3d_pipeline,
+            fast_type2_interpolate_3d_pipeline,
         }
     }
 
@@ -630,6 +767,290 @@ impl NufftGpuKernel {
         read_complex_buffer(device, queue, &output_buffer, positions.len())
     }
 
+    /// Execute fast gridded Type-1 3D NUFFT with GPU separable spreading, 3D FFT, and deconvolution.
+    ///
+    /// Algorithm:
+    /// 1. Spread: one thread per oversampled grid cell, accumulates KB-weighted sample contributions.
+    /// 2. 3D FFT: uses `GpuFft3d` on the oversampled split grid (mx, my, mz).
+    /// 3. Extract: one thread per output mode, reads FFT'd grid at mapped index, applies deconvolution.
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_fast_type1_3d(
+        &self,
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+        shape: (usize, usize, usize),
+        oversampled: (usize, usize, usize),
+        kernel_width: usize,
+        lengths: (f32, f32, f32),
+        beta: f32,
+        i0_beta: f32,
+        deconv_xyz: &[f32],
+        positions: &[(f32, f32, f32)],
+        values: &[Complex32],
+    ) -> NufftWgpuResult<Vec<Complex32>> {
+        let (nx, ny, nz) = shape;
+        let (mx, my, mz) = oversampled;
+        let (lx, ly, lz) = lengths;
+        let grid_len = mx * my * mz;
+        let output_len = nx * ny * nz;
+
+        let position_data: Vec<Position3Pod> = positions
+            .iter()
+            .map(|(x, y, z)| Position3Pod {
+                x: *x,
+                y: *y,
+                z: *z,
+                _pad: 0.0,
+            })
+            .collect();
+        let value_data = complex_to_pods(values);
+        let empty_coeff = vec![ComplexPod::zeroed(); output_len.max(1)];
+
+        let position_buffer =
+            storage_buffer(device, "apollo-nufft-wgpu fast3d positions", &position_data);
+        let value_buffer = storage_buffer(device, "apollo-nufft-wgpu fast3d values", &value_data);
+        let deconv_buffer = storage_buffer(device, "apollo-nufft-wgpu fast3d deconv", deconv_xyz);
+        let coeff_buffer = storage_buffer(
+            device,
+            "apollo-nufft-wgpu fast3d coeffs placeholder",
+            &empty_coeff,
+        );
+        let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-nufft-wgpu fast3d type1 output"),
+            size: (output_len * std::mem::size_of::<ComplexPod>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let (re_buffer, im_buffer) = split_grid_buffers(device, grid_len);
+
+        let params = FastNufftParams3D {
+            nx: nx as u32,
+            ny: ny as u32,
+            nz: nz as u32,
+            mx: mx as u32,
+            my: my as u32,
+            mz: mz as u32,
+            sample_count: positions.len() as u32,
+            kernel_width: kernel_width as u32,
+            lx,
+            ly,
+            lz,
+            beta,
+            i0_beta,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+        };
+        queue.write_buffer(&self.fast_3d_params_buffer, 0, bytemuck::bytes_of(&params));
+
+        let spread_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("apollo-nufft-wgpu fast3d type1 spread bg"),
+            layout: &self.fast_3d_spread_layout,
+            entries: &[
+                binding(0, &position_buffer),
+                binding(1, &value_buffer),
+                binding(2, &re_buffer),
+                binding(3, &im_buffer),
+                binding(4, &deconv_buffer),
+                binding(5, &output_buffer),
+                binding(6, &coeff_buffer),
+                binding(7, &self.fast_3d_params_buffer),
+            ],
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("apollo-nufft-wgpu fast3d type1 encoder"),
+        });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollo-nufft-wgpu fast3d type1 spread pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.fast_type1_spread_3d_pipeline);
+            pass.set_bind_group(0, &spread_bg, &[]);
+            pass.dispatch_workgroups(dispatch_count(grid_len as u32), 1, 1);
+        }
+
+        let fft =
+            GpuFft3d::new(Arc::clone(device), Arc::clone(queue), mx, my, mz).map_err(|_| {
+                NufftWgpuError::InvalidPlan {
+                    message: "oversampled 3D FFT plan is invalid for WGPU execution",
+                }
+            })?;
+        fft.encode_forward_split(&mut encoder, &re_buffer, &im_buffer);
+
+        let extract_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("apollo-nufft-wgpu fast3d type1 extract bg"),
+            layout: &self.fast_3d_extract_layout,
+            entries: &[
+                binding(0, &position_buffer),
+                binding(1, &value_buffer),
+                binding(2, &re_buffer),
+                binding(3, &im_buffer),
+                binding(4, &deconv_buffer),
+                binding(5, &output_buffer),
+                binding(6, &coeff_buffer),
+                binding(7, &self.fast_3d_params_buffer),
+            ],
+        });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollo-nufft-wgpu fast3d type1 extract pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.fast_type1_extract_3d_pipeline);
+            pass.set_bind_group(0, &extract_bg, &[]);
+            pass.dispatch_workgroups(dispatch_count(output_len as u32), 1, 1);
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+        read_complex_buffer(device, queue, &output_buffer, output_len)
+    }
+
+    /// Execute fast gridded Type-2 3D NUFFT with GPU separable IFFT, deconvolution, and interpolation.
+    ///
+    /// Algorithm:
+    /// 1. Load: one thread per oversampled grid cell, places deconvolved mode at grid position.
+    /// 2. Inverse 3D FFT: uses `GpuFft3d` on the oversampled split grid (mx, my, mz).
+    /// 3. Interpolate: one thread per non-uniform sample, reads IFFT'd grid with KB kernel.
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_fast_type2_3d(
+        &self,
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+        shape: (usize, usize, usize),
+        oversampled: (usize, usize, usize),
+        kernel_width: usize,
+        lengths: (f32, f32, f32),
+        beta: f32,
+        i0_beta: f32,
+        deconv_xyz: &[f32],
+        modes: &[Complex32],
+        positions: &[(f32, f32, f32)],
+    ) -> NufftWgpuResult<Vec<Complex32>> {
+        let (nx, ny, nz) = shape;
+        let (mx, my, mz) = oversampled;
+        let (lx, ly, lz) = lengths;
+        let grid_len = mx * my * mz;
+
+        let coeff_data = complex_to_pods(modes);
+        let position_data: Vec<Position3Pod> = positions
+            .iter()
+            .map(|(x, y, z)| Position3Pod {
+                x: *x,
+                y: *y,
+                z: *z,
+                _pad: 0.0,
+            })
+            .collect();
+        let empty_values = vec![ComplexPod::zeroed(); positions.len().max(1)];
+
+        let coeff_buffer =
+            storage_buffer(device, "apollo-nufft-wgpu fast3d type2 coeffs", &coeff_data);
+        let position_buffer = storage_buffer(
+            device,
+            "apollo-nufft-wgpu fast3d type2 positions",
+            &position_data,
+        );
+        let deconv_buffer =
+            storage_buffer(device, "apollo-nufft-wgpu fast3d type2 deconv", deconv_xyz);
+        let values_placeholder = storage_buffer(
+            device,
+            "apollo-nufft-wgpu fast3d type2 values placeholder",
+            &empty_values,
+        );
+        let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-nufft-wgpu fast3d type2 output"),
+            size: (positions.len() * std::mem::size_of::<ComplexPod>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let (re_buffer, im_buffer) = split_grid_buffers(device, grid_len);
+
+        let params = FastNufftParams3D {
+            nx: nx as u32,
+            ny: ny as u32,
+            nz: nz as u32,
+            mx: mx as u32,
+            my: my as u32,
+            mz: mz as u32,
+            sample_count: positions.len() as u32,
+            kernel_width: kernel_width as u32,
+            lx,
+            ly,
+            lz,
+            beta,
+            i0_beta,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+        };
+        queue.write_buffer(&self.fast_3d_params_buffer, 0, bytemuck::bytes_of(&params));
+
+        let load_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("apollo-nufft-wgpu fast3d type2 load bg"),
+            layout: &self.fast_3d_extract_layout,
+            entries: &[
+                binding(0, &position_buffer),
+                binding(1, &values_placeholder),
+                binding(2, &re_buffer),
+                binding(3, &im_buffer),
+                binding(4, &deconv_buffer),
+                binding(5, &output_buffer),
+                binding(6, &coeff_buffer),
+                binding(7, &self.fast_3d_params_buffer),
+            ],
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("apollo-nufft-wgpu fast3d type2 encoder"),
+        });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollo-nufft-wgpu fast3d type2 load pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.fast_type2_load_3d_pipeline);
+            pass.set_bind_group(0, &load_bg, &[]);
+            pass.dispatch_workgroups(dispatch_count(grid_len as u32), 1, 1);
+        }
+
+        let fft =
+            GpuFft3d::new(Arc::clone(device), Arc::clone(queue), mx, my, mz).map_err(|_| {
+                NufftWgpuError::InvalidPlan {
+                    message: "oversampled 3D IFFT plan is invalid for WGPU execution",
+                }
+            })?;
+        fft.encode_inverse_split(&mut encoder, &re_buffer, &im_buffer);
+
+        let interp_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("apollo-nufft-wgpu fast3d type2 interpolate bg"),
+            layout: &self.fast_3d_spread_layout,
+            entries: &[
+                binding(0, &position_buffer),
+                binding(1, &values_placeholder),
+                binding(2, &re_buffer),
+                binding(3, &im_buffer),
+                binding(4, &deconv_buffer),
+                binding(5, &output_buffer),
+                binding(6, &coeff_buffer),
+                binding(7, &self.fast_3d_params_buffer),
+            ],
+        });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollo-nufft-wgpu fast3d type2 interpolate pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.fast_type2_interpolate_3d_pipeline);
+            pass.set_bind_group(0, &interp_bg, &[]);
+            pass.dispatch_workgroups(dispatch_count(positions.len() as u32), 1, 1);
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+        read_complex_buffer(device, queue, &output_buffer, positions.len())
+    }
+
     fn execute(
         &self,
         device: &wgpu::Device,
@@ -770,6 +1191,22 @@ fn uniform_layout_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
             min_binding_size: Some(
                 std::num::NonZeroU64::new(std::mem::size_of::<NufftParams>() as u64)
                     .expect("nonzero uniform size"),
+            ),
+        },
+        count: None,
+    }
+}
+
+fn uniform_layout_entry_3d(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: Some(
+                std::num::NonZeroU64::new(std::mem::size_of::<FastNufftParams3D>() as u64)
+                    .expect("nonzero 3d uniform size"),
             ),
         },
         count: None,

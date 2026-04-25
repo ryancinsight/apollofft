@@ -54,7 +54,7 @@
 - [x] Implement exact direct Type-2 3D NUFFT owner reference and WGPU kernels inside `apollo-nufft-wgpu` with CPU parity tests before reporting execution support.
 - [x] Implement direct dense DFT SFT WGPU kernels with deterministic sparse top-K projection and CPU parity tests inside `apollo-sft-wgpu`.
 - [x] Implement NUFFT WGPU fast 1D gridding paths using GPU spreading/interpolation, oversampled FFT dispatch, and deconvolution.
-- [ ] Implement NUFFT WGPU fast 3D gridding paths using GPU separable spreading/interpolation, oversampled 3D FFT dispatch, and deconvolution.
+- [x] Implement NUFFT WGPU fast 3D gridding paths using GPU separable spreading/interpolation, oversampled 3D FFT dispatch, and deconvolution.
 - [x] Implement SHT WGPU numerical kernels using owner-derived basis/quadrature buffers inside `apollo-sht-wgpu` with CPU parity tests.
 - [x] Implement forward and inverse FrFT WGPU kernels inside `apollo-frft-wgpu` with CPU parity tests for all 5 dispatch modes (identity, centred DFT, reversal, centred IDFT, general chirp).
 - [x] Implement forward direct-bin sliding DFT WGPU kernels inside `apollo-sdft-wgpu` with CPU parity tests before reporting execution support.

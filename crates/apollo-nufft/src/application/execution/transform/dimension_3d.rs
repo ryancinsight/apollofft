@@ -43,6 +43,14 @@ use crate::infrastructure::kernel::kaiser_bessel::{
 };
 use crate::DEFAULT_NUFFT_OVERSAMPLING;
 
+fn supported_radix2_oversampled_len(n: usize, sigma: usize, kernel_width: usize) -> usize {
+    let lower = n
+        .checked_mul(sigma)
+        .expect("NUFFT oversampled length overflow")
+        .max(2 * kernel_width + 1);
+    lower.next_power_of_two()
+}
+
 #[derive(Clone, Copy)]
 struct IndexedPoint3D {
     x: f64,
@@ -184,9 +192,9 @@ impl NufftPlan3D {
         assert!(sigma >= 2, "sigma must be >= 2");
         assert!(kernel_width >= 2, "kernel_width must be >= 2");
 
-        let mx = sigma * grid.nx;
-        let my = sigma * grid.ny;
-        let mz = sigma * grid.nz;
+        let mx = supported_radix2_oversampled_len(grid.nx, sigma, kernel_width);
+        let my = supported_radix2_oversampled_len(grid.ny, sigma, kernel_width);
+        let mz = supported_radix2_oversampled_len(grid.nz, sigma, kernel_width);
         let beta = PI * (1.0 - 1.0 / (2.0 * sigma as f64)) * (2 * kernel_width) as f64;
         let i0_beta = i0(beta);
 
@@ -611,6 +619,21 @@ pub fn nufft_type1_3d_fast(
     NufftPlan3D::new(grid, DEFAULT_NUFFT_OVERSAMPLING, kernel_width).type1(positions, values)
 }
 
+/// Fast 3D type-2 NUFFT convenience wrapper.
+///
+/// Interpolates uniform Fourier coefficients at non-uniform positions using
+/// Kaiser-Bessel spreading of the deconvolved oversampled grid followed by
+/// a separable inverse Apollo FFT on each axis.
+#[must_use]
+pub fn nufft_type2_3d_fast(
+    positions: &[(f64, f64, f64)],
+    modes: &Array3<Complex64>,
+    grid: UniformGrid3D,
+    kernel_width: usize,
+) -> Vec<Complex64> {
+    NufftPlan3D::new(grid, DEFAULT_NUFFT_OVERSAMPLING, kernel_width).type2(positions, modes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -656,7 +679,7 @@ mod tests {
                 -0.4 + 0.07 * kx as f64 + 0.11 * ky as f64 - 0.02 * kz as f64,
             )
         });
-        let output = nufft_type2_3d(&[(0.0, 0.0, 0.0)], &modes, grid);
+        let output = nufft_type2_3d(&[(0.0, 0.0, 0.0)][..], &modes, grid);
         let expected: Complex64 = modes.iter().copied().sum();
         assert_eq!(output.len(), 1);
         let err = (output[0] - expected).norm();

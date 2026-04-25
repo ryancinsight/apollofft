@@ -67,7 +67,7 @@ impl NufftWgpuBackend {
     /// Return truthful current capabilities.
     #[must_use]
     pub const fn capabilities(&self) -> NufftWgpuCapabilities {
-        NufftWgpuCapabilities::direct_all_fast_1d(true)
+        NufftWgpuCapabilities::direct_all_fast_all(true)
     }
 
     /// Return the acquired WGPU device.
@@ -226,6 +226,84 @@ impl NufftWgpuBackend {
             .collect())
     }
 
+    /// Execute fast gridded Type-1 3D NUFFT on WGPU.
+    pub fn execute_fast_type1_3d(
+        &self,
+        plan: &NufftWgpuPlan3D,
+        positions: &[(f32, f32, f32)],
+        values: &[Complex32],
+    ) -> NufftWgpuResult<Array3<Complex64>> {
+        validate_pair_lengths(positions.len(), values.len())?;
+        let grid = plan.grid();
+        validate_usize_to_u32(grid.nx)?;
+        validate_usize_to_u32(grid.ny)?;
+        validate_usize_to_u32(grid.nz)?;
+        validate_usize_to_u32(positions.len())?;
+        let fast = fast_3d_metadata(plan)?;
+        let (lx, ly, lz) = grid.lengths();
+        let output = self.kernel.execute_fast_type1_3d(
+            &self.device,
+            &self.queue,
+            (grid.nx, grid.ny, grid.nz),
+            (fast.mx, fast.my, fast.mz),
+            plan.kernel_width(),
+            (lx as f32, ly as f32, lz as f32),
+            fast.beta as f32,
+            fast.i0_beta as f32,
+            &fast.deconv_xyz,
+            positions,
+            values,
+        )?;
+        let converted: Vec<Complex64> = output
+            .into_iter()
+            .map(|v| Complex64::new(v.re as f64, v.im as f64))
+            .collect();
+        Array3::from_shape_vec((grid.nx, grid.ny, grid.nz), converted).map_err(|_| {
+            NufftWgpuError::InvalidPlan {
+                message: "fast 3D type1 output shape does not match grid dimensions",
+            }
+        })
+    }
+
+    /// Execute fast gridded Type-2 3D NUFFT on WGPU.
+    pub fn execute_fast_type2_3d(
+        &self,
+        plan: &NufftWgpuPlan3D,
+        modes: &Array3<Complex32>,
+        positions: &[(f32, f32, f32)],
+    ) -> NufftWgpuResult<Vec<Complex64>> {
+        let grid = plan.grid();
+        if modes.dim() != (grid.nx, grid.ny, grid.nz) {
+            return Err(NufftWgpuError::InvalidPlan {
+                message: "mode shape must match 3D plan grid dimensions",
+            });
+        }
+        validate_usize_to_u32(grid.nx)?;
+        validate_usize_to_u32(grid.ny)?;
+        validate_usize_to_u32(grid.nz)?;
+        validate_usize_to_u32(positions.len())?;
+        let fast = fast_3d_metadata(plan)?;
+        let (lx, ly, lz) = grid.lengths();
+        let flat_modes: Vec<Complex32> = modes.iter().copied().collect();
+        let output = self.kernel.execute_fast_type2_3d(
+            &self.device,
+            &self.queue,
+            (grid.nx, grid.ny, grid.nz),
+            (fast.mx, fast.my, fast.mz),
+            plan.kernel_width(),
+            (lx as f32, ly as f32, lz as f32),
+            fast.beta as f32,
+            fast.i0_beta as f32,
+            &fast.deconv_xyz,
+            &flat_modes,
+            positions,
+        )?;
+        Ok(output
+            .into_iter()
+            .map(|v| Complex64::new(v.re as f64, v.im as f64))
+            .collect())
+    }
+
     /// Execute exact direct Type-1 3D NUFFT on WGPU.
     pub fn execute_type1_3d(
         &self,
@@ -291,6 +369,111 @@ impl NufftWgpuBackend {
             .map(|value| Complex64::new(value.re as f64, value.im as f64))
             .collect())
     }
+}
+
+struct Fast3DMetadata {
+    mx: usize,
+    my: usize,
+    mz: usize,
+    beta: f64,
+    i0_beta: f64,
+    deconv_xyz: Vec<f32>,
+}
+
+fn fast_3d_metadata(plan: &NufftWgpuPlan3D) -> NufftWgpuResult<Fast3DMetadata> {
+    let grid = plan.grid();
+    let sigma = plan.oversampling();
+    let w = plan.kernel_width();
+    if sigma < 2 {
+        return Err(NufftWgpuError::InvalidPlan {
+            message: "fast 3D NUFFT oversampling factor must be >= 2",
+        });
+    }
+    if w < 2 {
+        return Err(NufftWgpuError::InvalidPlan {
+            message: "fast 3D NUFFT kernel width must be >= 2",
+        });
+    }
+    let mx_raw = grid
+        .nx
+        .checked_mul(sigma)
+        .ok_or(NufftWgpuError::InvalidPlan {
+            message: "fast 3D NUFFT mx overflow",
+        })?
+        .max(2 * w + 1);
+    let my_raw = grid
+        .ny
+        .checked_mul(sigma)
+        .ok_or(NufftWgpuError::InvalidPlan {
+            message: "fast 3D NUFFT my overflow",
+        })?
+        .max(2 * w + 1);
+    let mz_raw = grid
+        .nz
+        .checked_mul(sigma)
+        .ok_or(NufftWgpuError::InvalidPlan {
+            message: "fast 3D NUFFT mz overflow",
+        })?
+        .max(2 * w + 1);
+    let mx = mx_raw
+        .checked_next_power_of_two()
+        .ok_or(NufftWgpuError::InvalidPlan {
+            message: "fast 3D NUFFT mx radix-2 length overflow",
+        })?;
+    let my = my_raw
+        .checked_next_power_of_two()
+        .ok_or(NufftWgpuError::InvalidPlan {
+            message: "fast 3D NUFFT my radix-2 length overflow",
+        })?;
+    let mz = mz_raw
+        .checked_next_power_of_two()
+        .ok_or(NufftWgpuError::InvalidPlan {
+            message: "fast 3D NUFFT mz radix-2 length overflow",
+        })?;
+    validate_usize_to_u32(mx)?;
+    validate_usize_to_u32(my)?;
+    validate_usize_to_u32(mz)?;
+    validate_usize_to_u32(
+        mx.checked_mul(my)
+            .and_then(|v| v.checked_mul(mz))
+            .unwrap_or(usize::MAX),
+    )?;
+
+    let beta = std::f64::consts::PI * (1.0 - 1.0 / (2.0 * sigma as f64)) * (2 * w) as f64;
+    let i0_beta = i0(beta);
+
+    let deconv_x: Vec<f32> = (0..grid.nx)
+        .map(|k| {
+            let xi = fft_signed_index(k, grid.nx) as f64 / mx as f64;
+            (1.0 / kb_kernel_ft(xi, w, beta, i0_beta)) as f32
+        })
+        .collect();
+    let deconv_y: Vec<f32> = (0..grid.ny)
+        .map(|k| {
+            let xi = fft_signed_index(k, grid.ny) as f64 / my as f64;
+            (1.0 / kb_kernel_ft(xi, w, beta, i0_beta)) as f32
+        })
+        .collect();
+    let deconv_z: Vec<f32> = (0..grid.nz)
+        .map(|k| {
+            let xi = fft_signed_index(k, grid.nz) as f64 / mz as f64;
+            (1.0 / kb_kernel_ft(xi, w, beta, i0_beta)) as f32
+        })
+        .collect();
+
+    let mut deconv_xyz = Vec::with_capacity(grid.nx + grid.ny + grid.nz);
+    deconv_xyz.extend_from_slice(&deconv_x);
+    deconv_xyz.extend_from_slice(&deconv_y);
+    deconv_xyz.extend_from_slice(&deconv_z);
+
+    Ok(Fast3DMetadata {
+        mx,
+        my,
+        mz,
+        beta,
+        i0_beta,
+        deconv_xyz,
+    })
 }
 
 fn validate_pair_lengths(expected: usize, actual: usize) -> NufftWgpuResult<()> {

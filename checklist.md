@@ -77,4 +77,4 @@
 - [x] Add SFT WGPU direct dense DFT forward/inverse execution with sparse top-K CPU parity validation.
 - [x] Add SHT WGPU direct spherical harmonic execution without duplicating CPU-owner basis/quadrature logic.
 - [x] Add NUFFT WGPU fast 1D gridding execution after direct 1D/3D coverage.
-- [ ] Add NUFFT WGPU fast 3D gridding execution after fast 1D parity coverage.
+- [x] Add NUFFT WGPU fast 3D gridding execution after fast 1D parity coverage.
