@@ -5,7 +5,7 @@
 - `kwavers::math::fft::Fft1d` -> `apollofft::plan::FftPlan1D`
 - `kwavers::math::fft::Fft2d` -> `apollofft::plan::FftPlan2D`
 - `kwavers::math::fft::Fft3d` -> `apollofft::plan::FftPlan3D`
-- `kwavers::math::fft::gpu_fft::GpuFft3d` -> `apollofft_wgpu::GpuFft3d`
+- `kwavers::math::fft::gpu_fft::GpuFft3d` -> `apollo_fft_wgpu::GpuFft3d`
 - `kwavers::math::fft::get_fft_for_grid` -> `apollofft::get_fft_for_grid`
 - `kwavers::math::fft::nufft::*` -> `apollofft::nufft::*`
 
@@ -46,8 +46,9 @@ Current mixed-precision meaning:
 
 ## WGPU Semantics
 
-Apollo Stage 2 removes the CPU delegation path from the WGPU crate. `apollofft-wgpu` now reports truthful capability boundaries:
+Apollo Stage 2 removes the CPU delegation path from the dense FFT WGPU crate. `apollo-fft-wgpu` now reports truthful capability boundaries:
 
 - 3D GPU FFT is implemented.
 - 1D and 2D WGPU planning are not exposed in this stage.
 - Python capability reporting only advertises `wgpu` when the host can actually acquire a usable adapter/device.
+- NUFFT WGPU integration belongs in `apollo-nufft-wgpu`, not in the dense FFT WGPU crate.

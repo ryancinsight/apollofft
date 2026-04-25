@@ -1,0 +1,63 @@
+# Apollo Backlog
+
+## Closed in this sprint
+- [x] Register every `crates/apollo-*` crate in the root workspace.
+- [x] Replace incomplete `apollo-validation` orchestration with computed CPU, GPU-surface, NUFFT, external-reference, benchmark, and environment reports.
+- [x] Add real crate roots for `apollo-frft`, `apollo-gft`, and `apollo-stft`.
+- [x] Correct CZT Bluestein convolution lag construction against the direct CZT definition.
+- [x] Correct SFT expected coefficients against the analytical DFT of the test signal.
+- [x] Consolidate SFT ownership into `apollo-sft` and split it into domain, application, infrastructure, and verification modules.
+- [x] Correct STFT boundary coverage by using centered analysis frames with overlap-add normalization.
+- [x] Align `apollo-python` with current crate names, shape newtypes, and full-spectrum FFT plan APIs.
+- [x] Split `apollo-validation` external references behind an optional validation-only feature so `rustfft` and `realfft` are not used by non-validation crates.
+- [x] Complete `apollo-validation` with the new multi-crate API surface and conditional external-backend wiring.
+- [x] Fix `FftPlan1D` and `FftPlan2D` missing `forward_complex`/`inverse_complex` allocating wrappers (parity with `FftPlan3D`).
+- [x] Replace O(N^2) direct DFT kernels with O(N log N) strategy: iterative Cooley-Tukey radix-2 for power-of-2 sizes and Bluestein chirp-Z for arbitrary sizes; auto-selection in `kernel::fft_forward_64`, `fft_inverse_64`, etc.; all plan files updated to use new API; `rustfft` removed from production `apollo-fft` dependency.
+- [x] Add and complete `apollo-hilbert` with Hilbert transform plans, analytic-signal storage, envelope/phase extraction, and analytical/property tests.
+- [x] Add and complete `apollo-radon` with parallel-beam forward projections, adjoint backprojection, ramp-filtered backprojection, sinogram storage, and analytical/property tests.
+- [x] Complete `apollo-mellin` with Mellin moments, log-frequency spectra, execution contracts, and analytical tests.
+- [x] Replace stale skeleton documentation in completed transform crates and add DCT/DST value-semantic tests.
+- [x] Remove the incorrect unverified DCT/DST fast branch and add large-plan parity tests against analytical kernels.
+- [x] Add Python `rfft3`/`irfft3` value-semantic tests documenting the full-spectrum contract and asserting computed output values.
+- [x] Add validation report JSON schema-shape tests for required top-level and nested sections.
+- [x] Add Criterion benchmark target for Apollo FFT direct, radix-2, and Bluestein kernel strategies.
+- [x] Reduce Radon filtered-backprojection allocation by adding caller-owned ramp filtering.
+- [x] Correct stale FFT architecture docs from direct-kernel execution to radix-2/Bluestein auto-selection.
+- [x] Reduce FFT 2D/3D axis-pass peak scratch by transforming gathered lanes in place instead of collecting transformed lane copies.
+- [x] Reduce NUFFT interpolation and 3D separable-pass allocation by borrowing type-2 grids and reusing per-axis lane buffers.
+- [x] Add `apollo-czt` crate README, CZT/Bluestein theorem docs, caller-owned forward path, and in-place convolution workspace multiplication.
+- [x] Add `apollo-fwht` crate README, Hadamard involution theorem docs, caller-owned real/complex output paths, and parity tests.
+- [x] Add `apollo-ntt` crate README, root-of-unity theorem docs, true in-place execution, caller-owned output paths, residue normalization, and overflow-safe modular addition.
+- [x] Add `apollo-frft` crate README, FrFT rotation theorem docs, finite singular integer-order plan state, inverse APIs, and inverse parity tests.
+- [x] Add `apollo-stft` crate README, overlap-add theorem docs, cleaned module comments, actionable buffer diagnostics, and inverse caller-owned parity tests.
+- [x] Add `apollo-dctdst` crate README, DCT/DST inverse-pair theorem docs, caller-owned inverse output, and inverse parity tests.
+- [x] Clean `apollo-sft` Rustdoc encoding, remove deprecated ndarray raw-vector extraction, and reuse the crate-local direct DFT reference in verification.
+- [x] Restore `apollo-ntt` plan implementation after truncation and verify modular arithmetic, convolution, caller-owned, and property tests.
+- [x] Repair CZT test placement, enable `Complex64` metadata serialization, and reject zero-magnitude CZT step parameters.
+- [x] Repair SHT source encoding so Rust tooling parses theorem/reference docs.
+- [x] Repair SDFT result propagation and QFT property-test plan construction.
+- [x] Remove duplicated NUFFT 3D module tail, restore sorted type-2 interpolation, and replace approximate `I_0` with the defining convergent series.
+- [x] Correct Wavelet Morlet admissibility documentation and kernel by applying the DC correction with a zero-mean numerical proof test.
+- [x] Add crate-local architecture README files for all `crates/apollo-*` crates.
+- [x] Split the WGPU backend boundary into `apollo-fft-wgpu` and `apollo-nufft-wgpu`.
+- [x] Add per-transform WGPU backend crates for CZT, DCT/DST, DHT, FrFT, FWHT, GFT, Hilbert, Mellin, NTT, QFT, Radon, SDFT, SFT, SHT, STFT, and Wavelet.
+- [x] Eliminate per-stage `Vec<Complex>` twiddle allocations in radix-2 (f32/f64 forward/inverse) by replacing with a single N/2-entry stride-indexed table (Unified Twiddle Table theorem proved in module doc).
+- [x] Cache Bluestein scratch buffer in `FftPlan1D` via `Mutex<Vec<Complex64>>` to eliminate per-call heap allocation on the non-power-of-two hot path.
+- [x] Precompute DWT highpass QMF coefficients once per `analysis_stage_into`/`synthesis_stage_into` call; QMF identity g[k] = (-1)^k·h[L-1-k] proved from Smith-Barnwell PR condition.
+- [x] Add Parseval/Plancherel energy-invariance theorem with proof to `radix2.rs` module doc; add Unified Twiddle Table theorem proving stride-index equivalence.
+- [x] Add I_0 convergence theorem (geometric tail bound, K=256 sufficiency corollary) to `kaiser_bessel.rs`.
+
+## Next increments
+- [ ] Reintroduce DCT/DST acceleration only after deriving a correct FFT mapping and proving parity against direct kernels.
+- [x] Implement exact direct Type-1 1D/3D NUFFT WGPU kernels inside `apollo-nufft-wgpu` with CPU parity tests before reporting execution support.
+- [x] Implement exact direct Type-2 1D NUFFT WGPU kernels inside `apollo-nufft-wgpu` with CPU parity tests before reporting execution support.
+- [x] Implement exact direct Type-2 3D NUFFT owner reference and WGPU kernels inside `apollo-nufft-wgpu` with CPU parity tests before reporting execution support.
+- [x] Implement direct dense DFT SFT WGPU kernels with deterministic sparse top-K projection and CPU parity tests inside `apollo-sft-wgpu`.
+- [ ] Implement NUFFT WGPU fast gridding paths using GPU spreading/interpolation, oversampled FFT dispatch, and deconvolution.
+- [x] Implement SHT WGPU numerical kernels using owner-derived basis/quadrature buffers inside `apollo-sht-wgpu` with CPU parity tests.
+- [x] Implement forward and inverse FrFT WGPU kernels inside `apollo-frft-wgpu` with CPU parity tests for all 5 dispatch modes (identity, centred DFT, reversal, centred IDFT, general chirp).
+- [x] Implement forward direct-bin sliding DFT WGPU kernels inside `apollo-sdft-wgpu` with CPU parity tests before reporting execution support.
+- [x] Implement forward Hann-windowed STFT WGPU kernels inside `apollo-stft-wgpu` with CPU parity tests before reporting execution support.
+- [x] Implement forward and inverse Haar DWT WGPU kernels inside `apollo-wavelet-wgpu` with CPU parity tests before reporting execution support.
+- [ ] Investigate and document whether the `realfft` mention in planning artifacts requires any additional feature gate (currently no code imports realfft outside apollo-validation).
+- [ ] Audit remaining transform crates against published references and add cross-crate validation fixtures where useful.

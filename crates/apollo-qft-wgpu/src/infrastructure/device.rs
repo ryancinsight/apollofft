@@ -1,0 +1,132 @@
+//! WGPU device acquisition for this transform backend.
+
+use std::sync::Arc;
+
+use num_complex::Complex32;
+
+use crate::application::plan::QftWgpuPlan;
+use crate::domain::capabilities::WgpuCapabilities;
+use crate::domain::error::{WgpuError, WgpuResult};
+use crate::infrastructure::kernel::{QftGpuKernel, QftMode};
+
+/// Return whether a default WGPU adapter/device can be acquired.
+#[must_use]
+pub fn wgpu_available() -> bool {
+    QftWgpuBackend::try_default().is_ok()
+}
+
+/// WGPU backend descriptor.
+#[derive(Debug, Clone)]
+pub struct QftWgpuBackend {
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    kernel: Arc<QftGpuKernel>,
+}
+
+impl QftWgpuBackend {
+    /// Create a backend from an existing device and queue.
+    #[must_use]
+    pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {
+        Self {
+            kernel: Arc::new(QftGpuKernel::new(device.as_ref())),
+            device,
+            queue,
+        }
+    }
+
+    /// Create a backend by requesting a default adapter and device.
+    pub fn try_default() -> WgpuResult<Self> {
+        let instance = wgpu::Instance::default();
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .map_err(|error| WgpuError::AdapterUnavailable {
+                message: error.to_string(),
+            })?;
+        let descriptor = wgpu::DeviceDescriptor {
+            label: Some("apollo-qft-wgpu"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::downlevel_defaults(),
+            memory_hints: wgpu::MemoryHints::default(),
+            trace: wgpu::Trace::Off,
+        };
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&descriptor)).map_err(|error| {
+                WgpuError::DeviceUnavailable {
+                    message: error.to_string(),
+                }
+            })?;
+        Ok(Self::new(Arc::new(device), Arc::new(queue)))
+    }
+
+    /// Return truthful current capabilities.
+    #[must_use]
+    pub const fn capabilities(&self) -> WgpuCapabilities {
+        WgpuCapabilities::direct_unitary(true)
+    }
+
+    /// Return the acquired WGPU device.
+    #[must_use]
+    pub fn device(&self) -> &Arc<wgpu::Device> {
+        &self.device
+    }
+
+    /// Return the acquired WGPU queue.
+    #[must_use]
+    pub fn queue(&self) -> &Arc<wgpu::Queue> {
+        &self.queue
+    }
+
+    /// Create a metadata-only plan descriptor.
+    #[must_use]
+    pub const fn plan(&self, len: usize) -> QftWgpuPlan {
+        QftWgpuPlan::new(len)
+    }
+
+    /// Execute the forward unitary QFT.
+    pub fn execute_forward(
+        &self,
+        plan: &QftWgpuPlan,
+        input: &[Complex32],
+    ) -> WgpuResult<Vec<Complex32>> {
+        Self::validate_inputs(plan, input)?;
+        self.kernel.execute(
+            self.device.as_ref(),
+            self.queue.as_ref(),
+            input,
+            plan.len(),
+            QftMode::Forward,
+        )
+    }
+
+    /// Execute the inverse unitary QFT.
+    pub fn execute_inverse(
+        &self,
+        plan: &QftWgpuPlan,
+        input: &[Complex32],
+    ) -> WgpuResult<Vec<Complex32>> {
+        Self::validate_inputs(plan, input)?;
+        self.kernel.execute(
+            self.device.as_ref(),
+            self.queue.as_ref(),
+            input,
+            plan.len(),
+            QftMode::Inverse,
+        )
+    }
+
+    fn validate_inputs(plan: &QftWgpuPlan, input: &[Complex32]) -> WgpuResult<()> {
+        if plan.len() == 0 {
+            return Err(WgpuError::InvalidPlan {
+                len: plan.len(),
+                message: "transform length must be greater than zero",
+            });
+        }
+        if input.len() != plan.len() {
+            return Err(WgpuError::InputLengthMismatch {
+                expected: plan.len(),
+                actual: input.len(),
+            });
+        }
+        Ok(())
+    }
+}

@@ -3,6 +3,7 @@
 
 pub mod application;
 pub mod domain;
+/// Infrastructure hooks for validation tooling.
 pub mod infrastructure;
 
 pub use application::suite::{

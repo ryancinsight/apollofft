@@ -1,0 +1,201 @@
+//! WGPU device acquisition for this transform backend.
+
+use std::sync::Arc;
+
+use apollo_sft::SparseSpectrum;
+use num_complex::{Complex32, Complex64};
+
+use crate::application::plan::SftWgpuPlan;
+use crate::domain::capabilities::WgpuCapabilities;
+use crate::domain::error::{WgpuError, WgpuResult};
+use crate::infrastructure::kernel::{SftGpuKernel, SftMode};
+
+/// Return whether a default WGPU adapter/device can be acquired.
+#[must_use]
+pub fn wgpu_available() -> bool {
+    SftWgpuBackend::try_default().is_ok()
+}
+
+/// WGPU backend descriptor.
+#[derive(Debug, Clone)]
+pub struct SftWgpuBackend {
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    kernel: Arc<SftGpuKernel>,
+}
+
+impl SftWgpuBackend {
+    /// Create a backend from an existing device and queue.
+    #[must_use]
+    pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {
+        Self {
+            kernel: Arc::new(SftGpuKernel::new(device.as_ref())),
+            device,
+            queue,
+        }
+    }
+
+    /// Create a backend by requesting a default adapter and device.
+    pub fn try_default() -> WgpuResult<Self> {
+        let instance = wgpu::Instance::default();
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .map_err(|error| WgpuError::AdapterUnavailable {
+                message: error.to_string(),
+            })?;
+        let descriptor = wgpu::DeviceDescriptor {
+            label: Some("apollo-sft-wgpu"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::downlevel_defaults(),
+            memory_hints: wgpu::MemoryHints::default(),
+            trace: wgpu::Trace::Off,
+        };
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&descriptor)).map_err(|error| {
+                WgpuError::DeviceUnavailable {
+                    message: error.to_string(),
+                }
+            })?;
+        Ok(Self::new(Arc::new(device), Arc::new(queue)))
+    }
+
+    /// Return truthful current capabilities.
+    #[must_use]
+    pub const fn capabilities(&self) -> WgpuCapabilities {
+        WgpuCapabilities::direct_dense_spectrum(true)
+    }
+
+    /// Return the acquired WGPU device.
+    #[must_use]
+    pub fn device(&self) -> &Arc<wgpu::Device> {
+        &self.device
+    }
+
+    /// Return the acquired WGPU queue.
+    #[must_use]
+    pub fn queue(&self) -> &Arc<wgpu::Queue> {
+        &self.queue
+    }
+
+    /// Create a metadata-only plan descriptor.
+    #[must_use]
+    pub const fn plan(&self, len: usize, sparsity: usize) -> SftWgpuPlan {
+        SftWgpuPlan::new(len, sparsity)
+    }
+
+    /// Execute direct dense-spectrum SFT followed by deterministic top-k support selection.
+    ///
+    /// The GPU computes the full DFT. Host-side selection preserves the CPU
+    /// crate's sparse-domain contract: largest magnitudes, lower index as the
+    /// deterministic tie-breaker, and ascending stored support.
+    pub fn execute_forward(
+        &self,
+        plan: &SftWgpuPlan,
+        input: &[Complex32],
+    ) -> WgpuResult<SparseSpectrum> {
+        Self::validate_plan(plan)?;
+        if input.len() != plan.len() {
+            return Err(WgpuError::InputLengthMismatch {
+                expected: plan.len(),
+                actual: input.len(),
+            });
+        }
+        let dense = self.kernel.execute(
+            self.device.as_ref(),
+            self.queue.as_ref(),
+            input,
+            plan.len(),
+            SftMode::Forward,
+        )?;
+        select_top_k(plan.len(), plan.sparsity(), &dense)
+    }
+
+    /// Execute inverse reconstruction from a sparse spectrum.
+    pub fn execute_inverse(
+        &self,
+        plan: &SftWgpuPlan,
+        spectrum: &SparseSpectrum,
+    ) -> WgpuResult<Vec<Complex32>> {
+        Self::validate_plan(plan)?;
+        if spectrum.n != plan.len() {
+            return Err(WgpuError::InputLengthMismatch {
+                expected: plan.len(),
+                actual: spectrum.n,
+            });
+        }
+        let dense: Vec<Complex32> = spectrum
+            .to_dense()
+            .iter()
+            .map(|value| Complex32::new(value.re as f32, value.im as f32))
+            .collect();
+        self.kernel.execute(
+            self.device.as_ref(),
+            self.queue.as_ref(),
+            &dense,
+            plan.len(),
+            SftMode::Inverse,
+        )
+    }
+
+    fn validate_plan(plan: &SftWgpuPlan) -> WgpuResult<()> {
+        if plan.len() == 0 {
+            return Err(WgpuError::InvalidPlan {
+                len: plan.len(),
+                sparsity: plan.sparsity(),
+                message: "transform length must be greater than zero",
+            });
+        }
+        if plan.sparsity() == 0 {
+            return Err(WgpuError::InvalidPlan {
+                len: plan.len(),
+                sparsity: plan.sparsity(),
+                message: "sparsity must be greater than zero",
+            });
+        }
+        if plan.sparsity() > plan.len() {
+            return Err(WgpuError::InvalidPlan {
+                len: plan.len(),
+                sparsity: plan.sparsity(),
+                message: "sparsity must not exceed transform length",
+            });
+        }
+        if plan.len() > u32::MAX as usize {
+            return Err(WgpuError::InvalidPlan {
+                len: plan.len(),
+                sparsity: plan.sparsity(),
+                message: "transform length must fit in u32 for WGPU dispatch",
+            });
+        }
+        Ok(())
+    }
+}
+
+fn select_top_k(len: usize, sparsity: usize, dense: &[Complex32]) -> WgpuResult<SparseSpectrum> {
+    let mut ranked: Vec<(usize, Complex32, f32)> = dense
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, value)| (index, value, value.norm_sqr()))
+        .filter(|(_, _, energy)| *energy > 0.0)
+        .collect();
+    ranked.sort_by(|left, right| {
+        right
+            .2
+            .total_cmp(&left.2)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    ranked.truncate(sparsity);
+    ranked.sort_by_key(|(index, _, _)| *index);
+
+    let mut spectrum = SparseSpectrum::new(len);
+    for (frequency, value, _) in ranked {
+        spectrum
+            .insert(frequency, Complex64::new(value.re as f64, value.im as f64))
+            .map_err(|_| WgpuError::InvalidPlan {
+                len,
+                sparsity,
+                message: "selected support violates sparse spectrum invariants",
+            })?;
+    }
+    Ok(spectrum)
+}

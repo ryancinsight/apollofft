@@ -1,0 +1,1 @@
+//! Metadata structures and configurations.

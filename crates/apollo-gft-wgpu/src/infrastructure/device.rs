@@ -1,0 +1,144 @@
+//! WGPU device acquisition and GFT execution backend.
+
+use std::sync::Arc;
+
+use crate::application::plan::GftWgpuPlan;
+use crate::domain::capabilities::WgpuCapabilities;
+use crate::domain::error::{WgpuError, WgpuResult};
+use crate::infrastructure::kernel::GftGpuKernel;
+
+/// Return whether a default WGPU adapter/device can be acquired.
+#[must_use]
+pub fn wgpu_available() -> bool {
+    GftWgpuBackend::try_default().is_ok()
+}
+
+/// WGPU backend for GFT execution.
+#[derive(Debug, Clone)]
+pub struct GftWgpuBackend {
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    kernel: Arc<GftGpuKernel>,
+}
+
+impl GftWgpuBackend {
+    /// Create a backend from an existing device and queue.
+    pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> WgpuResult<Self> {
+        Ok(Self {
+            kernel: Arc::new(GftGpuKernel::new(device.as_ref())),
+            device,
+            queue,
+        })
+    }
+
+    /// Create a backend by requesting a default adapter and device.
+    pub fn try_default() -> WgpuResult<Self> {
+        let instance = wgpu::Instance::default();
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .map_err(|e| WgpuError::AdapterUnavailable {
+                message: e.to_string(),
+            })?;
+        let descriptor = wgpu::DeviceDescriptor {
+            label: Some("apollo-gft-wgpu"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::downlevel_defaults(),
+            memory_hints: wgpu::MemoryHints::default(),
+            trace: wgpu::Trace::Off,
+        };
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&descriptor)).map_err(|e| {
+                WgpuError::DeviceUnavailable {
+                    message: e.to_string(),
+                }
+            })?;
+        Self::new(Arc::new(device), Arc::new(queue))
+    }
+
+    /// Return truthful current capabilities (forward and inverse both implemented).
+    #[must_use]
+    pub const fn capabilities(&self) -> WgpuCapabilities {
+        WgpuCapabilities::implemented(true)
+    }
+
+    /// Return the acquired WGPU device.
+    #[must_use]
+    pub fn device(&self) -> &Arc<wgpu::Device> {
+        &self.device
+    }
+
+    /// Return the acquired WGPU queue.
+    #[must_use]
+    pub fn queue(&self) -> &Arc<wgpu::Queue> {
+        &self.queue
+    }
+
+    /// Create a metadata plan descriptor.
+    #[must_use]
+    pub const fn plan(&self, len: usize) -> GftWgpuPlan {
+        GftWgpuPlan::new(len)
+    }
+
+    /// Execute the forward GFT: X[k] = sum_i U[i,k] * signal[i]  (U^T x).
+    ///
+    /// Requires signal.len() == plan.len() and basis.len() == len*len.
+    pub fn execute_forward(
+        &self,
+        plan: &GftWgpuPlan,
+        signal: &[f32],
+        basis: &[f32],
+    ) -> WgpuResult<Vec<f32>> {
+        Self::validate(plan, signal, basis)?;
+        self.kernel.execute(
+            self.device.as_ref(),
+            self.queue.as_ref(),
+            signal,
+            basis,
+            plan.len(),
+            0,
+        )
+    }
+
+    /// Execute the inverse GFT: x[i] = sum_k U[i,k] * spectrum[k]  (U X).
+    ///
+    /// Requires spectrum.len() == plan.len() and basis.len() == len*len.
+    pub fn execute_inverse(
+        &self,
+        plan: &GftWgpuPlan,
+        spectrum: &[f32],
+        basis: &[f32],
+    ) -> WgpuResult<Vec<f32>> {
+        Self::validate(plan, spectrum, basis)?;
+        self.kernel.execute(
+            self.device.as_ref(),
+            self.queue.as_ref(),
+            spectrum,
+            basis,
+            plan.len(),
+            1,
+        )
+    }
+
+    fn validate(plan: &GftWgpuPlan, signal: &[f32], basis: &[f32]) -> WgpuResult<()> {
+        let n = plan.len();
+        if n == 0 {
+            return Err(WgpuError::InvalidPlan {
+                len: 0,
+                message: "length must be greater than zero",
+            });
+        }
+        if signal.len() != n {
+            return Err(WgpuError::LengthMismatch {
+                expected: n,
+                actual: signal.len(),
+            });
+        }
+        if basis.len() != n * n {
+            return Err(WgpuError::BasisLengthMismatch {
+                expected: n * n,
+                actual: basis.len(),
+            });
+        }
+        Ok(())
+    }
+}

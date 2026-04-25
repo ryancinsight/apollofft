@@ -1,0 +1,428 @@
+//! 1D Type-1 and Type-2 NUFFT executions and plans.
+//!
+//! This module implements a Kaiser-Bessel gridding NUFFT backed by Apollo's
+//! in-repo FFT plan rather than external FFT crates.
+//!
+//! The exact direct transforms serve as the mathematical reference surface,
+//! while the fast paths use oversampled grid spreading followed by Apollo FFT
+//! execution and deconvolution.
+//!
+//! # Mathematical contract
+//!
+//! Type-1 NUFFT maps non-uniform samples `(x_j, c_j)` to uniform Fourier bins
+//!
+//! `f_k = Σ_j c_j exp(-2πi k x_j / L)`
+//!
+//! Type-2 NUFFT maps uniform Fourier bins `f_k` to non-uniform positions
+//!
+//! `g_j = Σ_k f_k exp(2πi k x_j / L)`
+//!
+//! The fast paths approximate the direct sums by spreading to an oversampled
+//! grid with a Kaiser-Bessel kernel and then applying an FFT on the grid.
+//!
+//! # Complexity
+//!
+//! Direct transforms are `O(MN)` where `M` is the number of target bins and
+//! `N` is the number of samples or coefficients.
+//! Fast transforms are `O(Nw + m log m)` where `w` is the kernel width and
+//! `m = σn` is the oversampled grid length.
+//!
+//! # Failure modes
+//!
+//! - positions/value arrays must have equal length
+//! - oversampling factor must satisfy `sigma >= 2`
+//! - kernel width must satisfy `kernel_width >= 2`
+
+use apollo_fft::application::plan::FftPlan1D;
+use apollo_fft::types::{PrecisionProfile, Shape1D};
+use ndarray::Array1;
+use num_complex::Complex64;
+use std::f64::consts::PI;
+
+use crate::domain::metadata::grid::UniformDomain1D;
+use crate::infrastructure::kernel::kaiser_bessel::{
+    bucket_count, fft_signed_index, i0, kb_kernel, kb_kernel_ft,
+};
+use crate::DEFAULT_NUFFT_OVERSAMPLING;
+
+#[derive(Clone, Copy, Debug)]
+struct IndexedPoint1D {
+    x: f64,
+    value: Complex64,
+    bucket: usize,
+}
+
+fn sort_points_1d(
+    positions: &[f64],
+    values: &[Complex64],
+    domain: UniformDomain1D,
+    oversampled_len: usize,
+    kernel_width: usize,
+) -> Vec<IndexedPoint1D> {
+    let buckets = bucket_count(oversampled_len, kernel_width);
+    let bucket_scale = buckets as f64 / domain.length();
+    let mut indexed: Vec<_> = positions
+        .iter()
+        .zip(values.iter())
+        .map(|(&x, &value)| {
+            let x_mod = x.rem_euclid(domain.length());
+            let bucket = ((x_mod * bucket_scale).floor() as usize).min(buckets - 1);
+            IndexedPoint1D {
+                x: x_mod,
+                value,
+                bucket,
+            }
+        })
+        .collect();
+    indexed.sort_unstable_by_key(|lhs| lhs.bucket);
+    indexed
+}
+
+fn sort_positions_1d(
+    positions: &[f64],
+    domain: UniformDomain1D,
+    oversampled_len: usize,
+    kernel_width: usize,
+) -> Vec<(usize, f64, usize)> {
+    let buckets = bucket_count(oversampled_len, kernel_width);
+    let bucket_scale = buckets as f64 / domain.length();
+    let mut indexed: Vec<_> = positions
+        .iter()
+        .enumerate()
+        .map(|(original_index, &x)| {
+            let x_mod = x.rem_euclid(domain.length());
+            let bucket = ((x_mod * bucket_scale).floor() as usize).min(buckets - 1);
+            (original_index, x_mod, bucket)
+        })
+        .collect();
+    indexed.sort_unstable_by_key(|lhs| lhs.2);
+    indexed
+}
+
+/// Reusable 1D NUFFT plan using Kaiser-Bessel spreading.
+pub struct NufftPlan1D {
+    n_out: usize,
+    m: usize,
+    w: usize,
+    beta: f64,
+    i0_beta: f64,
+    domain: UniformDomain1D,
+    deconv: Array1<f64>,
+    fft_plan: FftPlan1D,
+}
+
+impl std::fmt::Debug for NufftPlan1D {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NufftPlan1D")
+            .field("n_out", &self.n_out)
+            .field("oversampled_len", &self.m)
+            .field("kernel_width", &self.w)
+            .field("domain", &self.domain)
+            .finish()
+    }
+}
+
+impl NufftPlan1D {
+    /// Create a reusable 1D NUFFT plan.
+    #[must_use]
+    pub fn new(domain: UniformDomain1D, sigma: usize, kernel_width: usize) -> Self {
+        assert!(sigma >= 2, "sigma must be >= 2");
+        assert!(kernel_width >= 2, "kernel_width must be >= 2");
+
+        let m = sigma * domain.n;
+        let beta = PI * (1.0 - 1.0 / (2.0 * sigma as f64)) * (2 * kernel_width) as f64;
+        let i0_beta = i0(beta);
+
+        let deconv = Array1::from_shape_fn(domain.n, |k| {
+            let k_signed = fft_signed_index(k, domain.n);
+            let xi = k_signed as f64 / m as f64;
+            1.0 / kb_kernel_ft(xi, kernel_width, beta, i0_beta)
+        });
+
+        let fft_plan = FftPlan1D::with_precision(
+            Shape1D::new(m).expect("NUFFT oversampled length must be valid"),
+            PrecisionProfile::HIGH_ACCURACY_F64,
+        );
+
+        Self {
+            n_out: domain.n,
+            m,
+            w: kernel_width,
+            beta,
+            i0_beta,
+            domain,
+            deconv,
+            fft_plan,
+        }
+    }
+
+    /// Run type-1 NUFFT, non-uniform samples to uniform Fourier bins.
+    #[must_use]
+    pub fn type1(&self, positions: &[f64], values: &[Complex64]) -> Array1<Complex64> {
+        let mut grid = vec![Complex64::new(0.0, 0.0); self.m];
+        let mut output = vec![Complex64::new(0.0, 0.0); self.n_out];
+        self.type1_into(positions, values, &mut grid, &mut output);
+        Array1::from_vec(output)
+    }
+
+    /// Run type-1 NUFFT mapping strictly inside zero-allocation bounding limits.
+    pub fn type1_into(
+        &self,
+        positions: &[f64],
+        values: &[Complex64],
+        scratch_grid: &mut [Complex64],
+        output: &mut [Complex64],
+    ) {
+        assert_eq!(
+            positions.len(),
+            values.len(),
+            "positions/value length mismatch"
+        );
+        assert_eq!(scratch_grid.len(), self.m, "scratch_grid length mismatch");
+        assert_eq!(output.len(), self.n_out, "output length mismatch");
+
+        scratch_grid.fill(Complex64::new(0.0, 0.0));
+        let w = self.w as i64;
+        let w_f = self.w as f64;
+        let sorted_points = sort_points_1d(positions, values, self.domain, self.m, self.w);
+
+        for point in sorted_points {
+            let t = self.m as f64 * point.x / self.domain.length();
+            let m0 = t.round() as i64;
+            let d = t - m0 as f64;
+            for p in -w..=w {
+                let weight = kb_kernel(p as f64 - d, w_f, self.beta, self.i0_beta);
+                if weight != 0.0 {
+                    let m_idx = (m0 + p).rem_euclid(self.m as i64) as usize;
+                    scratch_grid[m_idx] += point.value * weight;
+                }
+            }
+        }
+
+        let mut spectrum = Array1::from_shape_vec(self.m, scratch_grid.to_vec()).unwrap();
+        self.fft_plan.forward_complex_inplace(&mut spectrum);
+
+        for k in 0..self.n_out {
+            let k_signed = fft_signed_index(k, self.n_out);
+            let m_idx = k_signed.rem_euclid(self.m as i64) as usize;
+            output[k] = spectrum[m_idx] * self.deconv[k];
+        }
+    }
+
+    /// Run type-2 NUFFT, interpolating a uniform Fourier grid at non-uniform positions.
+    #[must_use]
+    pub fn type2(&self, fourier_coeffs: &Array1<Complex64>, positions: &[f64]) -> Vec<Complex64> {
+        let mut spread = vec![Complex64::new(0.0, 0.0); self.m];
+        let mut output = vec![Complex64::new(0.0, 0.0); positions.len()];
+        self.type2_into(
+            fourier_coeffs.as_slice().unwrap(),
+            positions,
+            &mut spread,
+            &mut output,
+        );
+        output
+    }
+
+    /// Run type-2 NUFFT mapping strictly inside zero-allocation bounding limits.
+    pub fn type2_into(
+        &self,
+        fourier_coeffs: &[Complex64],
+        positions: &[f64],
+        scratch_spread: &mut [Complex64],
+        output: &mut [Complex64],
+    ) {
+        assert_eq!(
+            fourier_coeffs.len(),
+            self.n_out,
+            "fourier_coeffs length mismatch"
+        );
+        assert_eq!(
+            scratch_spread.len(),
+            self.m,
+            "scratch_spread length mismatch"
+        );
+        assert_eq!(output.len(), positions.len(), "output length mismatch");
+
+        scratch_spread.fill(Complex64::new(0.0, 0.0));
+        for k in 0..self.n_out {
+            let k_signed = fft_signed_index(k, self.n_out);
+            let m_idx = k_signed.rem_euclid(self.m as i64) as usize;
+            scratch_spread[m_idx] = fourier_coeffs[k] * self.deconv[k];
+        }
+
+        let mut spread_array = Array1::from_shape_vec(self.m, scratch_spread.to_vec()).unwrap();
+        self.fft_plan.inverse_complex_inplace(&mut spread_array);
+        let spread = spread_array.as_slice().unwrap();
+
+        let w = self.w as i64;
+        let w_f = self.w as f64;
+        let sorted_points = sort_positions_1d(positions, self.domain, self.m, self.w);
+
+        for (original_index, x_mod, _) in sorted_points {
+            let t = self.m as f64 * x_mod / self.domain.length();
+            let m0 = t.round() as i64;
+            let d = t - m0 as f64;
+
+            let mut value = Complex64::new(0.0, 0.0);
+            for p in -w..=w {
+                let weight = kb_kernel(p as f64 - d, w_f, self.beta, self.i0_beta);
+                if weight != 0.0 {
+                    let m_idx = (m0 + p).rem_euclid(self.m as i64) as usize;
+                    value += spread[m_idx] * weight;
+                }
+            }
+            output[original_index] = value;
+        }
+    }
+}
+
+/// Exact direct 1D type-1 NUFFT.
+#[must_use]
+pub fn nufft_type1_1d(
+    positions: &[f64],
+    values: &[Complex64],
+    domain: UniformDomain1D,
+) -> Array1<Complex64> {
+    assert_eq!(
+        positions.len(),
+        values.len(),
+        "positions/value length mismatch"
+    );
+    let two_pi_over_l = 2.0 * PI / domain.length();
+    Array1::from_shape_fn(domain.n, |k| {
+        let k_signed = fft_signed_index(k, domain.n);
+        positions
+            .iter()
+            .zip(values.iter())
+            .fold(Complex64::new(0.0, 0.0), |acc, (&x, &value)| {
+                let angle = -two_pi_over_l * k_signed as f64 * x;
+                acc + value * Complex64::new(angle.cos(), angle.sin())
+            })
+    })
+}
+
+/// Exact direct 1D type-2 NUFFT.
+#[must_use]
+pub fn nufft_type2_1d(
+    fourier_coeffs: &Array1<Complex64>,
+    positions: &[f64],
+    domain: UniformDomain1D,
+) -> Vec<Complex64> {
+    positions
+        .iter()
+        .map(|&x| {
+            fourier_coeffs
+                .iter()
+                .enumerate()
+                .fold(Complex64::new(0.0, 0.0), |acc, (k, &value)| {
+                    let angle =
+                        2.0 * PI * fft_signed_index(k, domain.n) as f64 * x / domain.length();
+                    acc + value * Complex64::new(angle.cos(), angle.sin())
+                })
+        })
+        .collect()
+}
+
+/// Fast 1D type-1 NUFFT convenience wrapper.
+#[must_use]
+pub fn nufft_type1_1d_fast(
+    positions: &[f64],
+    values: &[Complex64],
+    domain: UniformDomain1D,
+    kernel_width: usize,
+) -> Array1<Complex64> {
+    NufftPlan1D::new(domain, DEFAULT_NUFFT_OVERSAMPLING, kernel_width).type1(positions, values)
+}
+
+/// Fast 1D type-2 NUFFT convenience wrapper.
+#[must_use]
+pub fn nufft_type2_1d_fast(
+    fourier_coeffs: &Array1<Complex64>,
+    positions: &[f64],
+    domain: UniformDomain1D,
+    kernel_width: usize,
+) -> Vec<Complex64> {
+    NufftPlan1D::new(domain, DEFAULT_NUFFT_OVERSAMPLING, kernel_width)
+        .type2(fourier_coeffs, positions)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::DEFAULT_NUFFT_KERNEL_WIDTH;
+    /// DC mode invariant: f_0 = sum(c_j) because exp(-2pi*i * 0 * x_j / L) = 1 for all j.
+    ///
+    /// With values [1.0, 0.5-0.25i, -0.5+0.75i, 0.25+0.1i]:
+    /// sum = (1.0+0.5-0.5+0.25) + (0-0.25+0.75+0.1)i = 1.25 + 0.6i
+    #[test]
+    fn type1_dc_mode_equals_sum_of_values() {
+        let domain = UniformDomain1D::new(8, 0.125).unwrap();
+        let positions = vec![0.0, 0.125, 0.25, 0.375];
+        let values = vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.5, -0.25),
+            Complex64::new(-0.5, 0.75),
+            Complex64::new(0.25, 0.1),
+        ];
+        let output = nufft_type1_1d(&positions, &values, domain);
+        assert_eq!(output.len(), 8);
+        // DC mode: sum of all values (analytical)
+        let expected_dc = Complex64::new(1.25, 0.6);
+        let err = (output[0] - expected_dc).norm();
+        assert!(
+            err < 1e-12,
+            "DC mode err={err}: got {:?}, expected {:?}",
+            output[0],
+            expected_dc
+        );
+        // All outputs must be finite
+        for (k, v) in output.iter().enumerate() {
+            assert!(v.norm().is_finite(), "mode {k} is non-finite: {v:?}");
+        }
+    }
+
+    /// Fast vs exact: fixed non-uniform positions and values.
+    /// Tolerance 1e-5 for kernel_width=6, sigma=2.
+    #[test]
+    fn type1_fast_vs_exact_agreement_fixed_inputs() {
+        let domain = UniformDomain1D::new(8, 0.125).unwrap();
+        let positions = vec![0.0, 0.125, 0.25, 0.375];
+        let values = vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.5, -0.25),
+            Complex64::new(-0.5, 0.75),
+            Complex64::new(0.25, 0.1),
+        ];
+        let exact = nufft_type1_1d(&positions, &values, domain);
+        let fast = nufft_type1_1d_fast(&positions, &values, domain, DEFAULT_NUFFT_KERNEL_WIDTH);
+        let scale = exact
+            .iter()
+            .map(|v| v.norm())
+            .fold(1.0_f64, f64::max)
+            .max(1e-30);
+        for (k, (e, f)) in exact.iter().zip(fast.iter()).enumerate() {
+            let err = (e - f).norm() / scale;
+            assert!(err < 1e-5, "k={k}: exact={e:?}, fast={f:?}, rel_err={err}");
+        }
+    }
+
+    #[test]
+    fn fast_1d_tracks_exact() {
+        let domain = UniformDomain1D::new(32, 0.05).unwrap();
+        let positions: Vec<f64> = (0..20)
+            .map(|i| ((i as f64 * 0.137) % domain.length()).abs())
+            .collect();
+        let values: Vec<Complex64> = (0..20)
+            .map(|i| Complex64::new((i as f64 * 0.3).cos(), (i as f64 * 0.2).sin()))
+            .collect();
+        let exact = nufft_type1_1d(&positions, &values, domain);
+        let fast = nufft_type1_1d_fast(&positions, &values, domain, DEFAULT_NUFFT_KERNEL_WIDTH);
+        let scale = exact.iter().map(|value| value.norm()).fold(1.0, f64::max);
+        let max_err = exact
+            .iter()
+            .zip(fast.iter())
+            .map(|(lhs, rhs)| (lhs - rhs).norm())
+            .fold(0.0, f64::max);
+        assert!(max_err / scale < 1e-6);
+    }
+}

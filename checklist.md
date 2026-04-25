@@ -1,0 +1,79 @@
+# Apollo Checklist
+
+- [x] Read workspace metadata, README, crate manifests, and validation gaps.
+- [x] Classify current rename state as authoritative without reverting user changes.
+- [x] Add all Apollo crates to workspace membership.
+- [x] Fix compile blockers across validation, Python bindings, and missing transform crate roots.
+- [x] Replace incomplete validation suite with real computed report paths.
+- [x] Fix CZT, SFT, and STFT defects found by bounded tests.
+- [x] Move SFT domain model, plan execution, direct kernel, and tests into the authoritative `apollo-sft` crate hierarchy.
+- [x] Verify `apollo-fft/src` has no SFT implementation or SFT export path.
+- [x] Split validation dependencies so `apollo-validation` and `rustfft`/`realfft` are only enabled for validation-test execution paths.
+- [x] Complete the new multi-crate validation API for `apollo-validation`.
+- [x] Fix `FftPlan1D`/`FftPlan2D` missing `forward_complex`/`inverse_complex` wrappers.
+- [x] Implement `kernel::radix2` (iterative Cooley-Tukey DIT, power-of-2) with value-semantic tests.
+- [x] Implement `kernel::bluestein` (chirp-Z, arbitrary N, verified for N=3,5,6,7,11) with value-semantic tests.
+- [x] Add `fft_forward_64`, `fft_inverse_64`, `fft_inverse_unnorm_64`, `fft_forward_32`, `fft_inverse_32`, `fft_inverse_unnorm_32` auto-selecting wrappers to `kernel::mod`.
+- [x] Update `FftPlan1D`, `FftPlan2D`, `FftPlan3D` axis-pass methods to use new O(N log N) kernel.
+- [x] Run `cargo test --workspace` and verify zero failures.
+- [x] Add `apollo-hilbert` with Hilbert transform plans, analytic signal, envelope/phase APIs, docs, and tests.
+- [x] Add `apollo-radon` with parallel-beam Radon plans, sinogram storage, backprojection, filtered backprojection, docs, and tests.
+- [x] Complete `apollo-mellin` execution APIs and analytical tests.
+- [x] Replace stale skeleton crate documentation for completed transform crates.
+- [x] Add DCT/DST direct-kernel value-semantic tests.
+- [x] Remove incorrect DCT/DST fast branch and keep large-plan direct parity tests.
+- [x] Add Python `rfft3`/`irfft3` value-semantic tests.
+- [x] Add validation report JSON schema-shape tests.
+- [x] Add Criterion benchmarks for FFT kernel strategy.
+- [x] Add caller-owned Radon ramp-filter path and parity test.
+- [x] Update FFT 1D/2D/3D Rustdoc and README ownership text to match radix-2/Bluestein execution.
+- [x] Remove duplicate transformed-lane collections from FFT 2D/3D axis passes.
+- [x] Replace NUFFT 3D per-lane allocation and NUFFT 1D type-2 grid copying with reusable/borrowed buffers.
+- [x] Add CZT README, Bluestein proof sketch, forward_into parity test, and remove CZT product-vector copy.
+- [x] Add FWHT README, Hadamard theorem/proof sketch, real/complex `*_into` APIs, and caller-owned parity tests.
+- [x] Add NTT README, root-of-unity theorem/proof sketch, true in-place paths, `*_into` APIs, residue-normalization tests, and overflow-safe modular addition.
+- [x] Add FrFT README, rotation theorem/proof sketch, finite integer-order state, inverse APIs, and inverse/caller-owned parity tests.
+- [x] Add STFT README, overlap-add theorem/proof sketch, clean filler comments, replace oversized expect text, and add inverse_into parity coverage.
+- [x] Add DCT/DST README, inverse-pair theorem/proof sketch, inverse_into API, and caller-owned inverse parity tests.
+- [x] Repair SFT non-UTF-8 Rustdoc byte, replace deprecated ndarray extraction, and route SFT direct-reference tests through the owning kernel.
+- [x] Restore `NttPlan` after truncation and verify NTT value/property tests.
+- [x] Move CZT tests out of the plan impl, add `num-complex` serde support, and reject zero `W`.
+- [x] Repair SHT invalid UTF-8 reference markers.
+- [x] Fix SDFT `Result` propagation and QFT property-test dimension construction.
+- [x] Remove duplicated NUFFT 3D module content and restore type-2 sorted-position interpolation.
+- [x] Replace NUFFT Kaiser-Bessel `I_0` polynomial approximation with the defining convergent series.
+- [x] Replace Wavelet Morlet approximate-admissibility note with a DC-corrected kernel and zero-mean test.
+- [x] Ensure each `crates/apollo-*` crate has a crate-local README with architecture, mathematical contract, and verification notes.
+- [x] Rename dense FFT WGPU crate to `apollo-fft-wgpu` and update validation/Python dependencies.
+- [x] Add `apollo-nufft-wgpu` with capability, plan, and unsupported-execution contracts.
+- [x] Add WGPU backend-boundary crates for all remaining transform domains.
+- [x] Verify each new WGPU crate has domain, application, infrastructure, verification, and README artifacts.
+- [x] Run `cargo fmt --all -- --check`, `cargo check --workspace --all-targets`, and `cargo test --workspace --all-targets`.
+- [x] Eliminate per-stage `Vec<Complex>` twiddle allocations in `radix2` forward/inverse f32/f64 by replacing with a single N/2-entry precomputed stride-indexed table.
+- [x] Cache Bluestein scratch buffer in `FftPlan1D` via `Mutex<Vec<Complex64>>` to eliminate per-call allocation on the Bluestein hot path.
+- [x] Precompute DWT highpass QMF coefficients once per `analysis_stage_into`/`synthesis_stage_into` call using the Smith-Barnwell QMF identity.
+- [x] Add Parseval/Plancherel energy-invariance theorem (with proof sketch) to `radix2.rs` module doc and Unified Twiddle Table theorem.
+- [x] Add I_0 convergence theorem and K=256 sufficiency corollary to `kaiser_bessel.rs`.
+- [ ] Derive and verify a correct FFT-based DCT/DST acceleration strategy.
+- [ ] Audit remaining transform crates against published references and cross-crate validation fixtures.
+- [x] Add WGPU NUFFT direct Type-1/Type-2 1D/3D numerical kernels and parity tests.
+- [x] Add direct forward CZT WGPU kernels with CPU parity validation.
+- [x] Add forward Hilbert WGPU kernels with CPU parity validation.
+- [x] Add forward Mellin WGPU kernels with CPU parity validation.
+- [x] Add forward and inverse NTT WGPU kernels with CPU parity validation.
+- [x] Add forward and inverse GFT WGPU kernels with CPU parity validation.
+- [x] Add forward and inverse QFT WGPU kernels with CPU parity validation.
+- [x] Add forward Radon WGPU kernels with CPU parity validation.
+- [x] Add numerical DCT-II/DCT-III/DST-II/DST-III WGPU kernels with CPU parity validation.
+- [x] Add numerical DHT WGPU kernels with CPU parity validation.
+- [x] Add numerical FWHT WGPU kernels with CPU parity validation.
+- [x] Add numerical WGPU kernels to transform-specific WGPU crates with CPU parity validation (QFT, FrFT, SDFT, GFT, STFT, Wavelet DWT, SFT, and SHT implemented).
+- [x] Add forward and inverse unitary QFT WGPU kernels with CPU parity validation (tol 1e-3).
+- [x] Add forward and inverse chirp-kernel FrFT WGPU kernels with 5-mode dispatch and CPU parity validation.
+- [x] Add forward direct-bins SDFT WGPU kernels with CPU parity validation against SdftPlan::direct_bins.
+- [x] Add forward and inverse GFT WGPU dense-matmul kernels with caller-supplied basis and CPU parity validation.
+- [x] Add forward Hann-windowed STFT WGPU kernels with CPU parity validation.
+- [x] Add forward and inverse Haar DWT WGPU kernels with roundtrip and Parseval energy validation.
+- [x] Add SFT WGPU direct dense DFT forward/inverse execution with sparse top-K CPU parity validation.
+- [x] Add SHT WGPU direct spherical harmonic execution without duplicating CPU-owner basis/quadrature logic.
+- [ ] Add NUFFT WGPU fast gridding execution after direct 1D/3D coverage.

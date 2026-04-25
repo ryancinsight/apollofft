@@ -1,0 +1,19 @@
+#![warn(missing_docs)]
+//! Fractional Fourier transform utilities for Apollo.
+//!
+//! This crate evaluates the continuous fractional Fourier kernel on a finite
+//! uniform sample vector. The implementation is a direct reference plan: it
+//! preserves the mathematical definition across the full phase
+//! domain, and respects the Apollo deep hierarchical namespace structure.
+
+/// Application entry points and configuration models for FrFT evaluation.
+pub mod application;
+/// Domain contracts for FrFT evaluation.
+pub mod domain;
+/// High-performance computing kernels and backend hardware integrations.
+pub mod infrastructure;
+
+// Facade API for backward compatibility and end-user simplicity
+
+pub use crate::application::execution::plan::frft::dimension_1d::{frft, FrftPlan};
+pub use crate::domain::contracts::error::FrftError;

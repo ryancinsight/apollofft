@@ -1,4 +1,9 @@
+#![cfg(feature = "external-references")]
 //! `rustfft`-based reference transforms used by validation.
+//!
+//! This module is compiled only when the `external-references` feature is enabled.
+//! It provides reusable reference FFT plans for validation comparisons without
+//! imposing `rustfft` on non-validation builds.
 
 use ndarray::{Array1, Array3};
 use num_complex::Complex64;
@@ -178,12 +183,12 @@ pub fn fft1_real(input: &Array1<f64>) -> Vec<Complex64> {
 /// Execute a separable 3D FFT using `rustfft`.
 ///
 /// # Theorem: Separable 3D Discrete Fourier Transform
-/// The 3D DFT mathematically decomposes into three orthogonal 1D DFT evaluations
-/// explicitly bypassing multidimensional recursive spatial bounds natively factoring limits globally:
-/// $$ X_{k_1, k_2, k_3} = \sum_{n_1} \sum_{n_2} \sum_{n_3} x_{n_1, n_2, n_3} \cdot e^{-i 2\pi (\frac{k_1 n_1}{N_1} + \frac{k_2 n_2}{N_2} + \frac{k_3 n_3}{N_3})} $$
+/// The 3D DFT decomposes into three orthogonal 1D DFT evaluations
+/// bypassing multidimensional recursive spatial bounds factoring limits globally:
+/// $$ X_{k_1, k_2, k_3} = \sum_{n_1} \sum_{n_2} \sum_{n_3} x_{n_1, n_2, n_3} \cdot e^{-i 2\pi (\frac{k_1 n_1}{N_1} + \frac{k_2 n_2}{N_2} + \frac{k_3 n_3}{N_3})} $стә
 ///
-/// **Zero Inner-Loop Allocation Guarantee:** This explicitly limits dynamically created buffers replacing
-/// dimensional iterations dynamically into strict pre-allocated boundary matrices globally without nested heap fragmentations.
+/// **Zero Inner-Loop Allocation Guarantee:** This limits created buffers replacing
+/// dimensional iterations into strict pre-allocated boundary matrices globally without nested heap fragmentations.
 pub fn fft3_real(input: &Array3<f64>) -> Array3<Complex64> {
     let shape = input.dim();
     let plan = RustFftPlan3D::new(shape);

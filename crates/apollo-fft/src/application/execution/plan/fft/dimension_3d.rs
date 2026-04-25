@@ -1,0 +1,585 @@
+//! 3D FFT plan.
+//!
+//! Apollo-owned 3D FFT implementation based on separable FFT passes.
+//!
+//! The plan keeps the public API stable while removing production dependence on
+//! external FFT engines. Forward and inverse transforms are executed by
+//! applying the auto-selected 1D FFT kernel along each axis in sequence. The
+//! inverse path uses FFTW-compatible normalization by dividing by the total
+//! volume.
+//!
+//! # Mathematical contract
+//!
+//! For a complex field `x ∈ ℂ^{n_x × n_y × n_z}`, the forward transform is the
+//! separable 3D DFT
+//!
+//! `X_{k_x,k_y,k_z} = Σ_x Σ_y Σ_z x_{x,y,z} · exp(-2πi (k_x x / n_x + k_y y / n_y + k_z z / n_z))`
+//!
+//! and the inverse transform is
+//!
+//! `x_{x,y,z} = (1 / (n_x n_y n_z)) Σ_kx Σ_ky Σ_kz X_{k_x,k_y,k_z}
+//! · exp(2πi (k_x x / n_x + k_y y / n_y + k_z z / n_z))`.
+//!
+//! Because the transform is separable, the implementation applies the 1D FFT
+//! kernel independently along each axis. This preserves linearity and the
+//! expected roundtrip identity in exact arithmetic.
+//!
+//! # Complexity
+//!
+//! Let `C(n)` be the selected 1D FFT cost. The plan costs
+//! `O(n_y n_z C(n_x) + n_x n_z C(n_y) + n_x n_y C(n_z))`, with
+//! `C(n) = O(n log n)` for both radix-2 and Bluestein plan paths. Axis passes
+//! gather non-contiguous lanes into scratch buffers and mutate those buffers in
+//! place before scattering them back.
+//!
+//! # Failure modes
+//!
+//! - zero dimensions are rejected by `Shape3D::new`
+//! - caller-supplied buffers must match the plan dimensions
+//! - non-contiguous ndarray buffers panic when a contiguous slice is required
+
+use crate::application::execution::kernel::{
+    fft_forward_32, fft_forward_64, fft_inverse_32, fft_inverse_64,
+};
+use crate::application::execution::plan::fft::real_storage::RealFftData;
+use crate::domain::metadata::precision::PrecisionProfile;
+use crate::domain::metadata::shape::Shape3D;
+use half::f16;
+use ndarray::{Array3, Axis, Zip};
+use num_complex::Complex32;
+use num_complex::Complex64;
+use rayon::prelude::*;
+
+/// Reusable 3D FFT plan.
+pub struct FftPlan3D {
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    nz_c: usize,
+    precision: PrecisionProfile,
+}
+
+impl std::fmt::Debug for FftPlan3D {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FftPlan3D")
+            .field("nx", &self.nx)
+            .field("ny", &self.ny)
+            .field("nz", &self.nz)
+            .field("nz_c", &self.nz_c)
+            .field("precision", &self.precision)
+            .finish()
+    }
+}
+
+impl FftPlan3D {
+    /// Create a new 3D plan.
+    #[must_use]
+    pub fn new(shape: Shape3D) -> Self {
+        Self::with_precision(shape, PrecisionProfile::HIGH_ACCURACY_F64)
+    }
+
+    /// Create a new 3D plan with an explicit precision profile.
+    #[must_use]
+    pub fn with_precision(shape: Shape3D, precision: PrecisionProfile) -> Self {
+        Self {
+            nx: shape.nx,
+            ny: shape.ny,
+            nz: shape.nz,
+            nz_c: shape.nz / 2 + 1,
+            precision,
+        }
+    }
+
+    /// Return the precision profile used by this plan.
+    #[must_use]
+    pub fn precision_profile(&self) -> PrecisionProfile {
+        self.precision
+    }
+
+    /// Return the bookkeeping value `nz / 2 + 1`.
+    ///
+    /// This value is provided for API compatibility with callers that track
+    /// half-spectrum layout metadata. No R2C half-spectrum transform is
+    /// implemented: every forward and inverse transform always operates on the
+    /// full `(nx, ny, nz)` complex array internally. This accessor does not
+    /// describe an actual reduction in the Z dimension.
+    #[must_use]
+    pub fn nz_c(&self) -> usize {
+        self.nz_c
+    }
+
+    /// Alias for `nz_c()`.
+    ///
+    /// Returns `nz / 2 + 1` for bookkeeping only. The full `nz`-length Z
+    /// spectrum is always computed; no half-spectrum reduction is applied.
+    #[must_use]
+    pub fn nz_complex(&self) -> usize {
+        self.nz_c()
+    }
+
+    /// Return the full real-domain shape owned by this plan.
+    #[must_use]
+    pub fn dimensions(&self) -> (usize, usize, usize) {
+        (self.nx, self.ny, self.nz)
+    }
+
+    /// Return the validated shape owned by this plan.
+    #[must_use]
+    pub fn shape(&self) -> Shape3D {
+        Shape3D {
+            nx: self.nx,
+            ny: self.ny,
+            nz: self.nz,
+        }
+    }
+
+    /// Forward transform of a real 3D field.
+    #[must_use]
+    pub fn forward(&self, input: &Array3<f64>) -> Array3<Complex64> {
+        self.forward_real_to_complex(input)
+    }
+
+    /// Inverse transform of a full complex 3D spectrum.
+    #[must_use]
+    pub fn inverse(&self, input: &Array3<Complex64>) -> Array3<f64> {
+        self.inverse_complex_to_real(input)
+    }
+
+    /// Forward transform of a real field using generic storage dispatch.
+    #[must_use]
+    pub fn forward_typed<T: RealFftData>(&self, input: &Array3<T>) -> Array3<T::Spectrum> {
+        T::forward_3d(self, input)
+    }
+
+    /// Inverse transform of a complex spectrum using generic storage dispatch.
+    #[must_use]
+    pub fn inverse_typed<T: RealFftData>(&self, input: &Array3<T::Spectrum>) -> Array3<T> {
+        T::inverse_3d(self, input)
+    }
+
+    /// Forward transform of a complex field.
+    #[must_use]
+    pub fn forward_complex(&self, input: &Array3<Complex64>) -> Array3<Complex64> {
+        let mut output = input.clone();
+        self.forward_complex_inplace(&mut output);
+        output
+    }
+
+    /// Inverse transform of a complex field.
+    #[must_use]
+    pub fn inverse_complex(&self, input: &Array3<Complex64>) -> Array3<Complex64> {
+        let mut output = input.clone();
+        self.inverse_complex_inplace(&mut output);
+        output
+    }
+
+    /// Forward transform of a real field.
+    #[must_use]
+    pub fn forward_real_to_complex(&self, input: &Array3<f64>) -> Array3<Complex64> {
+        let mut output = Array3::<Complex64>::zeros((self.nx, self.ny, self.nz));
+        self.forward_real_to_complex_into_full(input, &mut output);
+        output
+    }
+
+    /// Forward transform of a real field into a full complex spectrum buffer.
+    pub fn forward_real_to_complex_into(
+        &self,
+        input: &Array3<f64>,
+        output: &mut Array3<Complex64>,
+    ) {
+        self.forward_real_to_complex_into_full(input, output);
+    }
+
+    /// Compatibility alias for `forward_real_to_complex_into`.
+    pub fn forward_into(&self, input: &Array3<f64>, output: &mut Array3<Complex64>) {
+        self.forward_real_to_complex_into_full(input, output);
+    }
+
+    /// Inverse transform of a full complex spectrum to a real field.
+    #[must_use]
+    pub fn inverse_complex_to_real(&self, input: &Array3<Complex64>) -> Array3<f64> {
+        let mut output = Array3::<f64>::zeros((self.nx, self.ny, self.nz));
+        self.inverse_complex_to_real_with_workspace(input, &mut output);
+        output
+    }
+
+    /// Inverse transform into caller-owned output and scratch buffers.
+    pub fn inverse_complex_to_real_into(
+        &self,
+        input: &Array3<Complex64>,
+        output: &mut Array3<f64>,
+        scratch: &mut Array3<Complex64>,
+    ) {
+        self.check_full_complex_shape(input.dim(), "inverse input");
+        self.check_real_shape(output.dim(), "inverse output");
+        self.check_full_complex_shape(scratch.dim(), "inverse scratch");
+        scratch.assign(input);
+        self.inverse_complex_inplace(scratch);
+        Zip::from(output).and(scratch).for_each(|out, value| {
+            *out = value.re;
+        });
+    }
+
+    /// Compatibility alias for `inverse_complex_to_real_into`.
+    pub fn inverse_into(
+        &self,
+        input: &Array3<Complex64>,
+        output: &mut Array3<f64>,
+        scratch: &mut Array3<Complex64>,
+    ) {
+        self.inverse_complex_to_real_into(input, output, scratch);
+    }
+
+    /// Forward transform of a complex field in-place.
+    pub fn forward_complex_inplace(&self, data: &mut Array3<Complex64>) {
+        self.check_full_complex_shape(data.dim(), "forward input");
+        self.forward_complex_axis_pass(data);
+    }
+
+    /// Inverse transform of a complex field in-place with FFTW-compatible normalization.
+    pub fn inverse_complex_inplace(&self, data: &mut Array3<Complex64>) {
+        self.check_full_complex_shape(data.dim(), "inverse input");
+        self.inverse_complex_axis_pass(data);
+    }
+
+    /// Forward transform of a real field stored as `f32`.
+    #[must_use]
+    pub(crate) fn forward_f32(&self, input: &Array3<f32>) -> Array3<Complex32> {
+        if self.precision == PrecisionProfile::LOW_PRECISION_F32 {
+            let mut output = Array3::<Complex32>::zeros((self.nx, self.ny, self.nz));
+            self.forward_real_to_complex_f32_into(input, &mut output);
+            output
+        } else {
+            let promoted = input.mapv(f64::from);
+            self.forward_real_to_complex(&promoted)
+                .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
+        }
+    }
+
+    /// Inverse transform of an `f32`-storage complex spectrum.
+    #[must_use]
+    pub(crate) fn inverse_f32(&self, input: &Array3<Complex32>) -> Array3<f32> {
+        if self.precision == PrecisionProfile::LOW_PRECISION_F32 {
+            let mut output = Array3::<Complex32>::zeros((self.nx, self.ny, self.nz));
+            output.assign(input);
+            self.inverse_complex_inplace_f32(&mut output);
+            output.mapv(|value| value.re)
+        } else {
+            let promoted =
+                input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
+            self.inverse_complex_to_real(&promoted)
+                .mapv(|value| value as f32)
+        }
+    }
+
+    /// Forward transform of a real field stored as `f16`.
+    #[must_use]
+    pub(crate) fn forward_f16(&self, input: &Array3<f16>) -> Array3<Complex32> {
+        if self.precision == PrecisionProfile::MIXED_PRECISION_F16_F32 {
+            let mut data = input.mapv(|value| Complex32::new(value.to_f32(), 0.0));
+            self.forward_complex_inplace_f32(&mut data);
+            data
+        } else {
+            let promoted = input.mapv(|value| f64::from(value.to_f32()));
+            self.forward_real_to_complex(&promoted)
+                .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
+        }
+    }
+
+    /// Inverse transform of a complex spectrum to `f16` storage.
+    #[must_use]
+    pub(crate) fn inverse_f16(&self, input: &Array3<Complex32>) -> Array3<f16> {
+        if self.precision == PrecisionProfile::MIXED_PRECISION_F16_F32 {
+            let mut data = input.clone();
+            self.inverse_complex_inplace_f32(&mut data);
+            data.mapv(|value| f16::from_f32(value.re))
+        } else {
+            let promoted =
+                input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
+            self.inverse_complex_to_real(&promoted)
+                .mapv(|value| f16::from_f32(value as f32))
+        }
+    }
+
+    fn forward_complex_axis_pass(&self, data: &mut Array3<Complex64>) {
+        self.axis_pass_forward(data, Axis(2));
+        self.axis_pass_forward(data, Axis(1));
+        self.axis_pass_forward(data, Axis(0));
+    }
+
+    fn inverse_complex_axis_pass(&self, data: &mut Array3<Complex64>) {
+        self.axis_pass_inverse(data, Axis(0));
+        self.axis_pass_inverse(data, Axis(1));
+        self.axis_pass_inverse(data, Axis(2));
+    }
+
+    fn forward_real_to_complex_into_full(
+        &self,
+        input: &Array3<f64>,
+        output: &mut Array3<Complex64>,
+    ) {
+        self.check_real_shape(input.dim(), "forward input");
+        self.check_full_complex_shape(output.dim(), "forward output");
+        output.assign(&input.mapv(|value| Complex64::new(value, 0.0)));
+        self.forward_complex_inplace(output);
+    }
+
+    fn forward_real_to_complex_f32_into(
+        &self,
+        input: &Array3<f32>,
+        output: &mut Array3<Complex32>,
+    ) {
+        self.check_real_shape(input.dim(), "forward input");
+        self.check_full_complex_shape(output.dim(), "forward output");
+        output.assign(&input.mapv(|value| Complex32::new(value, 0.0)));
+        self.forward_complex_inplace_f32(output);
+    }
+
+    fn forward_complex_inplace_f32(&self, data: &mut Array3<Complex32>) {
+        self.check_full_complex_shape(data.dim(), "forward input");
+        self.axis_pass_forward_f32(data, Axis(2));
+        self.axis_pass_forward_f32(data, Axis(1));
+        self.axis_pass_forward_f32(data, Axis(0));
+    }
+
+    fn inverse_complex_inplace_f32(&self, data: &mut Array3<Complex32>) {
+        self.check_full_complex_shape(data.dim(), "inverse input");
+        self.axis_pass_inverse_f32(data, Axis(0));
+        self.axis_pass_inverse_f32(data, Axis(1));
+        self.axis_pass_inverse_f32(data, Axis(2));
+    }
+
+    fn axis_pass_forward(&self, data: &mut Array3<Complex64>, axis: Axis) {
+        self.axis_pass_complex(data, axis, true);
+    }
+
+    fn axis_pass_inverse(&self, data: &mut Array3<Complex64>, axis: Axis) {
+        self.axis_pass_complex(data, axis, false);
+    }
+
+    fn axis_pass_forward_f32(&self, data: &mut Array3<Complex32>, axis: Axis) {
+        self.axis_pass_complex_f32(data, axis, true);
+    }
+
+    fn axis_pass_inverse_f32(&self, data: &mut Array3<Complex32>, axis: Axis) {
+        self.axis_pass_complex_f32(data, axis, false);
+    }
+
+    fn axis_pass_complex(&self, data: &mut Array3<Complex64>, axis: Axis, forward: bool) {
+        let mut lanes: Vec<Vec<Complex64>> = data
+            .lanes(axis)
+            .into_iter()
+            .map(|lane| lane.to_vec())
+            .collect();
+
+        lanes.par_iter_mut().for_each(|lane| {
+            if forward {
+                fft_forward_64(lane);
+            } else {
+                fft_inverse_64(lane);
+            }
+        });
+
+        for (mut lane, values) in data.lanes_mut(axis).into_iter().zip(lanes.into_iter()) {
+            for (slot, value) in lane.iter_mut().zip(values.into_iter()) {
+                *slot = value;
+            }
+        }
+    }
+
+    fn axis_pass_complex_f32(&self, data: &mut Array3<Complex32>, axis: Axis, forward: bool) {
+        let mut lanes: Vec<Vec<Complex32>> = data
+            .lanes(axis)
+            .into_iter()
+            .map(|lane| lane.to_vec())
+            .collect();
+
+        lanes.par_iter_mut().for_each(|lane| {
+            if forward {
+                fft_forward_32(lane);
+            } else {
+                fft_inverse_32(lane);
+            }
+        });
+
+        for (mut lane, values) in data.lanes_mut(axis).into_iter().zip(lanes.into_iter()) {
+            for (slot, value) in lane.iter_mut().zip(values.into_iter()) {
+                *slot = value;
+            }
+        }
+    }
+
+    fn check_real_shape(&self, dim: (usize, usize, usize), label: &str) {
+        assert_eq!(dim, (self.nx, self.ny, self.nz), "{label} shape mismatch");
+    }
+
+    fn check_full_complex_shape(&self, dim: (usize, usize, usize), label: &str) {
+        assert_eq!(dim, (self.nx, self.ny, self.nz), "{label} shape mismatch");
+    }
+
+    fn inverse_complex_to_real_with_workspace(
+        &self,
+        input: &Array3<Complex64>,
+        output: &mut Array3<f64>,
+    ) {
+        self.check_full_complex_shape(input.dim(), "inverse input");
+        self.check_real_shape(output.dim(), "inverse output");
+        let transformed = self.inverse_complex(input);
+        Zip::from(output).and(&transformed).for_each(|out, value| {
+            *out = value.re;
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_signal(nx: usize, ny: usize, nz: usize) -> Array3<f64> {
+        Array3::from_shape_fn((nx, ny, nz), |(i, j, k)| {
+            (i as f64 * 0.31 + j as f64 * 0.17 + k as f64 * 0.41).sin()
+                + 0.5 * (i as f64 * 0.07 + j as f64 * 0.23 + k as f64 * 0.13).cos()
+        })
+    }
+
+    /// Roundtrip identity: inverse(forward(x)) == x for asymmetric non-power-of-two sizes.
+    #[test]
+    fn roundtrip_recovers_asymmetric_inputs() {
+        for (nx, ny, nz) in [(7usize, 13usize, 5usize), (16, 8, 9)] {
+            let shape = Shape3D::new(nx, ny, nz).expect("valid shape");
+            let plan = FftPlan3D::new(shape);
+            let input = make_signal(nx, ny, nz);
+            let recovered = plan.inverse(&plan.forward(&input));
+            for (a, b) in input.iter().zip(recovered.iter()) {
+                let err = (a - b).abs();
+                assert!(err < 1e-10, "roundtrip n=({nx},{ny},{nz}) err={err:.2e}");
+            }
+        }
+    }
+
+    /// Linearity: forward(a*s1 + b*s2) == a*forward(s1) + b*forward(s2), eps 1e-9.
+    #[test]
+    fn forward_is_linear() {
+        let (nx, ny, nz) = (5usize, 7usize, 3usize);
+        let shape = Shape3D::new(nx, ny, nz).expect("valid shape");
+        let plan = FftPlan3D::new(shape);
+        let a = 2.3f64;
+        let b = -1.7f64;
+        let s1 = Array3::from_shape_fn((nx, ny, nz), |(i, j, k)| {
+            (i as f64 * 0.3 + j as f64 * 0.2 + k as f64 * 0.5).sin()
+        });
+        let s2 = Array3::from_shape_fn((nx, ny, nz), |(i, j, k)| {
+            (i as f64 * 0.7 + j as f64 * 0.4 + k as f64 * 0.1).cos()
+        });
+        let combined = &s1 * a + &s2 * b;
+        let lhs = plan.forward(&combined);
+        let rhs = plan.forward(&s1).mapv(|v| v * a) + plan.forward(&s2).mapv(|v| v * b);
+        for (l, r) in lhs.iter().zip(rhs.iter()) {
+            let err = (l - r).norm();
+            assert!(err < 1e-9, "linearity err={err:.2e}");
+        }
+    }
+
+    /// Parseval: sum|x|^2 == sum|X|^2 / (nx*ny*nz), eps 1e-6.
+    #[test]
+    fn parseval_identity_holds() {
+        let (nx, ny, nz) = (8usize, 6usize, 5usize);
+        let shape = Shape3D::new(nx, ny, nz).expect("valid shape");
+        let plan = FftPlan3D::new(shape);
+        let input = make_signal(nx, ny, nz);
+        let spectrum = plan.forward(&input);
+        let time_energy: f64 = input.iter().map(|x| x * x).sum();
+        let spectral_energy: f64 =
+            spectrum.iter().map(|x| x.norm_sqr()).sum::<f64>() / (nx * ny * nz) as f64;
+        let err = (time_energy - spectral_energy).abs();
+        assert!(err < 1e-6, "Parseval err={err:.2e}");
+    }
+
+    /// Complex in-place forward then inverse recovers original, eps 1e-10.
+    #[test]
+    fn complex_inplace_roundtrip() {
+        let (nx, ny, nz) = (8usize, 4usize, 6usize);
+        let shape = Shape3D::new(nx, ny, nz).expect("valid shape");
+        let plan = FftPlan3D::new(shape);
+        let input = Array3::from_shape_fn((nx, ny, nz), |(i, j, k)| {
+            Complex64::new(
+                (i as f64 * 0.2).sin(),
+                (j as f64 * 0.3 + k as f64 * 0.1).cos(),
+            )
+        });
+        let mut data = input.clone();
+        plan.forward_complex_inplace(&mut data);
+        plan.inverse_complex_inplace(&mut data);
+        for (a, b) in input.iter().zip(data.iter()) {
+            let err = (a - b).norm();
+            assert!(err < 1e-10, "complex roundtrip err={err:.2e}");
+        }
+    }
+
+    /// inverse_complex_to_real_into matches the allocating inverse_complex_to_real.
+    #[test]
+    fn caller_owned_inverse_matches_allocating() {
+        let (nx, ny, nz) = (6usize, 5usize, 4usize);
+        let shape = Shape3D::new(nx, ny, nz).expect("valid shape");
+        let plan = FftPlan3D::new(shape);
+        let input = Array3::from_shape_fn((nx, ny, nz), |(i, j, k)| {
+            Complex64::new(
+                (i as f64 * 0.5 + j as f64 * 0.3).sin(),
+                (k as f64 * 0.7).cos(),
+            )
+        });
+        let alloc_result = plan.inverse_complex_to_real(&input);
+        let mut out = Array3::<f64>::zeros((nx, ny, nz));
+        let mut scratch = Array3::<Complex64>::zeros((nx, ny, nz));
+        plan.inverse_complex_to_real_into(&input, &mut out, &mut scratch);
+        for (a, b) in alloc_result.iter().zip(out.iter()) {
+            let err = (a - b).abs();
+            assert!(err < 1e-14, "caller-owned vs alloc mismatch: {err:.2e}");
+        }
+    }
+
+    /// forward_real_to_complex_into panics on wrong output shape.
+    #[test]
+    #[should_panic(expected = "forward output shape mismatch")]
+    fn forward_rejects_wrong_shape() {
+        let shape = Shape3D::new(4, 4, 4).expect("valid shape");
+        let plan = FftPlan3D::new(shape);
+        let input = Array3::<f64>::zeros((4, 4, 4));
+        let mut wrong_output = Array3::<Complex64>::zeros((4, 4, 3));
+        plan.forward_real_to_complex_into(&input, &mut wrong_output);
+    }
+
+    /// LOW_PRECISION_F32 typed roundtrip stays within f32 tolerance.
+    #[test]
+    fn typed_low_precision_roundtrip() {
+        let (nx, ny, nz) = (8usize, 8usize, 8usize);
+        let shape = Shape3D::new(nx, ny, nz).expect("valid shape");
+        let plan = FftPlan3D::with_precision(shape, PrecisionProfile::LOW_PRECISION_F32);
+        let input = Array3::<f32>::from_shape_fn((nx, ny, nz), |(i, j, k)| {
+            (i as f32 * 0.31 + j as f32 * 0.17 + k as f32 * 0.41).sin()
+        });
+        let spectrum = plan.forward_typed(&input);
+        let recovered: Array3<f32> = plan.inverse_typed(&spectrum);
+        for (a, b) in input.iter().zip(recovered.iter()) {
+            let err = (a - b).abs();
+            assert!(err < 1e-4, "low-precision roundtrip err={err:.2e}");
+        }
+    }
+
+    /// MIXED_PRECISION_F16_F32 typed roundtrip stays within f16 tolerance.
+    #[test]
+    fn typed_mixed_precision_roundtrip() {
+        let (nx, ny, nz) = (8usize, 8usize, 8usize);
+        let shape = Shape3D::new(nx, ny, nz).expect("valid shape");
+        let plan = FftPlan3D::with_precision(shape, PrecisionProfile::MIXED_PRECISION_F16_F32);
+        let input = Array3::<f16>::from_shape_fn((nx, ny, nz), |(i, j, k)| {
+            f16::from_f32((i as f32 * 0.31 + j as f32 * 0.17 + k as f32 * 0.41).sin())
+        });
+        let spectrum = plan.forward_typed(&input);
+        let recovered: Array3<f16> = plan.inverse_typed(&spectrum);
+        for (a, b) in input.iter().zip(recovered.iter()) {
+            let err = (a.to_f32() - b.to_f32()).abs();
+            assert!(err < 5e-2, "mixed-precision roundtrip err={err:.2e}");
+        }
+    }
+}

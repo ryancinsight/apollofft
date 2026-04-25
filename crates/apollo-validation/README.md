@@ -1,0 +1,27 @@
+# Apollo Validation
+
+`apollo-validation` owns cross-crate validation reports, optional external
+reference comparison, and benchmark orchestration.
+
+## Architecture
+
+```text
+src/
+  domain/          validation report schema
+  application/     suite composition and computed checks
+  infrastructure/  optional NumPy and rustfft reference adapters
+```
+
+This crate is the only allowed production workspace boundary for `rustfft`
+reference usage. The dependency is behind the `external-references` feature.
+
+## Validation Contract
+
+Validation reports include CPU FFT, GPU surface, NUFFT, optional external
+comparison, benchmarks, and environment sections. Optional dependencies report
+availability and skip notes instead of silently succeeding.
+
+## Verification
+
+Tests serialize the report and assert required schema sections and computed
+value-semantic fields.
