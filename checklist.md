@@ -8,7 +8,7 @@
 - [x] Fix CZT, SFT, and STFT defects found by bounded tests.
 - [x] Move SFT domain model, plan execution, direct kernel, and tests into the authoritative `apollo-sft` crate hierarchy.
 - [x] Verify `apollo-fft/src` has no SFT implementation or SFT export path.
-- [x] Split validation dependencies so `apollo-validation` and `rustfft`/`realfft` are only enabled for validation-test execution paths.
+- [x] Split validation dependencies so optional `rustfft` is enabled only through `apollo-validation/external-references`; audited that `realfft` is absent from the workspace dependency graph.
 - [x] Complete the new multi-crate validation API for `apollo-validation`.
 - [x] Fix `FftPlan1D`/`FftPlan2D` missing `forward_complex`/`inverse_complex` wrappers.
 - [x] Implement `kernel::radix2` (iterative Cooley-Tukey DIT, power-of-2) with value-semantic tests.
@@ -78,3 +78,4 @@
 - [x] Add SHT WGPU direct spherical harmonic execution without duplicating CPU-owner basis/quadrature logic.
 - [x] Add NUFFT WGPU fast 1D gridding execution after direct 1D/3D coverage.
 - [x] Add NUFFT WGPU fast 3D gridding execution after fast 1D parity coverage.
+- [x] Audit `realfft` references and document that no additional feature gate is required because `realfft` is not a workspace dependency.

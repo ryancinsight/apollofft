@@ -12,8 +12,9 @@ src/
   infrastructure/  optional NumPy and rustfft reference adapters
 ```
 
-This crate is the only allowed production workspace boundary for `rustfft`
-reference usage. The dependency is behind the `external-references` feature.
+This crate is the only allowed production workspace boundary for Rust external
+FFT reference usage. The current feature-gated Rust reference dependency is
+`rustfft`; `realfft` is not present in the workspace dependency graph.
 
 ## Validation Contract
 

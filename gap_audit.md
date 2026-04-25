@@ -9,7 +9,7 @@ All items below are implemented, tested, and verified in completed sprints.
 - Registered every `crates/apollo-*` crate in the root workspace.
 - Replaced incomplete `apollo-validation` orchestration with computed CPU, GPU-surface, NUFFT, external-reference, benchmark, and environment reports.
 - Added real crate roots for `apollo-frft`, `apollo-gft`, and `apollo-stft`.
-- Split `apollo-validation` external references behind an optional validation-only feature so `rustfft` and `realfft` are not used by non-validation crates.
+- Split `apollo-validation` external references behind an optional validation-only feature so `rustfft` is validation-only; audited that `realfft` is absent from the workspace dependency graph.
 - Completed `apollo-validation` with the new multi-crate API surface and conditional external-backend wiring.
 - Aligned `apollo-python` with current crate names, shape newtypes, and full-spectrum FFT plan APIs.
 - Added crate-local architecture README files for all `crates/apollo-*` crates.
@@ -78,6 +78,7 @@ All items below are implemented, tested, and verified in completed sprints.
 - Added validation report JSON schema-shape tests for required top-level and nested sections.
 - Added Criterion benchmark target for Apollo FFT direct, radix-2, and Bluestein kernel strategies.
 - Verified zero test failures after each sprint increment.
+- Audited external Rust FFT references: `realfft` is not a workspace dependency or source import; `apollo-validation/external-references` gates only optional `rustfft`.
 
 ### WGPU Backend Architecture
 

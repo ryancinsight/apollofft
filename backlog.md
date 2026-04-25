@@ -9,7 +9,7 @@
 - [x] Consolidate SFT ownership into `apollo-sft` and split it into domain, application, infrastructure, and verification modules.
 - [x] Correct STFT boundary coverage by using centered analysis frames with overlap-add normalization.
 - [x] Align `apollo-python` with current crate names, shape newtypes, and full-spectrum FFT plan APIs.
-- [x] Split `apollo-validation` external references behind an optional validation-only feature so `rustfft` and `realfft` are not used by non-validation crates.
+- [x] Split `apollo-validation` external references behind an optional validation-only feature so `rustfft` is validation-only; audited that `realfft` is absent from the workspace dependency graph.
 - [x] Complete `apollo-validation` with the new multi-crate API surface and conditional external-backend wiring.
 - [x] Fix `FftPlan1D` and `FftPlan2D` missing `forward_complex`/`inverse_complex` allocating wrappers (parity with `FftPlan3D`).
 - [x] Replace O(N^2) direct DFT kernels with O(N log N) strategy: iterative Cooley-Tukey radix-2 for power-of-2 sizes and Bluestein chirp-Z for arbitrary sizes; auto-selection in `kernel::fft_forward_64`, `fft_inverse_64`, etc.; all plan files updated to use new API; `rustfft` removed from production `apollo-fft` dependency.
@@ -60,5 +60,5 @@
 - [x] Implement forward direct-bin sliding DFT WGPU kernels inside `apollo-sdft-wgpu` with CPU parity tests before reporting execution support.
 - [x] Implement forward Hann-windowed STFT WGPU kernels inside `apollo-stft-wgpu` with CPU parity tests before reporting execution support.
 - [x] Implement forward and inverse Haar DWT WGPU kernels inside `apollo-wavelet-wgpu` with CPU parity tests before reporting execution support.
-- [ ] Investigate and document whether the `realfft` mention in planning artifacts requires any additional feature gate (currently no code imports realfft outside apollo-validation).
+- [x] Audit and document that `realfft` is not present in the workspace dependency graph; `apollo-validation/external-references` gates only optional `rustfft`.
 - [ ] Audit remaining transform crates against published references and add cross-crate validation fixtures where useful.

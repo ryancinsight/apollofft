@@ -58,13 +58,15 @@ External reference engines are optional and must not be required by crates other
 `apollo-validation`.
 
 - `rustfft` is used only by validation reference code.
-- `realfft` is used only when validation logic needs real-input reference comparisons.
+- `realfft` is not a workspace dependency and is not imported by validation code.
 - `pyfftw` is optional and is probed only when the host Python environment can import it.
 - NumPy-backed comparison probes are also optional and are skipped when the interpreter or module is
   unavailable.
 
 Production crates do not depend on these validation-only engines. The validation crate owns the
 reference integration boundary and should be the only place where these dependencies are activated.
+The current external Rust reference feature is `apollo-validation/external-references`, which enables
+only the optional `rustfft` dependency.
 
 ## Precision Thresholds
 
