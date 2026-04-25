@@ -8,6 +8,7 @@ repository = "https://github.com/ryancinsight/kwavers"
 description = "WGPU NUFFT backend surface for Apollo"
 
 [dependencies]
+apollo-fft-wgpu = { path = "../apollo-fft-wgpu" }
 apollo-nufft = { path = "../apollo-nufft" }
 bytemuck = { version = "1.19", features = ["derive"] }
 ndarray = { version = "0.16", features = ["rayon"] }

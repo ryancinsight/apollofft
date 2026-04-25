@@ -13,6 +13,10 @@ pub struct NufftWgpuCapabilities {
     pub supports_type1_3d: bool,
     /// Whether Type-2 3D NUFFT execution is implemented.
     pub supports_type2_3d: bool,
+    /// Whether fast gridded Type-1 1D NUFFT execution is implemented.
+    pub supports_fast_type1_1d: bool,
+    /// Whether fast gridded Type-2 1D NUFFT execution is implemented.
+    pub supports_fast_type2_1d: bool,
 }
 
 impl NufftWgpuCapabilities {
@@ -25,6 +29,8 @@ impl NufftWgpuCapabilities {
             supports_type2_1d: false,
             supports_type1_3d: false,
             supports_type2_3d: false,
+            supports_fast_type1_1d: false,
+            supports_fast_type2_1d: false,
         }
     }
 
@@ -37,6 +43,8 @@ impl NufftWgpuCapabilities {
             supports_type2_1d: false,
             supports_type1_3d: device_available,
             supports_type2_3d: false,
+            supports_fast_type1_1d: false,
+            supports_fast_type2_1d: false,
         }
     }
 
@@ -49,6 +57,8 @@ impl NufftWgpuCapabilities {
             supports_type2_1d: device_available,
             supports_type1_3d: device_available,
             supports_type2_3d: false,
+            supports_fast_type1_1d: false,
+            supports_fast_type2_1d: false,
         }
     }
 
@@ -61,6 +71,22 @@ impl NufftWgpuCapabilities {
             supports_type2_1d: device_available,
             supports_type1_3d: device_available,
             supports_type2_3d: device_available,
+            supports_fast_type1_1d: false,
+            supports_fast_type2_1d: false,
+        }
+    }
+
+    /// Construct capabilities for all direct kernels plus fast 1D gridded kernels.
+    #[must_use]
+    pub const fn direct_all_fast_1d(device_available: bool) -> Self {
+        Self {
+            device_available,
+            supports_type1_1d: device_available,
+            supports_type2_1d: device_available,
+            supports_type1_3d: device_available,
+            supports_type2_3d: device_available,
+            supports_fast_type1_1d: device_available,
+            supports_fast_type2_1d: device_available,
         }
     }
 }

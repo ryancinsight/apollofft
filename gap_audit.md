@@ -108,6 +108,7 @@ All items below are implemented, tested, and verified in completed sprints.
 - **Wavelet WGPU**: `apollo-wavelet-wgpu` executes forward/inverse multi-level Haar DWT via two-buffer Mallat decomposition; `WaveletWgpuPlan` carries `len` and `levels`; roundtrip error < 1e-5.
 - **SFT WGPU**: `apollo-sft-wgpu` executes dense direct DFT on WGPU, projects top-k support through the `apollo-sft` sparse spectrum contract, and reconstructs by normalized inverse direct DFT; CPU parity tested.
 - **NUFFT WGPU**: `apollo-nufft-wgpu` executes exact direct Type-1 and Type-2 summations for 1D and 3D on WGPU; CPU exact-reference parity tested.
+- **NUFFT WGPU Fast 1D**: `apollo-nufft-wgpu` executes fast Kaiser-Bessel Type-1 and Type-2 1D paths with GPU spreading/interpolation, `apollo-fft-wgpu` oversampled FFT dispatch, and GPU deconvolution; CPU gridded-reference parity tested.
 - **SHT WGPU**: `apollo-sht-wgpu` executes direct complex forward/inverse SHT on WGPU using `apollo-sht` quadrature and basis values as the SSOT; CPU parity tested.
 
 ---
@@ -121,9 +122,9 @@ The following 4 gaps are deferred to future increments. Each requires non-trivia
 
 Transform-specific analytical tests exist for all crates, but external published-reference fixtures are still pending for a separate validation increment. No external reference data set has been ingested and no cross-library comparison has been executed. Completion requires selecting reference data from published transform tables or a reference implementation and wiring those into the `apollo-validation` external-reference report path.
 
-### 3. NUFFT WGPU Fast Paths
+### 3. NUFFT WGPU Fast 3D Paths
 
-`apollo-nufft-wgpu` now supports exact direct Type-1 and Type-2 execution for 1D and 3D. Fast Kaiser-Bessel paths still require GPU spreading/interpolation, oversampled FFT dispatch, and deconvolution before support can be reported.
+`apollo-nufft-wgpu` now supports exact direct Type-1 and Type-2 execution for 1D and 3D, plus fast Kaiser-Bessel Type-1 and Type-2 execution for 1D. Fast 3D Kaiser-Bessel paths still require GPU separable spreading/interpolation, oversampled 3D FFT dispatch, and 3D deconvolution before support can be reported.
 
 ### 4. SHT WGPU Basis Generation
 

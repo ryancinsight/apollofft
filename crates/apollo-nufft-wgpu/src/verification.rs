@@ -3,8 +3,8 @@
 #[cfg(test)]
 mod tests {
     use apollo_nufft::{
-        nufft_type1_1d, nufft_type1_3d, nufft_type2_1d, nufft_type2_3d, UniformDomain1D,
-        UniformGrid3D,
+        nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type2_1d, nufft_type2_1d_fast,
+        nufft_type2_3d, UniformDomain1D, UniformGrid3D,
     };
     use ndarray::{Array1, Array3};
     use num_complex::{Complex32, Complex64};
@@ -21,6 +21,20 @@ mod tests {
         assert!(capabilities.supports_type2_1d);
         assert!(capabilities.supports_type1_3d);
         assert!(capabilities.supports_type2_3d);
+        assert!(!capabilities.supports_fast_type1_1d);
+        assert!(!capabilities.supports_fast_type2_1d);
+    }
+
+    #[test]
+    fn capabilities_advertise_fast_1d_when_enabled() {
+        let capabilities = NufftWgpuCapabilities::direct_all_fast_1d(true);
+        assert!(capabilities.device_available);
+        assert!(capabilities.supports_type1_1d);
+        assert!(capabilities.supports_type2_1d);
+        assert!(capabilities.supports_type1_3d);
+        assert!(capabilities.supports_type2_3d);
+        assert!(capabilities.supports_fast_type1_1d);
+        assert!(capabilities.supports_fast_type2_1d);
     }
 
     #[test]
@@ -190,6 +204,77 @@ mod tests {
         assert_eq!(actual.len(), expected.len());
         for (actual, expected) in actual.iter().zip(expected.iter()) {
             assert_complex64_close(*actual, *expected, 8.0e-5);
+        }
+    }
+
+    #[test]
+    fn fast_type1_1d_matches_cpu_gridded_reference_when_device_exists() {
+        let Some(backend) = backend_or_skip() else {
+            return;
+        };
+        let domain = UniformDomain1D::new(8, 0.25).expect("domain");
+        let plan = NufftWgpuPlan1D::new(domain, 2, 6);
+        let positions = [0.0_f32, 0.25, 0.7, 1.15];
+        let values = [
+            Complex32::new(1.0, 0.0),
+            Complex32::new(0.5, -0.25),
+            Complex32::new(-0.75, 0.5),
+            Complex32::new(0.25, 0.75),
+        ];
+        let expected_positions: Vec<f64> = positions.iter().map(|value| *value as f64).collect();
+        let expected_values: Vec<Complex64> = values
+            .iter()
+            .map(|value| Complex64::new(value.re as f64, value.im as f64))
+            .collect();
+        let expected = nufft_type1_1d_fast(&expected_positions, &expected_values, domain, 6);
+
+        let actual = backend
+            .execute_fast_type1_1d(&plan, &positions, &values)
+            .expect("GPU fast type1 1D");
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            assert_complex64_close(*actual, *expected, 1.5e-3);
+        }
+    }
+
+    #[test]
+    fn fast_type2_1d_matches_cpu_gridded_reference_when_device_exists() {
+        let Some(backend) = backend_or_skip() else {
+            return;
+        };
+        let domain = UniformDomain1D::new(8, 0.25).expect("domain");
+        let plan = NufftWgpuPlan1D::new(domain, 2, 6);
+        let positions = [0.0_f32, 0.25, 0.7, 1.15, 1.8];
+        let coefficients = [
+            Complex32::new(1.0, 0.0),
+            Complex32::new(0.5, -0.25),
+            Complex32::new(-0.75, 0.5),
+            Complex32::new(0.25, 0.75),
+            Complex32::new(-0.5, -0.1),
+            Complex32::new(0.125, 0.25),
+            Complex32::new(0.8, -0.6),
+            Complex32::new(-0.3, 0.4),
+        ];
+        let expected_positions: Vec<f64> = positions.iter().map(|value| *value as f64).collect();
+        let expected_coefficients: Vec<Complex64> = coefficients
+            .iter()
+            .map(|value| Complex64::new(value.re as f64, value.im as f64))
+            .collect();
+        let expected = nufft_type2_1d_fast(
+            &Array1::from_vec(expected_coefficients),
+            &expected_positions,
+            domain,
+            6,
+        );
+
+        let actual = backend
+            .execute_fast_type2_1d(&plan, &coefficients, &positions)
+            .expect("GPU fast type2 1D");
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            assert_complex64_close(*actual, *expected, 1.5e-3);
         }
     }
 

@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use apollo_nufft::infrastructure::kernel::kaiser_bessel::{fft_signed_index, i0, kb_kernel_ft};
 use apollo_nufft::{UniformDomain1D, UniformGrid3D};
 use ndarray::{Array1, Array3};
 use num_complex::{Complex32, Complex64};
@@ -47,7 +48,10 @@ impl NufftWgpuBackend {
         let descriptor = wgpu::DeviceDescriptor {
             label: Some("apollo-nufft-wgpu"),
             required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::downlevel_defaults(),
+            required_limits: wgpu::Limits {
+                max_storage_buffers_per_shader_stage: 8,
+                ..wgpu::Limits::downlevel_defaults()
+            },
             memory_hints: wgpu::MemoryHints::default(),
             trace: wgpu::Trace::Off,
         };
@@ -63,7 +67,7 @@ impl NufftWgpuBackend {
     /// Return truthful current capabilities.
     #[must_use]
     pub const fn capabilities(&self) -> NufftWgpuCapabilities {
-        NufftWgpuCapabilities::direct_all(true)
+        NufftWgpuCapabilities::direct_all_fast_1d(true)
     }
 
     /// Return the acquired WGPU device.
@@ -155,6 +159,73 @@ impl NufftWgpuBackend {
             .collect())
     }
 
+    /// Execute fast gridded Type-1 1D NUFFT on WGPU.
+    pub fn execute_fast_type1_1d(
+        &self,
+        plan: &NufftWgpuPlan1D,
+        positions: &[f32],
+        values: &[Complex32],
+    ) -> NufftWgpuResult<Array1<Complex64>> {
+        validate_pair_lengths(positions.len(), values.len())?;
+        validate_fast_1d_plan(plan)?;
+        validate_usize_to_u32(positions.len())?;
+        let fast = fast_1d_metadata(plan)?;
+        let output = self.kernel.execute_fast_type1_1d(
+            &self.device,
+            &self.queue,
+            plan.domain().n,
+            fast.oversampled_len,
+            plan.kernel_width(),
+            plan.domain().length() as f32,
+            fast.beta as f32,
+            fast.i0_beta as f32,
+            &fast.deconv,
+            positions,
+            values,
+        )?;
+        Ok(Array1::from_vec(
+            output
+                .into_iter()
+                .map(|value| Complex64::new(value.re as f64, value.im as f64))
+                .collect(),
+        ))
+    }
+
+    /// Execute fast gridded Type-2 1D NUFFT on WGPU.
+    pub fn execute_fast_type2_1d(
+        &self,
+        plan: &NufftWgpuPlan1D,
+        fourier_coeffs: &[Complex32],
+        positions: &[f32],
+    ) -> NufftWgpuResult<Vec<Complex64>> {
+        if fourier_coeffs.len() != plan.domain().n {
+            return Err(NufftWgpuError::InputLengthMismatch {
+                expected: plan.domain().n,
+                actual: fourier_coeffs.len(),
+            });
+        }
+        validate_fast_1d_plan(plan)?;
+        validate_usize_to_u32(positions.len())?;
+        let fast = fast_1d_metadata(plan)?;
+        let output = self.kernel.execute_fast_type2_1d(
+            &self.device,
+            &self.queue,
+            plan.domain().n,
+            fast.oversampled_len,
+            plan.kernel_width(),
+            plan.domain().length() as f32,
+            fast.beta as f32,
+            fast.i0_beta as f32,
+            &fast.deconv,
+            fourier_coeffs,
+            positions,
+        )?;
+        Ok(output
+            .into_iter()
+            .map(|value| Complex64::new(value.re as f64, value.im as f64))
+            .collect())
+    }
+
     /// Execute exact direct Type-1 3D NUFFT on WGPU.
     pub fn execute_type1_3d(
         &self,
@@ -236,4 +307,58 @@ fn validate_usize_to_u32(value: usize) -> NufftWgpuResult<()> {
         });
     }
     Ok(())
+}
+
+struct Fast1DMetadata {
+    oversampled_len: usize,
+    beta: f64,
+    i0_beta: f64,
+    deconv: Vec<f32>,
+}
+
+fn validate_fast_1d_plan(plan: &NufftWgpuPlan1D) -> NufftWgpuResult<()> {
+    if plan.oversampling() < 2 {
+        return Err(NufftWgpuError::InvalidPlan {
+            message: "fast 1D NUFFT oversampling factor must be >= 2",
+        });
+    }
+    if plan.kernel_width() < 2 {
+        return Err(NufftWgpuError::InvalidPlan {
+            message: "fast 1D NUFFT kernel width must be >= 2",
+        });
+    }
+    validate_usize_to_u32(plan.domain().n)?;
+    let Some(oversampled_len) = plan.domain().n.checked_mul(plan.oversampling()) else {
+        return Err(NufftWgpuError::InvalidPlan {
+            message: "fast 1D NUFFT oversampled length overflow",
+        });
+    };
+    validate_usize_to_u32(oversampled_len)
+}
+
+fn fast_1d_metadata(plan: &NufftWgpuPlan1D) -> NufftWgpuResult<Fast1DMetadata> {
+    validate_fast_1d_plan(plan)?;
+    let oversampled_len =
+        plan.domain()
+            .n
+            .checked_mul(plan.oversampling())
+            .ok_or(NufftWgpuError::InvalidPlan {
+                message: "fast 1D NUFFT oversampled length overflow",
+            })?;
+    let beta = std::f64::consts::PI
+        * (1.0 - 1.0 / (2.0 * plan.oversampling() as f64))
+        * (2 * plan.kernel_width()) as f64;
+    let i0_beta = i0(beta);
+    let deconv = (0..plan.domain().n)
+        .map(|k| {
+            let xi = fft_signed_index(k, plan.domain().n) as f64 / oversampled_len as f64;
+            (1.0 / kb_kernel_ft(xi, plan.kernel_width(), beta, i0_beta)) as f32
+        })
+        .collect();
+    Ok(Fast1DMetadata {
+        oversampled_len,
+        beta,
+        i0_beta,
+        deconv,
+    })
 }
