@@ -199,8 +199,8 @@ impl NufftPlan1D {
             }
         }
 
-        let mut spectrum = Array1::from_shape_vec(self.m, scratch_grid.to_vec()).unwrap();
-        self.fft_plan.forward_complex_inplace(&mut spectrum);
+        self.fft_plan.forward_complex_slice_inplace(scratch_grid);
+        let spectrum = &*scratch_grid;
 
         for k in 0..self.n_out {
             let k_signed = fft_signed_index(k, self.n_out);
@@ -250,9 +250,8 @@ impl NufftPlan1D {
             scratch_spread[m_idx] = fourier_coeffs[k] * self.deconv[k];
         }
 
-        let mut spread_array = Array1::from_shape_vec(self.m, scratch_spread.to_vec()).unwrap();
-        self.fft_plan.inverse_complex_inplace(&mut spread_array);
-        let spread = spread_array.as_slice().unwrap();
+        self.fft_plan.inverse_complex_slice_inplace(scratch_spread);
+        let spread = &*scratch_spread;
 
         let w = self.w as i64;
         let w_f = self.w as f64;

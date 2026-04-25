@@ -38,6 +38,9 @@ All items below are implemented, tested, and verified in completed sprints.
 - Removed duplicate transformed-lane collections from FFT 2D/3D axis passes.
 - Reduced NUFFT interpolation and 3D separable-pass allocation by borrowing type-2 grids and reusing per-axis lane buffers.
 - Reduced Radon filtered-backprojection allocation by adding caller-owned ramp filtering.
+- Implemented `FftPlan1D` zero-allocation `forward_complex_slice_inplace` and `inverse_complex_slice_inplace` methods to execute dense kernels directly from caller slices.
+- Eliminated O(M) nested `Array1` heap allocations in STFT `forward_with_window_inner` and `inverse_into` by using `FftPlan1D` slice execution and flattened arrays.
+- Eliminated dynamic `Array1::from_shape_vec` conversions in NUFFT 1D Type-1 and Type-2 evaluation kernels utilizing `FftPlan1D` slice execution.
 
 ### New Transform Crates
 
@@ -113,9 +116,6 @@ All items below are implemented, tested, and verified in completed sprints.
 
 The following 4 gaps are deferred to future increments. Each requires non-trivial derivation, algorithm work, or specialized GPU infrastructure before implementation.
 
-### 1. DCT/DST Acceleration
-
-Production execution uses verified direct kernels. A future FFT-derived fast path requires a derivation and parity tests before reintroduction. No FFT-mapped acceleration path exists until the correct frequency-domain embedding is proved and all type-I/II/III/IV parity tests pass against the direct kernel.
 
 ### 2. Published-Reference Audit
 

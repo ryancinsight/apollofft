@@ -321,6 +321,11 @@ impl FftPlan2D {
     }
 
     fn axis_pass_complex(&self, data: &mut Array2<Complex64>, axis: Axis, forward: bool) {
+        if axis.index() == 0 {
+            self.axis0_pass_complex(data, forward);
+            return;
+        }
+
         let mut lanes: Vec<Vec<Complex64>> = data
             .lanes(axis)
             .into_iter()
@@ -340,6 +345,32 @@ impl FftPlan2D {
         }
     }
 
+    fn axis0_pass_complex(&self, data: &mut Array2<Complex64>, forward: bool) {
+        let data_slice = data
+            .as_slice_memory_order_mut()
+            .expect("2D complex data must be contiguous");
+        let mut lanes = vec![Complex64::default(); self.nx * self.ny];
+        for col in 0..self.ny {
+            for row in 0..self.nx {
+                lanes[col * self.nx + row] = data_slice[row * self.ny + col];
+            }
+        }
+
+        lanes.par_chunks_mut(self.nx).for_each(|lane| {
+            if forward {
+                fft_forward_64(lane);
+            } else {
+                fft_inverse_64(lane);
+            }
+        });
+
+        for col in 0..self.ny {
+            for row in 0..self.nx {
+                data_slice[row * self.ny + col] = lanes[col * self.nx + row];
+            }
+        }
+    }
+
     fn forward_complex_inplace_f32(&self, data: &mut Array2<Complex32>) {
         self.axis_pass_complex_f32(data, Axis(1), true);
         self.axis_pass_complex_f32(data, Axis(0), true);
@@ -351,6 +382,11 @@ impl FftPlan2D {
     }
 
     fn axis_pass_complex_f32(&self, data: &mut Array2<Complex32>, axis: Axis, forward: bool) {
+        if axis.index() == 0 {
+            self.axis0_pass_complex_f32(data, forward);
+            return;
+        }
+
         let mut lanes: Vec<Vec<Complex32>> = data
             .lanes(axis)
             .into_iter()
@@ -369,6 +405,32 @@ impl FftPlan2D {
             }
         }
     }
+
+    fn axis0_pass_complex_f32(&self, data: &mut Array2<Complex32>, forward: bool) {
+        let data_slice = data
+            .as_slice_memory_order_mut()
+            .expect("2D f32 complex data must be contiguous");
+        let mut lanes = vec![Complex32::default(); self.nx * self.ny];
+        for col in 0..self.ny {
+            for row in 0..self.nx {
+                lanes[col * self.nx + row] = data_slice[row * self.ny + col];
+            }
+        }
+
+        lanes.par_chunks_mut(self.nx).for_each(|lane| {
+            if forward {
+                fft_forward_32(lane);
+            } else {
+                fft_inverse_32(lane);
+            }
+        });
+
+        for col in 0..self.ny {
+            for row in 0..self.nx {
+                data_slice[row * self.ny + col] = lanes[col * self.nx + row];
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -378,7 +440,7 @@ mod tests {
 
     #[test]
     fn roundtrip_recovers_asymmetric_inputs() {
-        for &(nx, ny) in &[(7, 13), (13, 7), (16, 24), (24, 16)] {
+        for &(nx, ny) in &[(7, 13), (13, 7), (16, 24), (24, 16), (120, 360)] {
             let shape = Shape2D::new(nx, ny).expect("test dimensions are non-zero");
             let plan = FftPlan2D::new(shape);
             let input = Array2::from_shape_fn((nx, ny), |(i, j)| {

@@ -220,6 +220,42 @@ impl FftPlan1D {
             });
     }
 
+    /// Forward transform of a complex signal in-place using a slice.
+    pub fn forward_complex_slice_inplace(&self, data: &mut [Complex64]) {
+        assert_eq!(data.len(), self.n, "complex forward length mismatch");
+        if let (Some(plan), Some(scratch_mu)) = (&self.bluestein_plan, &self.bluestein_scratch) {
+            let mut scratch = scratch_mu.lock().expect("bluestein scratch mutex poisoned");
+            plan.forward_with_scratch(data, &mut scratch);
+        } else {
+            crate::application::execution::kernel::radix2::forward_inplace_64(data);
+        }
+    }
+
+    /// Inverse transform of a complex signal in-place with normalization using a slice.
+    pub fn inverse_complex_slice_inplace(&self, data: &mut [Complex64]) {
+        assert_eq!(data.len(), self.n, "complex inverse length mismatch");
+        if let (Some(plan), Some(scratch_mu)) = (&self.bluestein_plan, &self.bluestein_scratch) {
+            let mut scratch = scratch_mu.lock().expect("bluestein scratch mutex poisoned");
+            plan.inverse_unnorm_with_scratch(data, &mut scratch);
+            let scale = 1.0 / self.n as f64;
+            for x in data.iter_mut() {
+                *x *= scale;
+            }
+        } else {
+            crate::application::execution::kernel::radix2::inverse_inplace_64(data);
+        }
+    }
+
+    /// Forward transform of a complex signal in-place.
+    pub fn forward_complex_inplace(&self, data: &mut Array1<Complex64>) {
+        self.forward_complex_slice_inplace(data.as_slice_mut().expect("Array must be contiguous"));
+    }
+
+    /// Inverse transform of a complex signal in-place with normalization.
+    pub fn inverse_complex_inplace(&self, data: &mut Array1<Complex64>) {
+        self.inverse_complex_slice_inplace(data.as_slice_mut().expect("Array must be contiguous"));
+    }
+
     /// Compatibility alias for `inverse_complex_to_real_into`.
     pub fn inverse_into(
         &self,
@@ -228,41 +264,6 @@ impl FftPlan1D {
         scratch: &mut Array1<Complex64>,
     ) {
         self.inverse_complex_to_real_into(input, output, scratch);
-    }
-
-    /// Forward transform of a complex signal in-place.
-    pub fn forward_complex_inplace(&self, data: &mut Array1<Complex64>) {
-        assert_eq!(data.len(), self.n, "complex forward length mismatch");
-        if let (Some(plan), Some(scratch_mu)) = (&self.bluestein_plan, &self.bluestein_scratch) {
-            // Lock the pre-allocated scratch; fill is cheaper than allocation.
-            let mut scratch = scratch_mu.lock().expect("bluestein scratch mutex poisoned");
-            plan.forward_with_scratch(
-                data.as_slice_mut().expect("Array must be contiguous"),
-                &mut scratch,
-            );
-        } else {
-            crate::application::execution::kernel::radix2::forward_inplace_64(
-                data.as_slice_mut().expect("Array must be contiguous"),
-            );
-        }
-    }
-
-    /// Inverse transform of a complex signal in-place with normalization.
-    pub fn inverse_complex_inplace(&self, data: &mut Array1<Complex64>) {
-        assert_eq!(data.len(), self.n, "complex inverse length mismatch");
-        if let (Some(plan), Some(scratch_mu)) = (&self.bluestein_plan, &self.bluestein_scratch) {
-            let mut scratch = scratch_mu.lock().expect("bluestein scratch mutex poisoned");
-            plan.inverse_unnorm_with_scratch(
-                data.as_slice_mut().expect("Array must be contiguous"),
-                &mut scratch,
-            );
-            let scale = 1.0 / self.n as f64;
-            data.mapv_inplace(|x| x * scale);
-        } else {
-            crate::application::execution::kernel::radix2::inverse_inplace_64(
-                data.as_slice_mut().expect("Array must be contiguous"),
-            );
-        }
     }
 
     /// Forward transform of a complex signal (allocating).

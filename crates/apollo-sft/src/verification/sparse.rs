@@ -224,3 +224,83 @@ fn forward_k_equals_one_returns_dc_for_constant_signal() {
         "DC magnitude: expected 16.0, got {dc_mag}"
     );
 }
+
+#[test]
+fn top_k_minimizes_parseval_energy_residual() {
+    // DC spike: x = [1, 0, 0, 0, 0, 0, 0, 0], N=8.
+    // DFT(x)[k] = sum_{n=0}^{7} x[n] exp(-2πi·kn/8) = x[0] = 1 for all k.
+    // All 8 DFT bins have equal magnitude 1.0; tie-breaking by lowest index
+    // selects frequency 0 as the single retained coefficient for K=1.
+    // Parseval residual = (1/N) * sum_{k=1}^{7} |X[k]|² = 7/8; this is the
+    // minimum achievable for any single-bin selection, proved by the
+    // Top-K Coefficient Selection Optimality theorem in the module doc.
+    let n = 8usize;
+    let mut signal = vec![Complex64::new(0.0, 0.0); n];
+    signal[0] = Complex64::new(1.0, 0.0);
+
+    let plan = SparseFftPlan::new(n, 1).expect("plan");
+    let spectrum = plan.forward(&signal).expect("forward");
+
+    let coeffs: Vec<(usize, Complex64)> = spectrum.coefficients().collect();
+    assert_eq!(coeffs.len(), 1, "K=1 must retain exactly 1 coefficient");
+    assert_eq!(
+        coeffs[0].0, 0,
+        "Tie-breaking must select lowest frequency index 0, got {}",
+        coeffs[0].0
+    );
+    let val = coeffs[0].1;
+    assert!(
+        (val.re - 1.0).abs() < 1e-10 && val.im.abs() < 1e-10,
+        "DFT[0] of DC spike must be 1.0+0.0i, got {:?}",
+        val
+    );
+}
+
+#[test]
+fn exactly_sparse_signal_recovers_exact_coefficients() {
+    // Construct X with exactly 2 nonzero DFT components at known positions:
+    //   X[0] = 3 + 0i  (|X[0]| = 3.0)
+    //   X[3] = 0 + 2i  (|X[3]| = 2.0)
+    //   X[k] = 0 for k ∉ {0, 3}
+    // Compute x = IFFT(X) via SparseFftPlan::inverse. The resulting signal is
+    // 2-sparse in the frequency domain. SparseFftPlan::forward(x) with K=2
+    // must recover exactly X[0] and X[3] by the Exact Recovery theorem.
+    let n = 8usize;
+    let mut x_freq = SparseSpectrum::new(n);
+    x_freq
+        .insert(0, Complex64::new(3.0, 0.0))
+        .expect("insert X[0]");
+    x_freq
+        .insert(3, Complex64::new(0.0, 2.0))
+        .expect("insert X[3]");
+
+    let plan = SparseFftPlan::new(n, 2).expect("plan");
+    let signal = plan.inverse(&x_freq).expect("ifft to time domain");
+    let recovered = plan.forward(&signal).expect("forward");
+
+    let support: Vec<(usize, Complex64)> = recovered.coefficients().collect();
+    assert_eq!(
+        support.len(),
+        2,
+        "Exactly 2 nonzero DFT components must be recovered; got {:?}",
+        support
+    );
+
+    let coeff_at = |idx: usize| -> Option<Complex64> {
+        support.iter().find(|(i, _)| *i == idx).map(|(_, v)| *v)
+    };
+
+    let c0 = coeff_at(0).expect("coefficient at frequency 0 not found");
+    let c3 = coeff_at(3).expect("coefficient at frequency 3 not found");
+
+    assert!(
+        (c0.norm() - 3.0_f64).abs() < 1e-6,
+        "|X[0]| must be 3.0, got {}",
+        c0.norm()
+    );
+    assert!(
+        (c3.norm() - 2.0_f64).abs() < 1e-6,
+        "|X[3]| must be 2.0, got {}",
+        c3.norm()
+    );
+}

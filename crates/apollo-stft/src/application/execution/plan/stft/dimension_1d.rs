@@ -161,18 +161,16 @@ impl StftPlan {
             .par_chunks_mut(self.spectrum_len())
             .enumerate()
             .for_each(|(m, out_chunk)| {
-                let mut frame = Array1::<Complex64>::zeros(self.frame_len);
                 let start = m as isize * self.hop_len as isize - (self.frame_len / 2) as isize;
                 for n in 0..self.frame_len {
                     let signal_index = start + n as isize;
-                    frame[n] = if signal_index >= 0 && (signal_index as usize) < signal.len() {
+                    out_chunk[n] = if signal_index >= 0 && (signal_index as usize) < signal.len() {
                         Complex64::new(signal[signal_index as usize] * window[n], 0.0)
                     } else {
                         Complex64::new(0.0, 0.0)
                     };
                 }
-                self.fft_plan.forward_complex_inplace(&mut frame);
-                out_chunk.copy_from_slice(frame.as_slice().unwrap());
+                self.fft_plan.forward_complex_slice_inplace(out_chunk);
             });
         Ok(())
     }
@@ -222,25 +220,27 @@ impl StftPlan {
         if signal_len < self.frame_len {
             return Err(StftError::InputTooShort);
         }
-        // Parallel IFFT: each frame is independent.
-        let frame_results: Vec<Vec<f64>> = (0..frames)
-            .into_par_iter()
-            .map(|m| {
+        let mut flat_frames = vec![0.0f64; frames * self.frame_len];
+        let mut flat_complex = vec![Complex64::new(0.0, 0.0); frames * self.frame_len];
+        flat_complex
+            .par_chunks_mut(self.frame_len)
+            .zip(flat_frames.par_chunks_mut(self.frame_len))
+            .enumerate()
+            .for_each(|(m, (frame_complex, frame_out))| {
                 let offset = m * self.spectrum_len();
-                let mut frame = Array1::<Complex64>::zeros(self.frame_len);
                 for k in 0..self.spectrum_len() {
-                    frame[k] = spectrum[offset + k];
+                    frame_complex[k] = spectrum[offset + k];
                 }
-                self.fft_plan.inverse_complex_inplace(&mut frame);
-                (0..self.frame_len)
-                    .map(|n| frame[n].re * self.window[n])
-                    .collect()
-            })
-            .collect();
+                self.fft_plan.inverse_complex_slice_inplace(frame_complex);
+                for n in 0..self.frame_len {
+                    frame_out[n] = frame_complex[n].re * self.window[n];
+                }
+            });
+
         // Sequential overlap-add: avoids data races on shared output positions.
         let mut overlap = vec![0.0f64; signal_len];
         let mut weight = vec![0.0f64; signal_len];
-        for (m, frame_vals) in frame_results.iter().enumerate() {
+        for (m, frame_vals) in flat_frames.chunks(self.frame_len).enumerate() {
             let start = m as isize * self.hop_len as isize - (self.frame_len / 2) as isize;
             for n in 0..self.frame_len {
                 let signal_index = start + n as isize;

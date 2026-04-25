@@ -54,7 +54,7 @@
 - [x] Precompute DWT highpass QMF coefficients once per `analysis_stage_into`/`synthesis_stage_into` call using the Smith-Barnwell QMF identity.
 - [x] Add Parseval/Plancherel energy-invariance theorem (with proof sketch) to `radix2.rs` module doc and Unified Twiddle Table theorem.
 - [x] Add I_0 convergence theorem and K=256 sufficiency corollary to `kaiser_bessel.rs`.
-- [ ] Derive and verify a correct FFT-based DCT/DST acceleration strategy.
+- [x] Derive and verify a correct FFT-based DCT/DST acceleration strategy.
 - [ ] Audit remaining transform crates against published references and cross-crate validation fixtures.
 - [x] Add WGPU NUFFT direct Type-1/Type-2 1D/3D numerical kernels and parity tests.
 - [x] Add direct forward CZT WGPU kernels with CPU parity validation.

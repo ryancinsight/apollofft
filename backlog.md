@@ -48,7 +48,7 @@
 - [x] Add I_0 convergence theorem (geometric tail bound, K=256 sufficiency corollary) to `kaiser_bessel.rs`.
 
 ## Next increments
-- [ ] Reintroduce DCT/DST acceleration only after deriving a correct FFT mapping and proving parity against direct kernels.
+- [x] Reintroduce DCT/DST acceleration only after deriving a correct FFT mapping and proving parity against direct kernels.
 - [x] Implement exact direct Type-1 1D/3D NUFFT WGPU kernels inside `apollo-nufft-wgpu` with CPU parity tests before reporting execution support.
 - [x] Implement exact direct Type-2 1D NUFFT WGPU kernels inside `apollo-nufft-wgpu` with CPU parity tests before reporting execution support.
 - [x] Implement exact direct Type-2 3D NUFFT owner reference and WGPU kernels inside `apollo-nufft-wgpu` with CPU parity tests before reporting execution support.

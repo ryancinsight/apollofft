@@ -15,6 +15,45 @@
 //! The recovery kernel is dense and deterministic. Sparse plan parameters
 //! remain explicit domain data so a later sublinear isolation kernel can
 //! replace the infrastructure layer without changing this public API.
+//!
+//! ## Theorem: Top-K Coefficient Selection Optimality
+//!
+//! **Statement.** For a signal x ∈ ℂ^N with DFT coefficients X = FFT(x), the
+//! K-sparse approximation X_K obtained by retaining the K largest-magnitude
+//! coefficients minimizes the squared reconstruction error:
+//!
+//! ```text
+//! ‖x - IFFT(X_K)‖² = Σ_{j=K+1}^{N} |X[π(j)]|² / N²
+//! ```
+//!
+//! where π is the permutation sorting |X| in descending order.
+//!
+//! **Proof sketch.** Parseval's theorem states ‖u - v‖² = (1/N)‖FFT(u) - FFT(v)‖²
+//! for all u, v ∈ ℂ^N. The reconstruction error after zeroing all but the K
+//! retained DFT bins equals (1/N) Σ_{j: not in top-K} |X[j]|². This sum is
+//! minimised by retaining exactly the K coefficients with the largest |X[j]|,
+//! since any other selection of K bins leaves a strictly larger or equal residual
+//! energy. □
+//!
+//! **Reference.** Candès & Wakin (2008), "An Introduction to Compressive Sensing",
+//! IEEE Signal Processing Magazine 25(2), pp. 21–30.
+//!
+//! ## Theorem: Exact Recovery for K-Sparse Signals
+//!
+//! **Statement.** If x ∈ ℂ^N is exactly K-sparse in the DFT domain (at most K
+//! frequency components are nonzero), then `SparseFftPlan::new(N, K)?.forward(x)`
+//! returns a `SparseSpectrum` containing exactly those K nonzero components, with
+//! values matching FFT(x)[k] to within FFT numerical precision
+//! (O(N log N · ε_machine)).
+//!
+//! **Proof sketch.** In exact arithmetic the N-K non-support DFT bins are zero.
+//! The top-K heap selector retains all K nonzero bins because their squared
+//! magnitudes are strictly positive while the remaining N-K bins have squared
+//! magnitude zero; no nonzero bin can be displaced by a zero bin. The threshold
+//! filter (default `threshold = 0.0`) passes every retained bin since each has
+//! norm > 0. The only error is accumulated floating-point rounding in the
+//! O(N log N) butterfly network, bounding per-coefficient error at
+//! O(N log N · ε_machine). □
 
 use crate::domain::plan::config::SparseFftConfig;
 use crate::domain::spectrum::sparse::SparseSpectrum;
@@ -26,9 +65,9 @@ use std::collections::BinaryHeap;
 
 /// Ordering key for (magnitude_squared, frequency_index) in the top-K heap.
 ///
-/// Ord compares magnitude ascending, then frequency index descending so that
+/// `Ord` compares magnitude ascending, then frequency index descending so that
 /// equal-magnitude coefficients at higher indices are evicted first from a
-/// BinaryHeap<Reverse<MagIdx>>. The K coefficients with the greatest magnitudes
+/// `BinaryHeap<Reverse<MagIdx>>`. The K coefficients with the greatest magnitudes
 /// are retained; ties are broken in favour of the lower frequency index,
 /// matching the stable descending-magnitude ascending-index sort.
 #[derive(PartialEq)]
@@ -45,9 +84,32 @@ impl PartialOrd for MagIdx {
 impl Ord for MagIdx {
     /// Ascending magnitude; descending index for equal magnitudes.
     ///
-    /// For equal magnitudes m: MagIdx(m, i).cmp(MagIdx(m, j)) = j.cmp(i),
-    /// so higher indices sort smaller. BinaryHeap<Reverse<MagIdx>>.pop()
-    /// evicts the minimum MagIdx, i.e. the smallest magnitude or, on ties,
+    /// ### Theorem: Tie-Breaking Invariance
+    ///
+    /// **Statement.** For equal magnitudes |X[i]|² = |X[j]|², the lower-frequency
+    /// index i < j is preferred. The K surviving entries are therefore the K
+    /// largest-magnitude coefficients with, among ties, the smallest frequency
+    /// indices — independent of insertion order.
+    ///
+    /// **Proof.** With `self = MagIdx(m, i)` and `other = MagIdx(m, j)`:
+    ///
+    /// ```text
+    /// self.cmp(other) = m.total_cmp(m)       [Equal]
+    ///                     .then_with(|| j.cmp(i))
+    /// ```
+    ///
+    /// When i < j: `j.cmp(i)` = Greater → `MagIdx(m, i) > MagIdx(m, j)`.
+    /// Lower frequency indices therefore map to *larger* `MagIdx` values.
+    ///
+    /// `BinaryHeap<Reverse<MagIdx>>::pop()` removes the *maximum* `Reverse`
+    /// element, which equals the *minimum* `MagIdx`. Among equal-magnitude
+    /// entries, minimum `MagIdx` is the entry with the highest index. That
+    /// entry is evicted. After K elements remain, they carry the K largest
+    /// magnitudes; among magnitude ties the lowest frequency indices survive. □
+    ///
+    /// For equal magnitudes m: `MagIdx(m, i).cmp(MagIdx(m, j)) = j.cmp(i)`,
+    /// so higher indices sort smaller. `BinaryHeap<Reverse<MagIdx>>.pop()`
+    /// evicts the minimum `MagIdx`, i.e. the smallest magnitude or, on ties,
     /// the highest index. The heap therefore retains K elements with the
     /// largest magnitudes, breaking ties by lowest frequency index.
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
@@ -118,6 +180,14 @@ impl SparseFftPlan {
     /// ## Complexity
     /// Spectrum density computation: O(N log N) via apollo-fft auto-selecting kernel.
     /// Top-K selection: O(N log K) via min-heap of size K.
+    ///
+    /// ## Recovery guarantee
+    /// If the signal is K-sparse in the frequency domain, recovery is exact up to
+    /// FFT numerical precision (O(N log N · ε_machine)); see module-level
+    /// *Exact Recovery for K-Sparse Signals* theorem.
+    /// For approximately sparse signals, the K retained coefficients minimise the
+    /// squared time-domain reconstruction residual by Parseval's theorem; see
+    /// module-level *Top-K Coefficient Selection Optimality* theorem.
     pub fn forward(&self, signal: &[Complex64]) -> ApolloResult<SparseSpectrum> {
         if signal.len() != self.len() {
             return Err(ApolloError::ShapeMismatch {
