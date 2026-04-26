@@ -15,7 +15,8 @@ pub mod infrastructure;
 pub mod verification;
 
 pub use application::execution::transform::dimension_1d::{
-    nufft_type1_1d, nufft_type1_1d_fast, nufft_type2_1d, nufft_type2_1d_fast, NufftPlan1D,
+    nufft_type1_1d, nufft_type1_1d_fast, nufft_type2_1d, nufft_type2_1d_fast, NufftComplexStorage,
+    NufftPlan1D,
 };
 pub use application::execution::transform::dimension_3d::{
     nufft_type1_3d, nufft_type1_3d_fast, nufft_type2_3d, nufft_type2_3d_fast, NufftPlan3D,

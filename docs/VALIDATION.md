@@ -355,3 +355,8 @@ by unit and property tests against analytical identities and direct references.
   `f16`/`[f16; 2]`, represented-input coefficient parity, inverse roundtrip,
   shape rejection, and profile/storage mismatch rejection against the owner
   Gauss-Legendre quadrature, spherical harmonic basis, and synthesis path.
+- `apollo-nufft` typed CPU storage validation covers caller-owned 1D/3D Type-1
+  and Type-2 execution for `Complex64`, `Complex32`, and mixed `[f16; 2]`,
+  represented-input parity, Type-2 output parity, shape rejection, and
+  profile/storage mismatch rejection against the owner Kaiser-Bessel
+  spreading/interpolation, Apollo FFT, and deconvolution paths.

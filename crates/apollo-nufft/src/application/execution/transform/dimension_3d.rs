@@ -31,12 +31,16 @@
 //! - kernel width must satisfy `kernel_width >= 2`
 
 use apollo_fft::application::plan::FftPlan1D;
+use apollo_fft::error::{ApolloError, ApolloResult};
 use apollo_fft::types::{PrecisionProfile, Shape1D};
 use ndarray::{Array1, Array3};
 use num_complex::Complex64;
 use std::cmp::Ordering;
 use std::f64::consts::PI;
 
+use crate::application::execution::transform::dimension_1d::{
+    validate_profile, write_typed_output, NufftComplexStorage,
+};
 use crate::domain::metadata::grid::UniformGrid3D;
 use crate::infrastructure::kernel::kaiser_bessel::{
     axis_deconv, bucket_count, fft_signed_index, i0, kb_kernel,
@@ -330,6 +334,65 @@ impl NufftPlan3D {
         self.forward_oversampled_grid_into(scratch_grid, output);
     }
 
+    /// Run type-1 3D NUFFT for `Complex64`, `Complex32`, or mixed `[f16; 2]` storage.
+    pub fn type1_typed_into<T: NufftComplexStorage>(
+        &self,
+        positions: &[(f64, f64, f64)],
+        values: &[T],
+        scratch_grid: &mut Array3<Complex64>,
+        scratch_wx: &mut [f64],
+        scratch_wy: &mut [f64],
+        scratch_wz: &mut [f64],
+        output: &mut Array3<T>,
+        profile: PrecisionProfile,
+    ) -> ApolloResult<()> {
+        validate_profile(profile, T::PROFILE)?;
+        if positions.len() != values.len() {
+            return Err(ApolloError::ShapeMismatch {
+                expected: positions.len().to_string(),
+                actual: values.len().to_string(),
+            });
+        }
+        if scratch_grid.dim() != (self.mx, self.my, self.mz)
+            || output.dim() != (self.grid.nx, self.grid.ny, self.grid.nz)
+            || scratch_wx.len() != 2 * self.w + 1
+            || scratch_wy.len() != 2 * self.w + 1
+            || scratch_wz.len() != 2 * self.w + 1
+        {
+            return Err(ApolloError::ShapeMismatch {
+                expected: format!(
+                    "scratch {:?}, weights {}, output {:?}",
+                    (self.mx, self.my, self.mz),
+                    2 * self.w + 1,
+                    (self.grid.nx, self.grid.ny, self.grid.nz)
+                ),
+                actual: format!(
+                    "scratch {:?}, weights ({}, {}, {}), output {:?}",
+                    scratch_grid.dim(),
+                    scratch_wx.len(),
+                    scratch_wy.len(),
+                    scratch_wz.len(),
+                    output.dim()
+                ),
+            });
+        }
+        let values64: Vec<Complex64> = values.iter().copied().map(T::to_complex64).collect();
+        let mut output64 = Array3::<Complex64>::zeros((self.grid.nx, self.grid.ny, self.grid.nz));
+        self.type1_into(
+            positions,
+            &values64,
+            scratch_grid,
+            scratch_wx,
+            scratch_wy,
+            scratch_wz,
+            &mut output64,
+        );
+        for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+            *slot = T::from_complex64(value);
+        }
+        Ok(())
+    }
+
     fn forward_oversampled_grid_into(
         &self,
         grid: &mut Array3<Complex64>,
@@ -495,6 +558,33 @@ impl NufftPlan3D {
             output[point.index] = value;
         }
         output
+    }
+
+    /// Run type-2 3D NUFFT for `Complex64`, `Complex32`, or mixed `[f16; 2]` storage.
+    pub fn type2_typed_into<T: NufftComplexStorage>(
+        &self,
+        positions: &[(f64, f64, f64)],
+        modes: &Array3<T>,
+        output: &mut [T],
+        profile: PrecisionProfile,
+    ) -> ApolloResult<()> {
+        validate_profile(profile, T::PROFILE)?;
+        if modes.dim() != (self.grid.nx, self.grid.ny, self.grid.nz)
+            || output.len() != positions.len()
+        {
+            return Err(ApolloError::ShapeMismatch {
+                expected: format!(
+                    "modes {:?}, output {}",
+                    (self.grid.nx, self.grid.ny, self.grid.nz),
+                    positions.len()
+                ),
+                actual: format!("modes {:?}, output {}", modes.dim(), output.len()),
+            });
+        }
+        let modes64 = modes.mapv(T::to_complex64);
+        let output64 = self.type2(positions, &modes64);
+        write_typed_output(&output64, output);
+        Ok(())
     }
 
     fn fft_z_pass(&self, grid: &mut Array3<Complex64>) {
@@ -708,5 +798,91 @@ mod tests {
             .map(|(lhs, rhs)| (lhs - rhs).norm())
             .fold(0.0, f64::max);
         assert!(max_err / scale < 1e-6);
+    }
+
+    #[test]
+    fn typed_3d_paths_support_complex32_storage() {
+        let grid = UniformGrid3D::new(4, 4, 4, 0.1, 0.1, 0.1).unwrap();
+        let plan = NufftPlan3D::new(grid, DEFAULT_NUFFT_OVERSAMPLING, DEFAULT_NUFFT_KERNEL_WIDTH);
+        let positions = vec![(0.0, 0.0, 0.0), (0.1, 0.2, 0.3), (0.25, 0.15, 0.05)];
+        let values64 = [
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.5, -0.25),
+            Complex64::new(-0.2, 0.75),
+        ];
+        let values32: Vec<num_complex::Complex32> = values64
+            .iter()
+            .map(|value| num_complex::Complex32::new(value.re as f32, value.im as f32))
+            .collect();
+        let represented32: Vec<Complex64> = values32
+            .iter()
+            .copied()
+            .map(num_complex::Complex32::to_complex64)
+            .collect();
+        let expected = plan.type1(&positions, &represented32);
+
+        let mut scratch_grid = Array3::<Complex64>::zeros((plan.mx, plan.my, plan.mz));
+        let mut wx = vec![0.0_f64; 2 * plan.w + 1];
+        let mut wy = vec![0.0_f64; 2 * plan.w + 1];
+        let mut wz = vec![0.0_f64; 2 * plan.w + 1];
+        let mut output = Array3::<num_complex::Complex32>::zeros((grid.nx, grid.ny, grid.nz));
+        plan.type1_typed_into(
+            &positions,
+            &values32,
+            &mut scratch_grid,
+            &mut wx,
+            &mut wy,
+            &mut wz,
+            &mut output,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("typed 3d type1");
+        for (actual, expected) in output.iter().zip(expected.iter()) {
+            assert!((f64::from(actual.re) - expected.re).abs() < 1.0e-5);
+            assert!((f64::from(actual.im) - expected.im).abs() < 1.0e-5);
+        }
+
+        let mut type2_output = vec![num_complex::Complex32::new(0.0, 0.0); positions.len()];
+        plan.type2_typed_into(
+            &positions,
+            &output,
+            &mut type2_output,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("typed 3d type2");
+        let expected_type2 = plan.type2(&positions, &expected);
+        for (actual, expected) in type2_output.iter().zip(expected_type2.iter()) {
+            assert!((f64::from(actual.re) - expected.re).abs() < 1.0e-3);
+            assert!((f64::from(actual.im) - expected.im).abs() < 1.0e-3);
+        }
+    }
+
+    #[test]
+    fn typed_3d_paths_reject_profile_mismatch() {
+        let grid = UniformGrid3D::new(2, 2, 2, 0.25, 0.25, 0.25).unwrap();
+        let plan = NufftPlan3D::new(grid, DEFAULT_NUFFT_OVERSAMPLING, DEFAULT_NUFFT_KERNEL_WIDTH);
+        let positions = vec![(0.0, 0.0, 0.0)];
+        let values = vec![num_complex::Complex32::new(1.0, 0.0)];
+        let mut scratch_grid = Array3::<Complex64>::zeros((plan.mx, plan.my, plan.mz));
+        let mut wx = vec![0.0_f64; 2 * plan.w + 1];
+        let mut wy = vec![0.0_f64; 2 * plan.w + 1];
+        let mut wz = vec![0.0_f64; 2 * plan.w + 1];
+        let mut output = Array3::<num_complex::Complex32>::zeros((grid.nx, grid.ny, grid.nz));
+        let err = plan
+            .type1_typed_into(
+                &positions,
+                &values,
+                &mut scratch_grid,
+                &mut wx,
+                &mut wy,
+                &mut wz,
+                &mut output,
+                PrecisionProfile::HIGH_ACCURACY_F64,
+            )
+            .expect_err("profile mismatch");
+        assert!(matches!(
+            err,
+            ApolloError::Validation { field, .. } if field == "precision_profile"
+        ));
     }
 }

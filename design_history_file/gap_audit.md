@@ -2,7 +2,6 @@
 
 ## Open Gaps
 
-- Mixed-precision CPU storage contracts remain incomplete for NUFFT.
 - Mixed-precision GPU/cudatile capability contracts remain incomplete for FFT-WGPU, CZT-WGPU, DCTDST-WGPU, DHT-WGPU, FrFT-WGPU, FWHT-WGPU, GFT-WGPU, Hilbert-WGPU, Mellin-WGPU, NTT-WGPU, NUFFT-WGPU, QFT-WGPU, Radon-WGPU, SDFT-WGPU, SFT-WGPU, SHT-WGPU, STFT-WGPU, Wavelet-WGPU, and cudatile.
 
 ## Closed Gaps
@@ -79,6 +78,7 @@ All items below are implemented, tested, and verified in completed sprints.
 - Added typed caller-owned Wavelet DWT/CWT paths for `f64`, `f32`, and mixed `f16` storage profiles without duplicating the orthogonal filter-bank or continuous wavelet kernels.
 - Added typed caller-owned SFT sparse forward/inverse paths for `Complex64`, `Complex32`, and mixed `[f16; 2]` storage profiles without duplicating the dense FFT, top-K selection, or sparse inverse path.
 - Added typed caller-owned SHT real/complex forward and inverse paths for `f64`/`Complex64`, `f32`/`Complex32`, and mixed `f16`/`[f16; 2]` storage profiles without duplicating the Gauss-Legendre quadrature, spherical harmonic basis, or synthesis path.
+- Added typed caller-owned NUFFT 1D/3D Type-1/Type-2 paths for `Complex64`, `Complex32`, and mixed `[f16; 2]` storage profiles without duplicating the Kaiser-Bessel spreading/interpolation, Apollo FFT, or deconvolution paths.
 
 ### New Transform Crates
 

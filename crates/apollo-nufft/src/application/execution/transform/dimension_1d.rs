@@ -34,9 +34,11 @@
 //! - kernel width must satisfy `kernel_width >= 2`
 
 use apollo_fft::application::plan::FftPlan1D;
+use apollo_fft::error::{ApolloError, ApolloResult};
+use apollo_fft::f16;
 use apollo_fft::types::{PrecisionProfile, Shape1D};
 use ndarray::Array1;
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use std::f64::consts::PI;
 
 use crate::domain::metadata::grid::UniformDomain1D;
@@ -277,6 +279,154 @@ impl NufftPlan1D {
             output[original_index] = value;
         }
     }
+
+    /// Run type-1 NUFFT for `Complex64`, `Complex32`, or mixed `[f16; 2]` storage.
+    ///
+    /// The owner path remains the `Complex64` Kaiser-Bessel spread, Apollo FFT,
+    /// and deconvolution pipeline. Typed storage converts represented input
+    /// into that path and quantizes once into caller-owned output storage.
+    pub fn type1_typed_into<T: NufftComplexStorage>(
+        &self,
+        positions: &[f64],
+        values: &[T],
+        scratch_grid: &mut [Complex64],
+        output: &mut [T],
+        profile: PrecisionProfile,
+    ) -> ApolloResult<()> {
+        validate_profile(profile, T::PROFILE)?;
+        if positions.len() != values.len() {
+            return Err(ApolloError::ShapeMismatch {
+                expected: positions.len().to_string(),
+                actual: values.len().to_string(),
+            });
+        }
+        if scratch_grid.len() != self.m || output.len() != self.n_out {
+            return Err(ApolloError::ShapeMismatch {
+                expected: format!("scratch {}, output {}", self.m, self.n_out),
+                actual: format!("scratch {}, output {}", scratch_grid.len(), output.len()),
+            });
+        }
+        let values64: Vec<Complex64> = values.iter().copied().map(T::to_complex64).collect();
+        let mut output64 = vec![Complex64::new(0.0, 0.0); self.n_out];
+        self.type1_into(positions, &values64, scratch_grid, &mut output64);
+        write_typed_output(&output64, output);
+        Ok(())
+    }
+
+    /// Run type-2 NUFFT for `Complex64`, `Complex32`, or mixed `[f16; 2]` storage.
+    pub fn type2_typed_into<T: NufftComplexStorage>(
+        &self,
+        fourier_coeffs: &[T],
+        positions: &[f64],
+        scratch_spread: &mut [Complex64],
+        output: &mut [T],
+        profile: PrecisionProfile,
+    ) -> ApolloResult<()> {
+        validate_profile(profile, T::PROFILE)?;
+        if fourier_coeffs.len() != self.n_out
+            || scratch_spread.len() != self.m
+            || output.len() != positions.len()
+        {
+            return Err(ApolloError::ShapeMismatch {
+                expected: format!(
+                    "coefficients {}, scratch {}, output {}",
+                    self.n_out,
+                    self.m,
+                    positions.len()
+                ),
+                actual: format!(
+                    "coefficients {}, scratch {}, output {}",
+                    fourier_coeffs.len(),
+                    scratch_spread.len(),
+                    output.len()
+                ),
+            });
+        }
+        let coeffs64: Vec<Complex64> = fourier_coeffs
+            .iter()
+            .copied()
+            .map(T::to_complex64)
+            .collect();
+        let mut output64 = vec![Complex64::new(0.0, 0.0); positions.len()];
+        self.type2_into(&coeffs64, positions, scratch_spread, &mut output64);
+        write_typed_output(&output64, output);
+        Ok(())
+    }
+}
+
+/// Complex storage accepted by typed NUFFT paths.
+pub trait NufftComplexStorage: Copy + Send + Sync + 'static {
+    /// Required precision profile.
+    const PROFILE: PrecisionProfile;
+
+    /// Convert storage into owner `Complex64` arithmetic.
+    fn to_complex64(self) -> Complex64;
+
+    /// Convert owner arithmetic result back to storage.
+    fn from_complex64(value: Complex64) -> Self;
+}
+
+impl NufftComplexStorage for Complex64 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::HIGH_ACCURACY_F64;
+
+    fn to_complex64(self) -> Complex64 {
+        self
+    }
+
+    fn from_complex64(value: Complex64) -> Self {
+        value
+    }
+}
+
+impl NufftComplexStorage for Complex32 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::LOW_PRECISION_F32;
+
+    fn to_complex64(self) -> Complex64 {
+        Complex64::new(f64::from(self.re), f64::from(self.im))
+    }
+
+    fn from_complex64(value: Complex64) -> Self {
+        Complex32::new(value.re as f32, value.im as f32)
+    }
+}
+
+impl NufftComplexStorage for [f16; 2] {
+    const PROFILE: PrecisionProfile = PrecisionProfile::MIXED_PRECISION_F16_F32;
+
+    fn to_complex64(self) -> Complex64 {
+        Complex64::new(f64::from(self[0].to_f32()), f64::from(self[1].to_f32()))
+    }
+
+    fn from_complex64(value: Complex64) -> Self {
+        [
+            f16::from_f32(value.re as f32),
+            f16::from_f32(value.im as f32),
+        ]
+    }
+}
+
+pub(crate) fn validate_profile(
+    actual: PrecisionProfile,
+    expected: PrecisionProfile,
+) -> ApolloResult<()> {
+    if actual.storage == expected.storage && actual.compute == expected.compute {
+        Ok(())
+    } else {
+        Err(ApolloError::validation(
+            "precision_profile",
+            format!("{actual:?}"),
+            format!(
+                "storage {:?} with compute {:?}",
+                expected.storage, expected.compute
+            ),
+        ))
+    }
+}
+
+pub(crate) fn write_typed_output<T: NufftComplexStorage>(source: &[Complex64], target: &mut [T]) {
+    for (slot, value) in target.iter_mut().zip(source.iter().copied()) {
+        *slot = T::from_complex64(value);
+    }
 }
 
 /// Exact direct 1D type-1 NUFFT.
@@ -427,5 +577,145 @@ mod tests {
             .map(|(lhs, rhs)| (lhs - rhs).norm())
             .fold(0.0, f64::max);
         assert!(max_err / scale < 1e-6);
+    }
+
+    #[test]
+    fn typed_1d_paths_support_complex64_complex32_and_mixed_f16_storage() {
+        let domain = UniformDomain1D::new(8, 0.125).unwrap();
+        let plan = NufftPlan1D::new(
+            domain,
+            DEFAULT_NUFFT_OVERSAMPLING,
+            DEFAULT_NUFFT_KERNEL_WIDTH,
+        );
+        let positions = vec![0.0, 0.09, 0.21, 0.47];
+        let values64 = vec![
+            Complex64::new(1.0, 0.25),
+            Complex64::new(-0.5, 0.75),
+            Complex64::new(0.25, -0.1),
+            Complex64::new(0.125, 0.5),
+        ];
+        let expected = plan.type1(&positions, &values64);
+        let mut scratch = vec![Complex64::new(0.0, 0.0); plan.m];
+        let mut output64 = vec![Complex64::new(0.0, 0.0); plan.n_out];
+        plan.type1_typed_into(
+            &positions,
+            &values64,
+            &mut scratch,
+            &mut output64,
+            PrecisionProfile::HIGH_ACCURACY_F64,
+        )
+        .expect("typed complex64 type1");
+        for (actual, expected) in output64.iter().zip(expected.iter()) {
+            assert!((*actual - *expected).norm() < 1.0e-12);
+        }
+
+        let values32: Vec<Complex32> = values64
+            .iter()
+            .map(|value| Complex32::new(value.re as f32, value.im as f32))
+            .collect();
+        let represented32: Vec<Complex64> = values32
+            .iter()
+            .copied()
+            .map(Complex32::to_complex64)
+            .collect();
+        let expected32 = plan.type1(&positions, &represented32);
+        let mut output32 = vec![Complex32::new(0.0, 0.0); plan.n_out];
+        plan.type1_typed_into(
+            &positions,
+            &values32,
+            &mut scratch,
+            &mut output32,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("typed complex32 type1");
+        for (actual, expected) in output32.iter().zip(expected32.iter()) {
+            assert!((f64::from(actual.re) - expected.re).abs() < 1.0e-5);
+            assert!((f64::from(actual.im) - expected.im).abs() < 1.0e-5);
+        }
+
+        let mut recovered32 = vec![Complex32::new(0.0, 0.0); positions.len()];
+        plan.type2_typed_into(
+            &output32,
+            &positions,
+            &mut scratch,
+            &mut recovered32,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("typed complex32 type2");
+        let expected_type2 = plan.type2(&Array1::from_vec(expected32.to_vec()), &positions);
+        for (actual, expected) in recovered32.iter().zip(expected_type2.iter()) {
+            assert!((f64::from(actual.re) - expected.re).abs() < 1.0e-3);
+            assert!((f64::from(actual.im) - expected.im).abs() < 1.0e-3);
+        }
+
+        let values16: Vec<[f16; 2]> = values64
+            .iter()
+            .map(|value| {
+                [
+                    f16::from_f32(value.re as f32),
+                    f16::from_f32(value.im as f32),
+                ]
+            })
+            .collect();
+        let represented16: Vec<Complex64> = values16
+            .iter()
+            .copied()
+            .map(<[f16; 2]>::to_complex64)
+            .collect();
+        let expected16 = plan.type1(&positions, &represented16);
+        let mut output16 = vec![[f16::from_f32(0.0), f16::from_f32(0.0)]; plan.n_out];
+        plan.type1_typed_into(
+            &positions,
+            &values16,
+            &mut scratch,
+            &mut output16,
+            PrecisionProfile::MIXED_PRECISION_F16_F32,
+        )
+        .expect("typed f16 type1");
+        for (actual, expected) in output16.iter().zip(expected16.iter()) {
+            let re_bound = expected.re.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
+            let im_bound = expected.im.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
+            assert!((f64::from(actual[0].to_f32()) - expected.re).abs() <= re_bound);
+            assert!((f64::from(actual[1].to_f32()) - expected.im).abs() <= im_bound);
+        }
+    }
+
+    #[test]
+    fn typed_1d_paths_reject_profile_and_shape_mismatch() {
+        let domain = UniformDomain1D::new(4, 0.25).unwrap();
+        let plan = NufftPlan1D::new(
+            domain,
+            DEFAULT_NUFFT_OVERSAMPLING,
+            DEFAULT_NUFFT_KERNEL_WIDTH,
+        );
+        let positions = vec![0.0, 0.25];
+        let values = vec![Complex32::new(1.0, 0.0), Complex32::new(0.5, 0.25)];
+        let mut scratch = vec![Complex64::new(0.0, 0.0); plan.m];
+        let mut output = vec![Complex32::new(0.0, 0.0); plan.n_out];
+        let err = plan
+            .type1_typed_into(
+                &positions,
+                &values,
+                &mut scratch,
+                &mut output,
+                PrecisionProfile::HIGH_ACCURACY_F64,
+            )
+            .expect_err("profile mismatch");
+        assert!(matches!(
+            err,
+            ApolloError::Validation { field, .. } if field == "precision_profile"
+        ));
+
+        let mut short_output = vec![Complex32::new(0.0, 0.0); plan.n_out - 1];
+        let err = plan
+            .type1_typed_into(
+                &positions,
+                &values,
+                &mut scratch,
+                &mut short_output,
+                PrecisionProfile::LOW_PRECISION_F32,
+            )
+            .expect_err("shape mismatch");
+        assert!(matches!(err, ApolloError::ShapeMismatch { .. }));
     }
 }

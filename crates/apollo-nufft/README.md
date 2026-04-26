@@ -17,6 +17,12 @@ src/
 `NufftPlan1D` and `NufftPlan3D` own oversampling shape, kernel width,
 Kaiser-Bessel parameters, deconvolution factors, and reusable FFT plans.
 
+Typed execution supports `Complex64`, `Complex32`, and mixed `[f16; 2]`
+storage for 1D and 3D Type-1/Type-2 plan surfaces. The Kaiser-Bessel
+spreading/interpolation, Apollo FFT execution, and deconvolution path remain
+the authoritative `Complex64` implementation; typed APIs convert represented
+input into that path and quantize once into caller-owned output storage.
+
 ## Mathematical Contract
 
 Type-1 maps non-uniform samples to uniform Fourier modes:
@@ -33,4 +39,7 @@ Apollo FFT execution and deconvolution.
 
 Tests cover exact DC invariants, fast/direct agreement for fixed inputs,
 Kaiser-Bessel non-negativity and peak behavior, `I_0` reference values, Fourier
-transform limits, signed index mapping, and 3D finite-output behavior.
+transform limits, signed index mapping, 3D finite-output behavior, typed
+`Complex64` parity, represented-input `Complex32` and mixed `[f16; 2]` parity,
+typed Type-2 output parity, shape rejection, and profile/storage mismatch
+rejection.
