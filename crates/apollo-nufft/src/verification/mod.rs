@@ -382,4 +382,45 @@ mod tests {
             "err(W=6)={err_6:.3e} must be below practical accuracy threshold 1e-5"
         );
     }
+
+    /// Theorem: NUFFT type-1 on a uniform grid equals the standard DFT.
+    ///
+    /// For positions `x_j = j · L/N = j · dx`, the type-1 NUFFT sum becomes:
+    ///
+    /// ```text
+    /// f_k = Σ_j c_j · exp(-2πi · k_signed(k) · x_j / L)
+    ///      = Σ_j c_j · exp(-2πi · k_signed(k) · j / N)
+    ///      = Σ_j c_j · exp(-2πi · k · j / N)
+    /// ```
+    ///
+    /// The last equality holds because `exp(2πi·N·j/N) = exp(2πij) = 1` for all
+    /// integer j, so `k_signed(k)·j/N` and `k·j/N` differ by exactly an integer.
+    ///
+    /// This provides an independent published-reference cross-check: the NUFFT output
+    /// at uniform positions must match the `apollo-fft` Cooley-Tukey / Bluestein output
+    /// to within f64 round-off (< 1e-10).
+    #[test]
+    fn type1_on_uniform_grid_matches_standard_dft() {
+        use apollo_fft::fft_1d_complex;
+        let n = 8usize;
+        let domain = UniformDomain1D::new(n, 0.125).expect("domain"); // L = n * dx = 1.0
+                                                                      // Uniform grid positions: x_j = j * dx = j * L/N
+        let positions: Vec<f64> = (0..n).map(|j| j as f64 * domain.dx).collect();
+        let values: Vec<Complex64> = (0..n)
+            .map(|j| Complex64::new((j as f64 * 0.3).sin(), (j as f64 * 0.17).cos()))
+            .collect();
+        // NUFFT type-1 at uniform positions (exact direct O(N²) path)
+        let nufft_output = nufft_type1_1d(&positions, &values, domain);
+        // Independent DFT via apollo_fft (separate Cooley-Tukey radix-2 kernel for N=8)
+        let values_complex = Array1::from_vec(values);
+        let fft_complex = fft_1d_complex(&values_complex);
+        for (k, (nv, fv)) in nufft_output.iter().zip(fft_complex.iter()).enumerate() {
+            let err = (nv - fv).norm();
+            assert!(
+                err < 1e-10,
+                "NUFFT type-1 on uniform grid differs from DFT at k={k}: \
+                 nufft={nv:?}, fft={fv:?}, err={err:.3e}"
+            );
+        }
+    }
 }

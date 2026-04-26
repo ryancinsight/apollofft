@@ -123,6 +123,46 @@ mod tests {
         assert!(matches!(result, Err(DhtError::LengthMismatch)));
     }
 
+    /// Theorem (Hartley–Fourier Relationship): For any real sequence x ∈ ℝᴺ,
+    /// the unnormalized DHT output H[k] and the DFT output F[k] = DFT(x)[k] satisfy:
+    ///
+    /// ```text
+    /// H[k] = Re(F[k]) - Im(F[k])
+    /// ```
+    ///
+    /// **Proof:** By definition,
+    /// H[k] = Σ_n x[n] · cas(2πkn/N) = Σ_n x[n] · (cos(2πkn/N) + sin(2πkn/N))
+    /// F[k] = Σ_n x[n] · exp(-2πikn/N) = Σ_n x[n] · (cos(2πkn/N) - i·sin(2πkn/N))
+    ///
+    /// Therefore Re(F[k]) = Σ_n x[n]·cos(2πkn/N) and -Im(F[k]) = Σ_n x[n]·sin(2πkn/N).
+    /// Combining: H[k] = Re(F[k]) + (-Im(F[k])) = Re(F[k]) - Im(F[k]). □
+    ///
+    /// Cross-check independence: for N=8 (below FAST_KERNEL_THRESHOLD=512), `DhtPlan::forward`
+    /// uses the O(N²) direct `transform_real` kernel. The DFT is computed via
+    /// `fft_forward_64` which selects the radix-2 Cooley-Tukey path for N=8. These are
+    /// entirely separate code paths, so any sign or index error in either would be detected.
+    #[test]
+    fn dht_equals_re_minus_im_of_independent_dft() {
+        use apollo_fft::application::execution::kernel::fft_forward_64;
+        use num_complex::Complex64;
+        let signal = [3.0_f64, -1.0, 0.5, 2.25, -4.0, 1.5, 0.0, -0.75];
+        let plan = crate::DhtPlan::new(signal.len()).expect("plan");
+        let h = plan.forward(&signal).expect("forward");
+        // Independent DFT: embed real signal in complex, apply radix-2 FFT
+        let mut scratch: Vec<Complex64> = signal.iter().map(|&x| Complex64::new(x, 0.0)).collect();
+        fft_forward_64(&mut scratch);
+        // H[k] = Re(F[k]) - Im(F[k])
+        for (k, (hk, fk)) in h.values().iter().zip(scratch.iter()).enumerate() {
+            let expected = fk.re - fk.im;
+            let err = (hk - expected).abs();
+            assert!(
+                err < 1e-10,
+                "DHT-DFT relationship fails at k={k}: H[k]={hk:.6}, \
+                 Re(F)-Im(F)={expected:.6}, err={err:.3e}"
+            );
+        }
+    }
+
     proptest! {
         /// Serial-range roundtrip: for n in [2,16], DHT inverse recovers the signal.
         #[test]

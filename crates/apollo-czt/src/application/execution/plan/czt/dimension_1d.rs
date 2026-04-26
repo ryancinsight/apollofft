@@ -220,6 +220,35 @@ mod spiral_collapse_tests {
         }
     }
 
+    /// Theorem (Spiral-Collapse, independent cross-check): CZT(x, N, exp(-2πi/N), 1)
+    /// equals the N-point DFT, verified here against `apollo_fft::fft_1d_complex`
+    /// which is entirely independent of the CZT implementation path.
+    ///
+    /// Proof: By Bluestein (1970), CZT with A=1, W=exp(-2πi/N), M=N reduces
+    /// identically to the DFT summation Σ_n x[n] exp(-2πikn/N). The apollo_fft
+    /// implementation uses a separate Cooley-Tukey / Bluestein kernel path; any
+    /// shared sign or index bug in the CZT path would produce a measurable mismatch.
+    #[test]
+    fn czt_dft_parameters_match_independent_fft_implementation() {
+        let n = 8usize;
+        let a = Complex64::new(1.0, 0.0);
+        let w = Complex64::from_polar(1.0, -std::f64::consts::TAU / n as f64);
+        let input = Array1::from_shape_fn(n, |i| {
+            Complex64::new((i as f64 * 0.7).sin(), (i as f64 * 0.3).cos())
+        });
+        let plan = CztPlan::new(n, n, a, w).expect("valid DFT plan");
+        let czt_output = plan.forward(&input).expect("CZT forward");
+        // Independent DFT via apollo_fft (separate Cooley-Tukey / Bluestein path)
+        let fft_output = apollo_fft::fft_1d_complex(&input);
+        for (k, (cv, fv)) in czt_output.iter().zip(fft_output.iter()).enumerate() {
+            let err = (cv - fv).norm();
+            assert!(
+                err < 1e-9,
+                "CZT does not match independent FFT at k={k}: czt={cv:?}, fft={fv:?}, err={err:.3e}"
+            );
+        }
+    }
+
     #[test]
     fn rejects_zero_length() {
         let a = Complex64::new(1.0, 0.0);

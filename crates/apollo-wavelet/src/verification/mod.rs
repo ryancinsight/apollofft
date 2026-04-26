@@ -118,20 +118,49 @@ mod tests {
         }
     }
 
+    /// Theorem: Morlet CWT resonates at the scale matching the input signal frequency.
+    ///
+    /// For the DC-corrected real Morlet wavelet with angular carrier ω₀, the CWT
+    /// coefficient W(a, b) is maximized when the scale a = ω₀ / ω_signal, where
+    /// ω_signal is the signal's dominant angular frequency.
+    ///
+    /// **Derivation:** The Morlet mother wavelet ψ(t) = π^(-1/4)(cos(ω₀t) - e^{-ω₀²/2})e^{-t²/2}
+    /// acts as a bandpass filter with center frequency ω₀/a at scale a. For a signal
+    /// x[n] = cos(ω_signal·n), the CWT at resonant scale a₀ = ω₀/ω_signal evaluates
+    /// the inner product of x with a scaled copy of ψ, giving amplitude ≈ π^(1/4) / √a₀
+    /// (Gaussian envelope integral × cosine resonance). At a mismatched scale a_far = 16,
+    /// the Gaussian window width is ~4× the signal period, and the incoherent product
+    /// integrates to near zero.
+    ///
+    /// **Verified:** max|W(a=2, b)| > 2 · max|W(a=16, b)| and max|W(a=2, b)| > 0.5.
     #[test]
-    fn morlet_cwt_coefficients_are_finite() {
-        let signal: Vec<f64> = (0..32).map(|i| (i as f64 * 0.5).sin()).collect();
-        let scales = vec![1.0, 2.0, 4.0];
-        let plan = CwtPlan::new(
-            signal.len(),
-            scales,
-            ContinuousWavelet::Morlet { omega0: 5.0 },
-        )
-        .unwrap();
-        let coeffs = plan.transform(&signal).unwrap();
-        for &c in coeffs.values().iter() {
-            assert!(c.is_finite(), "CWT coefficient is not finite: {c}");
-        }
+    fn morlet_cwt_resonates_at_matching_scale() {
+        let omega0 = 5.0_f64;
+        let s_resonant = 2.0_f64;
+        // Signal frequency matching resonant scale: ω_signal = ω₀ / s_resonant = 2.5 rad/sample.
+        let omega_signal = omega0 / s_resonant;
+        let n = 32usize;
+        let signal: Vec<f64> = (0..n).map(|i| (omega_signal * i as f64).cos()).collect();
+        let scales = vec![s_resonant, 16.0_f64];
+        let plan = CwtPlan::new(n, scales, ContinuousWavelet::Morlet { omega0 }).expect("plan");
+        let coeffs = plan.transform(&signal).expect("transform");
+        // Max coefficient magnitude at resonant scale (row 0)
+        let resonant_row = coeffs.values().row(0);
+        let max_resonant = resonant_row.iter().map(|c| c.abs()).fold(0.0_f64, f64::max);
+        // Max coefficient magnitude at far scale (row 1)
+        let far_row = coeffs.values().row(1);
+        let max_far = far_row.iter().map(|c| c.abs()).fold(0.0_f64, f64::max);
+        // At the resonant scale, the Morlet CWT coefficient is O(π^(1/4)) ≈ 1.33.
+        // At scale 16 (mismatched frequency), the broad Gaussian and incoherent oscillation give ~0.
+        assert!(
+            max_resonant > 2.0 * max_far.max(1e-10),
+            "Resonant scale s={s_resonant} should dominate far scale s=16: \
+             max_resonant={max_resonant:.4}, max_far={max_far:.4}"
+        );
+        assert!(
+            max_resonant > 0.5,
+            "Morlet CWT at resonant scale should have nontrivial amplitude: max_resonant={max_resonant:.4}"
+        );
     }
 
     #[test]
