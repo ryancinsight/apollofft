@@ -43,6 +43,7 @@ All items below are implemented, tested, and verified in completed sprints.
 - Eliminated dynamic `Array1::from_shape_vec` conversions in NUFFT 1D Type-1 and Type-2 evaluation kernels utilizing `FftPlan1D` slice execution.
 - Removed host-side zero-vector initialization for `apollo-sht-wgpu` generated basis storage; GPU basis generation now writes directly into device-allocated storage before reduction.
 - Removed host-side zero-vector uploads for inactive `apollo-nufft-wgpu` fast-path placeholder bindings; shared layouts now bind device-only storage where shader entry points do not read that binding.
+- Removed full-field `Vec<Vec<Complex>>` lane copies for contiguous `apollo-fft` 2D row passes and 3D innermost-axis passes; Rayon now transforms backing-slice chunks in place, preserving parallelism while reducing peak pass memory and scatter traffic.
 
 ### New Transform Crates
 

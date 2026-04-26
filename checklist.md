@@ -89,3 +89,4 @@
 - [x] Remove host-side zero upload for `apollo-sht-wgpu` generated basis storage.
 - [x] Fix GPU fast type-2 1D NUFFT normalization: pack deconv values scaled by `oversampled_len` in `execute_fast_type2_1d` to compensate for `encode_inverse_split` normalized IFFT (÷m), matching the CPU `type2_into` ×m rescaling without an extra host vector.
 - [x] Remove host-side zero uploads for inactive `apollo-nufft-wgpu` fast-path bind-group placeholders.
+- [x] Remove full-field lane-copy allocation from contiguous 2D row and 3D innermost FFT axis passes.

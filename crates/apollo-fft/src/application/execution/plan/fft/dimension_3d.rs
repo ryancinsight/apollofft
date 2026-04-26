@@ -28,9 +28,9 @@
 //!
 //! Let `C(n)` be the selected 1D FFT cost. The plan costs
 //! `O(n_y n_z C(n_x) + n_x n_z C(n_y) + n_x n_y C(n_z))`, with
-//! `C(n) = O(n log n)` for both radix-2 and Bluestein plan paths. Axis passes
-//! gather non-contiguous lanes into scratch buffers and mutate those buffers in
-//! place before scattering them back.
+//! `C(n) = O(n log n)` for both radix-2 and Bluestein plan paths. Contiguous
+//! innermost-axis passes mutate depth chunks in place, while non-contiguous
+//! passes gather lanes into scratch buffers before scattering them back.
 //!
 //! # Failure modes
 //!
@@ -366,6 +366,10 @@ impl FftPlan3D {
     }
 
     fn axis_pass_complex(&self, data: &mut Array3<Complex64>, axis: Axis, forward: bool) {
+        if axis.index() == 2 {
+            self.axis2_pass_complex(data, forward);
+            return;
+        }
         let mut lanes: Vec<Vec<Complex64>> = data
             .lanes(axis)
             .into_iter()
@@ -387,7 +391,24 @@ impl FftPlan3D {
         }
     }
 
+    fn axis2_pass_complex(&self, data: &mut Array3<Complex64>, forward: bool) {
+        let data_slice = data
+            .as_slice_memory_order_mut()
+            .expect("3D complex data must be contiguous");
+        data_slice.par_chunks_mut(self.nz).for_each(|lane| {
+            if forward {
+                fft_forward_64(lane);
+            } else {
+                fft_inverse_64(lane);
+            }
+        });
+    }
+
     fn axis_pass_complex_f32(&self, data: &mut Array3<Complex32>, axis: Axis, forward: bool) {
+        if axis.index() == 2 {
+            self.axis2_pass_complex_f32(data, forward);
+            return;
+        }
         let mut lanes: Vec<Vec<Complex32>> = data
             .lanes(axis)
             .into_iter()
@@ -407,6 +428,19 @@ impl FftPlan3D {
                 *slot = value;
             }
         }
+    }
+
+    fn axis2_pass_complex_f32(&self, data: &mut Array3<Complex32>, forward: bool) {
+        let data_slice = data
+            .as_slice_memory_order_mut()
+            .expect("3D f32 complex data must be contiguous");
+        data_slice.par_chunks_mut(self.nz).for_each(|lane| {
+            if forward {
+                fft_forward_32(lane);
+            } else {
+                fft_inverse_32(lane);
+            }
+        });
     }
 
     fn check_real_shape(&self, dim: (usize, usize, usize), label: &str) {

@@ -24,8 +24,9 @@
 //!
 //! Let `C(n)` be the selected 1D FFT cost. The plan costs
 //! `O(ny * C(nx) + nx * C(ny))`, with `C(n) = O(n log n)` for both radix-2 and
-//! Bluestein plan paths. Axis passes gather non-contiguous lanes into scratch
-//! buffers and mutate those buffers in place before scattering them back.
+//! Bluestein plan paths. Contiguous innermost-axis passes mutate row chunks in
+//! place, while non-contiguous passes gather lanes into scratch buffers before
+//! scattering them back.
 
 use crate::application::execution::kernel::{
     fft_forward_32, fft_forward_64, fft_inverse_32, fft_inverse_64,
@@ -321,6 +322,10 @@ impl FftPlan2D {
     }
 
     fn axis_pass_complex(&self, data: &mut Array2<Complex64>, axis: Axis, forward: bool) {
+        if axis.index() == 1 {
+            self.axis1_pass_complex(data, forward);
+            return;
+        }
         if axis.index() == 0 {
             self.axis0_pass_complex(data, forward);
             return;
@@ -343,6 +348,19 @@ impl FftPlan2D {
                 *slot = value;
             }
         }
+    }
+
+    fn axis1_pass_complex(&self, data: &mut Array2<Complex64>, forward: bool) {
+        let data_slice = data
+            .as_slice_memory_order_mut()
+            .expect("2D complex data must be contiguous");
+        data_slice.par_chunks_mut(self.ny).for_each(|lane| {
+            if forward {
+                fft_forward_64(lane);
+            } else {
+                fft_inverse_64(lane);
+            }
+        });
     }
 
     fn axis0_pass_complex(&self, data: &mut Array2<Complex64>, forward: bool) {
@@ -382,6 +400,10 @@ impl FftPlan2D {
     }
 
     fn axis_pass_complex_f32(&self, data: &mut Array2<Complex32>, axis: Axis, forward: bool) {
+        if axis.index() == 1 {
+            self.axis1_pass_complex_f32(data, forward);
+            return;
+        }
         if axis.index() == 0 {
             self.axis0_pass_complex_f32(data, forward);
             return;
@@ -404,6 +426,19 @@ impl FftPlan2D {
                 *slot = value;
             }
         }
+    }
+
+    fn axis1_pass_complex_f32(&self, data: &mut Array2<Complex32>, forward: bool) {
+        let data_slice = data
+            .as_slice_memory_order_mut()
+            .expect("2D f32 complex data must be contiguous");
+        data_slice.par_chunks_mut(self.ny).for_each(|lane| {
+            if forward {
+                fft_forward_32(lane);
+            } else {
+                fft_inverse_32(lane);
+            }
+        });
     }
 
     fn axis0_pass_complex_f32(&self, data: &mut Array2<Complex32>, forward: bool) {

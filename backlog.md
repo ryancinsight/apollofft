@@ -67,3 +67,4 @@
 - [x] Optimize `apollo-sht-wgpu` basis storage by removing host-side zero-vector initialization before GPU basis generation.
 - [x] Fix GPU fast type-2 1D NUFFT normalization: `execute_fast_type2_1d` packs deconv values scaled by `oversampled_len` to compensate for `encode_inverse_split` normalized IFFT (÷m), matching the CPU `type2_into` ×m rescaling without an extra host vector.
 - [x] Optimize `apollo-nufft-wgpu` fast placeholder bindings by replacing host-side zero-vector uploads with device-only storage buffers.
+- [x] Optimize `apollo-fft` 2D/3D contiguous axis passes by transforming backing-slice chunks in place instead of allocating full-field lane-copy vectors.

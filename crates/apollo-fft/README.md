@@ -28,6 +28,11 @@ normalization. The kernel strategy auto-selects radix-2 Cooley-Tukey for
 power-of-two lengths and Bluestein chirp-Z for arbitrary lengths. The direct
 DFT kernel remains a crate-local reference for verification.
 
+2D and 3D plans execute separable axis passes. Contiguous row/depth-axis passes
+operate directly on backing-slice chunks with Rayon, avoiding full-field
+lane-copy vectors and scatter copies. Non-contiguous axes still gather one lane
+buffer per lane before scattering because ndarray strides are not contiguous.
+
 ## Verification
 
 Tests cover analytical small transforms, radix-2 and Bluestein parity against

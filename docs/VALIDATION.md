@@ -152,6 +152,9 @@ and NUFFT literature:
 - Treat GPU FFT throughput as a kernel-orchestration problem: host-device traffic and per-stage
   launches dominate small and medium transforms, so future Apollo WGPU work should keep axis data
   resident on device and fuse more stages.
+- Prefer in-place contiguous axis execution before adding new backend variants. Current GPU FFT
+  benchmark literature reports throughput in effective memory bandwidth, so removing avoidable
+  full-field copies is a first-order optimization even before shader fusion.
 
 Primary references:
 
@@ -186,6 +189,9 @@ by unit and property tests against analytical identities and direct references.
 - FFT 2D/3D axis passes gather non-contiguous ndarray lanes once, transform the
   gathered lane buffers in place, and scatter them back without constructing a
   second transformed-lane collection.
+- FFT 2D row passes and 3D innermost-axis passes now transform contiguous
+  backing-slice chunks directly with Rayon, eliminating the full-field
+  `Vec<Vec<Complex>>` lane-copy allocation for those axes.
 - CZT Bluestein execution reuses its convolution workspace after the forward
   FFT, multiplies by the precomputed kernel in place, and inverse-transforms the
   same buffer instead of copying to a separate product vector.
