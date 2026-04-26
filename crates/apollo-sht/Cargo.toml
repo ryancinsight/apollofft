@@ -8,6 +8,7 @@ repository = "https://github.com/ryancinsight/kwavers"
 description = "Spherical harmonic transform plans for Apollo"
 
 [dependencies]
+apollo-fft = { path = "../apollo-fft" }
 ndarray = "0.16"
 num-complex = "0.4"
 rayon = "1.10"

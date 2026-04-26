@@ -12,8 +12,9 @@ use crate::domain::spectrum::coefficients::SphericalHarmonicCoefficients;
 use crate::infrastructure::kernel::spherical_harmonic::{
     gauss_legendre_nodes_weights, spherical_harmonic,
 };
+use apollo_fft::{f16, PrecisionProfile};
 use ndarray::Array2;
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use rayon::prelude::*;
 
 /// Reusable spherical harmonic transform (SHT) plan.
@@ -201,6 +202,62 @@ impl ShtPlan {
         Ok(samples)
     }
 
+    /// Forward real-sample SHT for `f64`, `f32`, or mixed `f16` sample storage.
+    pub fn forward_real_typed_into<T: ShtRealStorage, O: ShtComplexStorage>(
+        &self,
+        samples: &Array2<T>,
+        output: &mut Array2<O>,
+        sample_profile: PrecisionProfile,
+        coefficient_profile: PrecisionProfile,
+    ) -> ShtResult<()> {
+        T::forward_real_into(self, samples, output, sample_profile, coefficient_profile)
+    }
+
+    /// Forward complex-sample SHT for `Complex64`, `Complex32`, or mixed `[f16; 2]`.
+    pub fn forward_complex_typed_into<T: ShtComplexStorage, O: ShtComplexStorage>(
+        &self,
+        samples: &Array2<T>,
+        output: &mut Array2<O>,
+        sample_profile: PrecisionProfile,
+        coefficient_profile: PrecisionProfile,
+    ) -> ShtResult<()> {
+        T::forward_complex_into(self, samples, output, sample_profile, coefficient_profile)
+    }
+
+    /// Inverse SHT into complex sample storage.
+    pub fn inverse_complex_typed_into<T: ShtComplexStorage, O: ShtComplexStorage>(
+        &self,
+        coefficients: &Array2<T>,
+        output: &mut Array2<O>,
+        coefficient_profile: PrecisionProfile,
+        sample_profile: PrecisionProfile,
+    ) -> ShtResult<()> {
+        T::inverse_complex_into(
+            self,
+            coefficients,
+            output,
+            coefficient_profile,
+            sample_profile,
+        )
+    }
+
+    /// Inverse SHT into real sample storage by taking the synthesized real part.
+    pub fn inverse_real_typed_into<T: ShtComplexStorage, O: ShtRealStorage>(
+        &self,
+        coefficients: &Array2<T>,
+        output: &mut Array2<O>,
+        coefficient_profile: PrecisionProfile,
+        sample_profile: PrecisionProfile,
+    ) -> ShtResult<()> {
+        T::inverse_real_into(
+            self,
+            coefficients,
+            output,
+            coefficient_profile,
+            sample_profile,
+        )
+    }
+
     fn check_sample_shape(&self, shape: (usize, usize)) -> ShtResult<()> {
         if shape != (self.grid.latitudes(), self.grid.longitudes()) {
             return Err(ShtError::SampleShapeMismatch);
@@ -219,5 +276,375 @@ impl ShtPlan {
             return Err(ShtError::CoefficientShapeMismatch);
         }
         Ok(())
+    }
+
+    fn coefficient_shape(&self) -> (usize, usize) {
+        (self.grid.max_degree() + 1, 2 * self.grid.max_degree() + 1)
+    }
+}
+
+/// Real sample storage accepted by typed SHT paths.
+pub trait ShtRealStorage: Copy + Send + Sync + 'static {
+    /// Required precision profile.
+    const PROFILE: PrecisionProfile;
+
+    /// Convert storage into owner `f64` arithmetic.
+    fn to_f64(self) -> f64;
+
+    /// Convert owner arithmetic back to storage.
+    fn from_f64(value: f64) -> Self;
+
+    /// Execute typed forward real SHT.
+    fn forward_real_into<O: ShtComplexStorage>(
+        plan: &ShtPlan,
+        samples: &Array2<Self>,
+        output: &mut Array2<O>,
+        sample_profile: PrecisionProfile,
+        coefficient_profile: PrecisionProfile,
+    ) -> ShtResult<()> {
+        validate_profile(sample_profile, Self::PROFILE)?;
+        validate_profile(coefficient_profile, O::PROFILE)?;
+        validate_sample_array_shape(plan, samples)?;
+        validate_coefficient_array_shape(plan, output)?;
+        let samples64 = samples.mapv(Self::to_f64);
+        let coefficients = plan.forward_real(&samples64)?;
+        write_complex_array(coefficients.values(), output);
+        Ok(())
+    }
+}
+
+impl ShtRealStorage for f64 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::HIGH_ACCURACY_F64;
+
+    fn to_f64(self) -> f64 {
+        self
+    }
+
+    fn from_f64(value: f64) -> Self {
+        value
+    }
+}
+
+impl ShtRealStorage for f32 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::LOW_PRECISION_F32;
+
+    fn to_f64(self) -> f64 {
+        f64::from(self)
+    }
+
+    fn from_f64(value: f64) -> Self {
+        value as f32
+    }
+}
+
+impl ShtRealStorage for f16 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::MIXED_PRECISION_F16_F32;
+
+    fn to_f64(self) -> f64 {
+        f64::from(self.to_f32())
+    }
+
+    fn from_f64(value: f64) -> Self {
+        f16::from_f32(value as f32)
+    }
+}
+
+/// Complex sample/coefficient storage accepted by typed SHT paths.
+pub trait ShtComplexStorage: Copy + Send + Sync + 'static {
+    /// Required precision profile.
+    const PROFILE: PrecisionProfile;
+
+    /// Convert storage into owner `Complex64` arithmetic.
+    fn to_complex64(self) -> Complex64;
+
+    /// Convert owner arithmetic back to storage.
+    fn from_complex64(value: Complex64) -> Self;
+
+    /// Execute typed forward complex SHT.
+    fn forward_complex_into<O: ShtComplexStorage>(
+        plan: &ShtPlan,
+        samples: &Array2<Self>,
+        output: &mut Array2<O>,
+        sample_profile: PrecisionProfile,
+        coefficient_profile: PrecisionProfile,
+    ) -> ShtResult<()> {
+        validate_profile(sample_profile, Self::PROFILE)?;
+        validate_profile(coefficient_profile, O::PROFILE)?;
+        validate_sample_array_shape(plan, samples)?;
+        validate_coefficient_array_shape(plan, output)?;
+        let samples64 = samples.mapv(Self::to_complex64);
+        let coefficients = plan.forward_complex(&samples64)?;
+        write_complex_array(coefficients.values(), output);
+        Ok(())
+    }
+
+    /// Execute typed inverse SHT into complex samples.
+    fn inverse_complex_into<O: ShtComplexStorage>(
+        plan: &ShtPlan,
+        coefficients: &Array2<Self>,
+        output: &mut Array2<O>,
+        coefficient_profile: PrecisionProfile,
+        sample_profile: PrecisionProfile,
+    ) -> ShtResult<()> {
+        validate_profile(coefficient_profile, Self::PROFILE)?;
+        validate_profile(sample_profile, O::PROFILE)?;
+        validate_coefficient_array_shape(plan, coefficients)?;
+        validate_sample_array_shape(plan, output)?;
+        let coefficients64 = coefficients.mapv(Self::to_complex64);
+        let owner_coefficients =
+            SphericalHarmonicCoefficients::from_values(plan.grid.max_degree(), coefficients64);
+        let samples = plan.inverse_complex(&owner_coefficients)?;
+        write_complex_array(&samples, output);
+        Ok(())
+    }
+
+    /// Execute typed inverse SHT into real samples.
+    fn inverse_real_into<O: ShtRealStorage>(
+        plan: &ShtPlan,
+        coefficients: &Array2<Self>,
+        output: &mut Array2<O>,
+        coefficient_profile: PrecisionProfile,
+        sample_profile: PrecisionProfile,
+    ) -> ShtResult<()> {
+        validate_profile(coefficient_profile, Self::PROFILE)?;
+        validate_profile(sample_profile, O::PROFILE)?;
+        validate_coefficient_array_shape(plan, coefficients)?;
+        validate_sample_array_shape(plan, output)?;
+        let coefficients64 = coefficients.mapv(Self::to_complex64);
+        let owner_coefficients =
+            SphericalHarmonicCoefficients::from_values(plan.grid.max_degree(), coefficients64);
+        let samples = plan.inverse_real(&owner_coefficients)?;
+        for (slot, value) in output.iter_mut().zip(samples.iter().copied()) {
+            *slot = O::from_f64(value);
+        }
+        Ok(())
+    }
+}
+
+impl ShtComplexStorage for Complex64 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::HIGH_ACCURACY_F64;
+
+    fn to_complex64(self) -> Complex64 {
+        self
+    }
+
+    fn from_complex64(value: Complex64) -> Self {
+        value
+    }
+}
+
+impl ShtComplexStorage for Complex32 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::LOW_PRECISION_F32;
+
+    fn to_complex64(self) -> Complex64 {
+        Complex64::new(f64::from(self.re), f64::from(self.im))
+    }
+
+    fn from_complex64(value: Complex64) -> Self {
+        Complex32::new(value.re as f32, value.im as f32)
+    }
+}
+
+impl ShtComplexStorage for [f16; 2] {
+    const PROFILE: PrecisionProfile = PrecisionProfile::MIXED_PRECISION_F16_F32;
+
+    fn to_complex64(self) -> Complex64 {
+        Complex64::new(f64::from(self[0].to_f32()), f64::from(self[1].to_f32()))
+    }
+
+    fn from_complex64(value: Complex64) -> Self {
+        [
+            f16::from_f32(value.re as f32),
+            f16::from_f32(value.im as f32),
+        ]
+    }
+}
+
+fn validate_profile(actual: PrecisionProfile, expected: PrecisionProfile) -> ShtResult<()> {
+    if actual.storage == expected.storage && actual.compute == expected.compute {
+        Ok(())
+    } else {
+        Err(ShtError::PrecisionMismatch)
+    }
+}
+
+fn validate_sample_array_shape<T>(plan: &ShtPlan, samples: &Array2<T>) -> ShtResult<()> {
+    plan.check_sample_shape(samples.dim())
+}
+
+fn validate_coefficient_array_shape<T>(plan: &ShtPlan, coefficients: &Array2<T>) -> ShtResult<()> {
+    if coefficients.dim() == plan.coefficient_shape() {
+        Ok(())
+    } else {
+        Err(ShtError::CoefficientShapeMismatch)
+    }
+}
+
+fn write_complex_array<T: ShtComplexStorage>(source: &Array2<Complex64>, target: &mut Array2<T>) {
+    for (slot, value) in target.iter_mut().zip(source.iter().copied()) {
+        *slot = T::from_complex64(value);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_abs_diff_eq;
+
+    fn coefficient_shape(plan: &ShtPlan) -> (usize, usize) {
+        (
+            plan.grid().max_degree() + 1,
+            2 * plan.grid().max_degree() + 1,
+        )
+    }
+
+    #[test]
+    fn typed_real_forward_supports_f64_f32_and_mixed_f16_storage() {
+        let plan = ShtPlan::new(6, 13, 2).expect("plan");
+        let constant = 1.0 / (4.0 * std::f64::consts::PI).sqrt();
+        let samples64 = Array2::from_elem(
+            (plan.grid().latitudes(), plan.grid().longitudes()),
+            constant,
+        );
+        let expected = plan.forward_real(&samples64).expect("forward");
+        let shape = coefficient_shape(&plan);
+
+        let mut out64 = Array2::<Complex64>::zeros(shape);
+        plan.forward_real_typed_into(
+            &samples64,
+            &mut out64,
+            PrecisionProfile::HIGH_ACCURACY_F64,
+            PrecisionProfile::HIGH_ACCURACY_F64,
+        )
+        .expect("typed f64 real forward");
+        for (actual, expected) in out64.iter().zip(expected.values().iter()) {
+            assert_abs_diff_eq!(actual.re, expected.re, epsilon = 1.0e-12);
+            assert_abs_diff_eq!(actual.im, expected.im, epsilon = 1.0e-12);
+        }
+
+        let samples32 = samples64.mapv(|value| value as f32);
+        let represented32 = samples32.mapv(f64::from);
+        let expected32 = plan
+            .forward_real(&represented32)
+            .expect("represented f32 forward");
+        let mut out32 = Array2::<Complex32>::zeros(shape);
+        plan.forward_real_typed_into(
+            &samples32,
+            &mut out32,
+            PrecisionProfile::LOW_PRECISION_F32,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("typed f32 real forward");
+        for (actual, expected) in out32.iter().zip(expected32.values().iter()) {
+            assert!((f64::from(actual.re) - expected.re).abs() < 1.0e-5);
+            assert!((f64::from(actual.im) - expected.im).abs() < 1.0e-5);
+        }
+
+        let samples16 = samples64.mapv(|value| f16::from_f32(value as f32));
+        let represented16 = samples16.mapv(|value| f64::from(value.to_f32()));
+        let expected16 = plan
+            .forward_real(&represented16)
+            .expect("represented f16 forward");
+        let mut out16 = Array2::from_elem(shape, [f16::from_f32(0.0), f16::from_f32(0.0)]);
+        plan.forward_real_typed_into(
+            &samples16,
+            &mut out16,
+            PrecisionProfile::MIXED_PRECISION_F16_F32,
+            PrecisionProfile::MIXED_PRECISION_F16_F32,
+        )
+        .expect("typed f16 real forward");
+        for (actual, expected) in out16.iter().zip(expected16.values().iter()) {
+            let re_bound = expected.re.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
+            let im_bound = expected.im.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
+            assert!((f64::from(actual[0].to_f32()) - expected.re).abs() <= re_bound);
+            assert!((f64::from(actual[1].to_f32()) - expected.im).abs() <= im_bound);
+        }
+    }
+
+    #[test]
+    fn typed_complex_forward_and_inverse_support_complex32_storage() {
+        let plan = ShtPlan::new(6, 13, 2).expect("plan");
+        let samples64 = Array2::from_shape_fn(
+            (plan.grid().latitudes(), plan.grid().longitudes()),
+            |(lat, lon)| spherical_harmonic(1, 1, plan.theta(lat), plan.phi(lon)),
+        );
+        let samples32 = samples64.mapv(|value| Complex32::new(value.re as f32, value.im as f32));
+        let represented32 = samples32.mapv(Complex32::to_complex64);
+        let expected = plan.forward_complex(&represented32).expect("forward");
+        let shape = coefficient_shape(&plan);
+
+        let mut coefficients32 = Array2::<Complex32>::zeros(shape);
+        plan.forward_complex_typed_into(
+            &samples32,
+            &mut coefficients32,
+            PrecisionProfile::LOW_PRECISION_F32,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("typed complex32 forward");
+        for (actual, expected) in coefficients32.iter().zip(expected.values().iter()) {
+            assert!((f64::from(actual.re) - expected.re).abs() < 1.0e-5);
+            assert!((f64::from(actual.im) - expected.im).abs() < 1.0e-5);
+        }
+
+        let mut recovered32 =
+            Array2::<Complex32>::zeros((plan.grid().latitudes(), plan.grid().longitudes()));
+        plan.inverse_complex_typed_into(
+            &coefficients32,
+            &mut recovered32,
+            PrecisionProfile::LOW_PRECISION_F32,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("typed complex32 inverse");
+        for (actual, expected) in recovered32.iter().zip(samples32.iter()) {
+            assert!((actual.re - expected.re).abs() < 1.0e-4);
+            assert!((actual.im - expected.im).abs() < 1.0e-4);
+        }
+    }
+
+    #[test]
+    fn typed_real_inverse_and_mismatch_rejections_are_value_semantic() {
+        let plan = ShtPlan::new(5, 11, 2).expect("plan");
+        let mut coefficients = SphericalHarmonicCoefficients::zeros(plan.grid().max_degree());
+        coefficients.set(0, 0, Complex64::new(1.0, 0.0));
+        let coefficient_shape = coefficient_shape(&plan);
+        let coefficients32 = coefficients
+            .values()
+            .mapv(|value| Complex32::new(value.re as f32, value.im as f32));
+        let mut samples32 =
+            Array2::<f32>::zeros((plan.grid().latitudes(), plan.grid().longitudes()));
+
+        plan.inverse_real_typed_into(
+            &coefficients32,
+            &mut samples32,
+            PrecisionProfile::LOW_PRECISION_F32,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("typed real inverse");
+        let expected = plan.inverse_real(&coefficients).expect("inverse");
+        for (actual, expected) in samples32.iter().zip(expected.iter()) {
+            assert!((f64::from(*actual) - *expected).abs() < 1.0e-5);
+        }
+
+        let err = plan
+            .inverse_real_typed_into(
+                &coefficients32,
+                &mut samples32,
+                PrecisionProfile::HIGH_ACCURACY_F64,
+                PrecisionProfile::LOW_PRECISION_F32,
+            )
+            .expect_err("profile mismatch");
+        assert_eq!(err, ShtError::PrecisionMismatch);
+
+        let bad_coefficients =
+            Array2::<Complex32>::zeros((coefficient_shape.0, coefficient_shape.1 + 1));
+        let err = plan
+            .inverse_real_typed_into(
+                &bad_coefficients,
+                &mut samples32,
+                PrecisionProfile::LOW_PRECISION_F32,
+                PrecisionProfile::LOW_PRECISION_F32,
+            )
+            .expect_err("shape mismatch");
+        assert_eq!(err, ShtError::CoefficientShapeMismatch);
     }
 }

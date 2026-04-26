@@ -350,3 +350,8 @@ by unit and property tests against analytical identities and direct references.
   frequency/value shape rejection, and profile/storage mismatch rejection
   against the owner dense FFT, deterministic top-K selector, and sparse inverse
   path.
+- `apollo-sht` typed CPU storage validation covers caller-owned real and complex
+  forward/inverse execution for `f64`/`Complex64`, `f32`/`Complex32`, and mixed
+  `f16`/`[f16; 2]`, represented-input coefficient parity, inverse roundtrip,
+  shape rejection, and profile/storage mismatch rejection against the owner
+  Gauss-Legendre quadrature, spherical harmonic basis, and synthesis path.

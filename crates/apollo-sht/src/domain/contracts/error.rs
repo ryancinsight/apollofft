@@ -23,4 +23,7 @@ pub enum ShtError {
     /// Coefficient storage does not match the plan.
     #[error("coefficient shape does not match the plan")]
     CoefficientShapeMismatch,
+    /// Precision profile does not match the storage type.
+    #[error("precision profile does not match SHT storage type")]
+    PrecisionMismatch,
 }

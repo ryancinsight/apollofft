@@ -14,7 +14,7 @@ pub mod infrastructure;
 /// Value-semantic verification.
 pub mod verification;
 
-pub use application::execution::plan::sht::ShtPlan;
+pub use application::execution::plan::sht::{ShtComplexStorage, ShtPlan, ShtRealStorage};
 pub use domain::contracts::error::{ShtError, ShtResult};
 pub use domain::metadata::grid::SphericalGridSpec;
 pub use domain::spectrum::coefficients::SphericalHarmonicCoefficients;

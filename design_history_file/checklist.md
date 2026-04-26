@@ -108,7 +108,7 @@
 - [x] Add value-semantic DHT and DCT/DST typed storage coverage for `f64`, `f32`, mixed `f16`, and profile mismatch rejection.
 - [x] Add value-semantic FWHT typed storage coverage for `f64`, `f32`, mixed `f16`, and profile mismatch rejection.
 - [x] Verify all 39 workspace crates have manifests, READMEs, and library roots; repair the missing `apollo-python` architecture and verification README sections.
-- [ ] Add mixed-precision CPU storage contracts to remaining eligible transform crates: NUFFT and SHT.
+- [ ] Add mixed-precision CPU storage contracts to remaining eligible transform crates: NUFFT.
 - [ ] Add mixed-precision capability contracts or explicit unsupported records to WGPU/cudatile crates: FFT-WGPU, CZT-WGPU, DCTDST-WGPU, DHT-WGPU, FrFT-WGPU, FWHT-WGPU, GFT-WGPU, Hilbert-WGPU, Mellin-WGPU, NTT-WGPU, NUFFT-WGPU, QFT-WGPU, Radon-WGPU, SDFT-WGPU, SFT-WGPU, SHT-WGPU, STFT-WGPU, Wavelet-WGPU, and cudatile.
 - [x] Add typed CZT caller-owned storage coverage for `Complex64`, `Complex32`, mixed `[f16; 2]`, and profile mismatch rejection.
 - [x] Add typed FrFT caller-owned storage coverage for `Complex64`, `Complex32`, mixed `[f16; 2]`, and profile mismatch rejection.
@@ -121,3 +121,4 @@
 - [x] Add typed STFT caller-owned forward/inverse coverage for `f64`/`Complex64`, `f32`/`Complex32`, mixed `f16`/`[f16; 2]`, represented-input parity, and profile mismatch rejection.
 - [x] Add typed Wavelet DWT/CWT caller-owned coverage for `f64`, `f32`, mixed `f16`, represented-input parity, DWT inverse roundtrip, and profile mismatch rejection.
 - [x] Add typed SFT sparse forward/inverse caller-owned coverage for `Complex64`, `Complex32`, mixed `[f16; 2]`, represented-input parity, inverse roundtrip, sparse shape rejection, and profile mismatch rejection.
+- [x] Add typed SHT real/complex caller-owned coverage for `f64`/`Complex64`, `f32`/`Complex32`, mixed `f16`/`[f16; 2]`, represented-input parity, inverse roundtrip, shape rejection, and profile mismatch rejection.
