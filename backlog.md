@@ -84,3 +84,4 @@
 - [x] Extend `apollo-validation` precision benchmarks to report forward and inverse timings for `f64`, `f32`, and mixed `f16` FFT profiles.
 - [x] Add typed caller-owned DHT and DCT/DST paths for `f64`, `f32`, and mixed `f16` storage profiles.
 - [x] Add typed caller-owned FWHT paths for `f64`, `f32`, and mixed `f16` storage profiles with profile mismatch rejection.
+- [x] Audit all workspace crates for `Cargo.toml`, `README.md`, and `src/lib.rs`; add missing `apollo-python` architecture, mathematical contract, precision contract, and verification documentation.

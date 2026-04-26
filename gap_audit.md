@@ -13,6 +13,7 @@ All items below are implemented, tested, and verified in completed sprints.
 - Completed `apollo-validation` with the new multi-crate API surface and conditional external-backend wiring.
 - Aligned `apollo-python` with current crate names, shape newtypes, and full-spectrum FFT plan APIs.
 - Added crate-local architecture README files for all `crates/apollo-*` crates.
+- Re-audited all 39 workspace crates for manifest, README, and library-root presence; added missing `apollo-python` architecture, mathematical contract, precision contract, and verification README sections.
 
 ### Core Algorithm Correctness
 

@@ -1,4 +1,16 @@
 # Apollo Checklist
+n## Closure phase
+- [x] Fix `[workspace.lints.clippy]` priority: assign `all`/`pedantic` groups `priority = -1` so individual overrides take precedence.
+- [x] Propagate workspace lints to all 39 crates via `[lints] workspace = true`.
+- [x] Add comprehensive DSP-appropriate pedantic suppressions to workspace lints.
+- [x] Fix `apollo-fft` doc-lint and needless_range_loop warnings in `direct.rs`.
+- [x] Replace `CpuBackend::default()` with `CpuBackend` in transport tests.
+- [x] Add `#![allow(missing_docs)]` and doc comments to benchmark file.
+- [x] Add `fast_type2_1d_normalization_invariance_when_device_exists` test.
+- [x] Add normalization convention docs to WGSL shaders and `encode_inverse_split`.
+- [x] Remove 22 scratch/temporary files from repository root and `scratch/` directory.
+- [x] Add scratch-file gitignore patterns.
+- [x] Verify zero clippy errors, zero clippy warnings, zero test failures.
 
 - [x] Read workspace metadata, README, crate manifests, and validation gaps.
 - [x] Classify current rename state as authoritative without reverting user changes.
@@ -94,3 +106,4 @@
 - [x] Add validation benchmark timing coverage for forward and inverse `f64`, `f32`, and mixed `f16` FFT profiles.
 - [x] Add value-semantic DHT and DCT/DST typed storage coverage for `f64`, `f32`, mixed `f16`, and profile mismatch rejection.
 - [x] Add value-semantic FWHT typed storage coverage for `f64`, `f32`, mixed `f16`, and profile mismatch rejection.
+- [x] Verify all 39 workspace crates have manifests, READMEs, and library roots; repair the missing `apollo-python` architecture and verification README sections.

@@ -102,6 +102,21 @@ does not use that label for WGPU because the current shader path is `f32` only.
 
 ## Transform-Specific Analytical Checks
 
+## All-Crate Artifact Audit
+
+The current workspace contains 39 Apollo crates. Each crate has:
+
+- `Cargo.toml`
+- `README.md`
+- `src/lib.rs`
+
+The README audit checks for crate-local `Architecture` and `Verification`
+sections across the workspace. `apollo-python` now documents its adapter role,
+delegation boundaries, precision mapping, full-spectrum real FFT contract, and
+verification commands. Transform kernel ownership remains in the Rust
+mathematical crates; Python bindings only validate layout, translate errors,
+and delegate execution.
+
 ## Published-Reference Fixtures
 
 `apollo-validation` now records deterministic published-reference fixtures under
