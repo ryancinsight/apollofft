@@ -352,6 +352,7 @@ dependencies = [
 name = "apollo-qft"
 version = "0.1.0"
 dependencies = [
+ "apollo-fft",
  "approx",
  "ndarray",
  "num-complex",

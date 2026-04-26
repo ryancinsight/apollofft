@@ -323,3 +323,7 @@ by unit and property tests against analytical identities and direct references.
   `f32`, and mixed `f16` log-resampling, represented-input moment/spectrum
   parity, and profile/storage mismatch rejection against the owner `f64`
   scale-domain kernels.
+- `apollo-qft` typed CPU storage validation covers caller-owned `Complex64`,
+  `Complex32`, and mixed `[f16; 2]` forward/inverse execution, represented-input
+  parity, inverse roundtrip, and profile/storage mismatch rejection against the
+  owner `Complex64` dense unitary QFT path.

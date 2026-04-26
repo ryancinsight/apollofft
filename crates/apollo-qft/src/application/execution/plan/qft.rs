@@ -10,8 +10,9 @@
 use crate::domain::contracts::error::{QftError, QftResult};
 use crate::domain::state::dimension::QuantumStateDimension;
 use crate::infrastructure::kernel::dense::{qft_forward_dense, qft_inverse_dense};
+use apollo_fft::{f16, PrecisionProfile};
 use ndarray::Array1;
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use serde::{Deserialize, Serialize};
 
 /// Reusable QFT plan with precomputed twiddle factors.
@@ -56,24 +57,74 @@ impl QftPlan {
 
     /// Forward QFT of a complex amplitude vector.
     pub fn forward(&self, input: &Array1<Complex64>) -> QftResult<Array1<Complex64>> {
-        if input.len() != self.len() {
+        let mut output = Array1::zeros(self.len());
+        self.forward_into(input, &mut output)?;
+        Ok(output)
+    }
+
+    /// Forward QFT into caller-owned storage.
+    pub fn forward_into(
+        &self,
+        input: &Array1<Complex64>,
+        output: &mut Array1<Complex64>,
+    ) -> QftResult<()> {
+        if input.len() != self.len() || output.len() != self.len() {
             return Err(QftError::LengthMismatch);
         }
-        Ok(Array1::from_vec(qft_forward_dense(
+        let transformed = qft_forward_dense(
             input.as_slice().expect("QFT input must be contiguous"),
             &self.twiddles,
-        )))
+        );
+        for (slot, value) in output.iter_mut().zip(transformed.into_iter()) {
+            *slot = value;
+        }
+        Ok(())
+    }
+
+    /// Forward QFT for `Complex64`, `Complex32`, or mixed two-lane `f16` storage.
+    pub fn forward_typed_into<T: QftStorage>(
+        &self,
+        input: &Array1<T>,
+        output: &mut Array1<T>,
+        profile: PrecisionProfile,
+    ) -> QftResult<()> {
+        T::forward_into(self, input, output, profile)
     }
 
     /// Inverse QFT of a complex amplitude vector.
     pub fn inverse(&self, input: &Array1<Complex64>) -> QftResult<Array1<Complex64>> {
-        if input.len() != self.len() {
+        let mut output = Array1::zeros(self.len());
+        self.inverse_into(input, &mut output)?;
+        Ok(output)
+    }
+
+    /// Inverse QFT into caller-owned storage.
+    pub fn inverse_into(
+        &self,
+        input: &Array1<Complex64>,
+        output: &mut Array1<Complex64>,
+    ) -> QftResult<()> {
+        if input.len() != self.len() || output.len() != self.len() {
             return Err(QftError::LengthMismatch);
         }
-        Ok(Array1::from_vec(qft_inverse_dense(
+        let transformed = qft_inverse_dense(
             input.as_slice().expect("QFT input must be contiguous"),
             &self.twiddles,
-        )))
+        );
+        for (slot, value) in output.iter_mut().zip(transformed.into_iter()) {
+            *slot = value;
+        }
+        Ok(())
+    }
+
+    /// Inverse QFT for `Complex64`, `Complex32`, or mixed two-lane `f16` storage.
+    pub fn inverse_typed_into<T: QftStorage>(
+        &self,
+        input: &Array1<T>,
+        output: &mut Array1<T>,
+        profile: PrecisionProfile,
+    ) -> QftResult<()> {
+        T::inverse_into(self, input, output, profile)
     }
 
     /// Forward QFT executed in place.
@@ -91,6 +142,125 @@ impl QftPlan {
     }
 }
 
+/// Complex storage accepted by typed QFT paths.
+pub trait QftStorage: Copy + Send + Sync + 'static {
+    /// Required precision profile.
+    const PROFILE: PrecisionProfile;
+
+    /// Convert storage into the owner `Complex64` arithmetic path.
+    fn to_complex64(self) -> Complex64;
+
+    /// Convert owner arithmetic result back to storage.
+    fn from_complex64(value: Complex64) -> Self;
+
+    /// Execute forward transform into caller-owned storage.
+    fn forward_into(
+        plan: &QftPlan,
+        input: &Array1<Self>,
+        output: &mut Array1<Self>,
+        profile: PrecisionProfile,
+    ) -> QftResult<()> {
+        validate_profile(profile, Self::PROFILE)?;
+        if input.len() != plan.len() || output.len() != plan.len() {
+            return Err(QftError::LengthMismatch);
+        }
+        let input64 = Array1::from_iter(input.iter().copied().map(Self::to_complex64));
+        let mut output64 = Array1::zeros(plan.len());
+        plan.forward_into(&input64, &mut output64)?;
+        for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+            *slot = Self::from_complex64(value);
+        }
+        Ok(())
+    }
+
+    /// Execute inverse transform into caller-owned storage.
+    fn inverse_into(
+        plan: &QftPlan,
+        input: &Array1<Self>,
+        output: &mut Array1<Self>,
+        profile: PrecisionProfile,
+    ) -> QftResult<()> {
+        validate_profile(profile, Self::PROFILE)?;
+        if input.len() != plan.len() || output.len() != plan.len() {
+            return Err(QftError::LengthMismatch);
+        }
+        let input64 = Array1::from_iter(input.iter().copied().map(Self::to_complex64));
+        let mut output64 = Array1::zeros(plan.len());
+        plan.inverse_into(&input64, &mut output64)?;
+        for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+            *slot = Self::from_complex64(value);
+        }
+        Ok(())
+    }
+}
+
+impl QftStorage for Complex64 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::HIGH_ACCURACY_F64;
+
+    fn to_complex64(self) -> Complex64 {
+        self
+    }
+
+    fn from_complex64(value: Complex64) -> Self {
+        value
+    }
+
+    fn forward_into(
+        plan: &QftPlan,
+        input: &Array1<Self>,
+        output: &mut Array1<Self>,
+        profile: PrecisionProfile,
+    ) -> QftResult<()> {
+        validate_profile(profile, Self::PROFILE)?;
+        plan.forward_into(input, output)
+    }
+
+    fn inverse_into(
+        plan: &QftPlan,
+        input: &Array1<Self>,
+        output: &mut Array1<Self>,
+        profile: PrecisionProfile,
+    ) -> QftResult<()> {
+        validate_profile(profile, Self::PROFILE)?;
+        plan.inverse_into(input, output)
+    }
+}
+
+impl QftStorage for Complex32 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::LOW_PRECISION_F32;
+
+    fn to_complex64(self) -> Complex64 {
+        Complex64::new(f64::from(self.re), f64::from(self.im))
+    }
+
+    fn from_complex64(value: Complex64) -> Self {
+        Complex32::new(value.re as f32, value.im as f32)
+    }
+}
+
+impl QftStorage for [f16; 2] {
+    const PROFILE: PrecisionProfile = PrecisionProfile::MIXED_PRECISION_F16_F32;
+
+    fn to_complex64(self) -> Complex64 {
+        Complex64::new(f64::from(self[0].to_f32()), f64::from(self[1].to_f32()))
+    }
+
+    fn from_complex64(value: Complex64) -> Self {
+        [
+            f16::from_f32(value.re as f32),
+            f16::from_f32(value.im as f32),
+        ]
+    }
+}
+
+fn validate_profile(actual: PrecisionProfile, expected: PrecisionProfile) -> QftResult<()> {
+    if actual.storage == expected.storage && actual.compute == expected.compute {
+        Ok(())
+    } else {
+        Err(QftError::PrecisionMismatch)
+    }
+}
+
 /// Convenience wrapper for forward QFT.
 pub fn qft(input: &Array1<Complex64>) -> QftResult<Array1<Complex64>> {
     QftPlan::new(QuantumStateDimension::new(input.len())?).forward(input)
@@ -99,4 +269,129 @@ pub fn qft(input: &Array1<Complex64>) -> QftResult<Array1<Complex64>> {
 /// Convenience wrapper for inverse QFT.
 pub fn iqft(input: &Array1<Complex64>) -> QftResult<Array1<Complex64>> {
     QftPlan::new(QuantumStateDimension::new(input.len())?).inverse(input)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    fn plan4() -> QftPlan {
+        QftPlan::new(QuantumStateDimension::new(4).expect("valid dimension"))
+    }
+
+    fn input64() -> Array1<Complex64> {
+        Array1::from_vec(vec![
+            Complex64::new(1.0, -0.5),
+            Complex64::new(0.25, 0.75),
+            Complex64::new(-0.5, 1.25),
+            Complex64::new(1.5, 0.0),
+        ])
+    }
+
+    #[test]
+    fn caller_owned_forward_and_inverse_match_allocating_paths() {
+        let plan = plan4();
+        let input = input64();
+        let expected = plan.forward(&input).expect("forward");
+        let mut forward_output = Array1::<Complex64>::zeros(plan.len());
+        plan.forward_into(&input, &mut forward_output)
+            .expect("caller-owned forward");
+        for (actual, expected) in forward_output.iter().zip(expected.iter()) {
+            assert_relative_eq!(actual.re, expected.re, epsilon = 1.0e-12);
+            assert_relative_eq!(actual.im, expected.im, epsilon = 1.0e-12);
+        }
+
+        let recovered = plan.inverse(&expected).expect("inverse");
+        let mut inverse_output = Array1::<Complex64>::zeros(plan.len());
+        plan.inverse_into(&expected, &mut inverse_output)
+            .expect("caller-owned inverse");
+        for ((actual, expected), original) in inverse_output
+            .iter()
+            .zip(recovered.iter())
+            .zip(input.iter())
+        {
+            assert_relative_eq!(actual.re, expected.re, epsilon = 1.0e-12);
+            assert_relative_eq!(actual.im, expected.im, epsilon = 1.0e-12);
+            assert_relative_eq!(actual.re, original.re, epsilon = 1.0e-12);
+            assert_relative_eq!(actual.im, original.im, epsilon = 1.0e-12);
+        }
+    }
+
+    #[test]
+    fn typed_paths_support_complex64_complex32_and_mixed_f16_storage() {
+        let plan = plan4();
+        let input = input64();
+        let expected = plan.forward(&input).expect("forward");
+
+        let mut out64 = Array1::<Complex64>::zeros(plan.len());
+        plan.forward_typed_into(&input, &mut out64, PrecisionProfile::HIGH_ACCURACY_F64)
+            .expect("typed complex64 forward");
+        for (actual, expected) in out64.iter().zip(expected.iter()) {
+            assert_relative_eq!(actual.re, expected.re, epsilon = 1.0e-12);
+            assert_relative_eq!(actual.im, expected.im, epsilon = 1.0e-12);
+        }
+
+        let input32 = input.mapv(|value| Complex32::new(value.re as f32, value.im as f32));
+        let represented32 =
+            Array1::from_iter(input32.iter().copied().map(QftStorage::to_complex64));
+        let expected32 = plan
+            .forward(&represented32)
+            .expect("represented f32 forward");
+        let mut out32 = Array1::<Complex32>::zeros(plan.len());
+        plan.forward_typed_into(&input32, &mut out32, PrecisionProfile::LOW_PRECISION_F32)
+            .expect("typed complex32 forward");
+        for (actual, expected) in out32.iter().zip(expected32.iter()) {
+            assert!((f64::from(actual.re) - expected.re).abs() < 1.0e-5);
+            assert!((f64::from(actual.im) - expected.im).abs() < 1.0e-5);
+        }
+
+        let input16 = input.mapv(|value| {
+            [
+                f16::from_f32(value.re as f32),
+                f16::from_f32(value.im as f32),
+            ]
+        });
+        let represented16 =
+            Array1::from_iter(input16.iter().copied().map(QftStorage::to_complex64));
+        let expected16 = plan
+            .forward(&represented16)
+            .expect("represented f16 forward");
+        let mut out16 = Array1::from_elem(plan.len(), [f16::from_f32(0.0); 2]);
+        plan.forward_typed_into(
+            &input16,
+            &mut out16,
+            PrecisionProfile::MIXED_PRECISION_F16_F32,
+        )
+        .expect("typed mixed f16 forward");
+        for (actual, expected) in out16.iter().zip(expected16.iter()) {
+            let re_bound = expected.re.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
+            let im_bound = expected.im.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
+            assert!((f64::from(actual[0].to_f32()) - expected.re).abs() <= re_bound);
+            assert!((f64::from(actual[1].to_f32()) - expected.im).abs() <= im_bound);
+        }
+
+        let mut recovered32 = Array1::<Complex32>::zeros(plan.len());
+        plan.inverse_typed_into(
+            &out32,
+            &mut recovered32,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("typed complex32 inverse");
+        for (actual, expected) in recovered32.iter().zip(input32.iter()) {
+            assert!((actual.re - expected.re).abs() < 1.0e-5);
+            assert!((actual.im - expected.im).abs() < 1.0e-5);
+        }
+    }
+
+    #[test]
+    fn typed_path_rejects_profile_storage_mismatch() {
+        let plan = plan4();
+        let input = Array1::from_vec(vec![Complex32::new(1.0, 0.0); 4]);
+        let mut output = Array1::<Complex32>::zeros(plan.len());
+        assert!(matches!(
+            plan.forward_typed_into(&input, &mut output, PrecisionProfile::HIGH_ACCURACY_F64),
+            Err(QftError::PrecisionMismatch)
+        ));
+    }
 }

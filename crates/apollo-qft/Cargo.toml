@@ -8,6 +8,7 @@ repository = "https://github.com/ryancinsight/kwavers"
 description = "Quantum Fourier transform utilities for Apollo"
 
 [dependencies]
+apollo-fft = { path = "../apollo-fft" }
 ndarray = { version = "0.16", features = ["rayon"] }
 num-complex = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
