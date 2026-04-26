@@ -222,6 +222,12 @@ by unit and property tests against analytical identities and direct references.
 - FWHT typed caller-owned paths now cover `f64`, `f32`, and mixed `f16` storage
   by reusing the generic Hadamard butterfly schedule, using `f32` compute for
   mixed `f16`, and rejecting profile/storage mismatches.
+- CZT typed caller-owned paths now cover `Complex64`, `Complex32`, and mixed
+  `[f16; 2]` storage by reusing the authoritative Bluestein path and rejecting
+  profile/storage mismatches.
+- FrFT typed caller-owned paths now cover `Complex64`, `Complex32`, and mixed
+  `[f16; 2]` storage by reusing the authoritative direct fractional-kernel path
+  and rejecting profile/storage mismatches.
 - CZT Bluestein execution reuses its convolution workspace after the forward
   FFT, multiplies by the precomputed kernel in place, and inverse-transforms the
   same buffer instead of copying to a separate product vector.

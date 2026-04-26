@@ -37,6 +37,21 @@ discrete coordinates.
 
 - `forward` and `inverse` allocate returned arrays.
 - `forward_into` and `inverse_into` write into caller-owned output buffers.
+- `forward_typed_into` and `inverse_typed_into` support `Complex64`,
+  `Complex32`, and mixed `[f16; 2]` storage profiles.
+
+## Precision Contract
+
+Typed execution uses Apollo's shared `PrecisionProfile` contract:
+
+- `HIGH_ACCURACY_F64`: `Complex64` storage.
+- `LOW_PRECISION_F32`: `Complex32` storage.
+- `MIXED_PRECISION_F16_F32`: `[f16; 2]` storage, with lane 0 as real and lane
+  1 as imaginary.
+
+Lower storage profiles reuse the authoritative `Complex64` FrFT plan and
+quantize once at the storage boundary. Profile/storage mismatch is rejected
+with `FrftError::PrecisionMismatch`.
 
 The implementation is a direct `O(n^2)` reference surface. Future acceleration
 must preserve the documented rotation limits and parity against this kernel.
@@ -45,4 +60,5 @@ must preserve the documented rotation limits and parity against this kernel.
 
 The crate verifies identity order, continuity near the centered DFT boundary,
 integer-order inverse reconstruction, caller-owned inverse parity, and invalid
-plan rejection.
+plan rejection. Typed tests cover `Complex64`, `Complex32`, mixed `[f16; 2]`,
+and profile mismatch rejection.

@@ -14,4 +14,7 @@ pub enum CztError {
     /// Input length mismatch.
     #[error("input length mismatch")]
     LengthMismatch,
+    /// Requested precision profile does not match the selected storage type.
+    #[error("precision profile does not match the selected storage type")]
+    PrecisionMismatch,
 }

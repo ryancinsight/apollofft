@@ -16,4 +16,5 @@ pub mod infrastructure;
 // Facade API for backward compatibility and end-user simplicity
 
 pub use crate::application::execution::plan::frft::dimension_1d::{frft, FrftPlan};
+pub use crate::application::execution::plan::frft::storage::FrftStorage;
 pub use crate::domain::contracts::error::FrftError;

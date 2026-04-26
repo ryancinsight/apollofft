@@ -1,8 +1,26 @@
 # Apollo Gap Audit
 
+## Open Gaps
+
+- Mixed-precision CPU storage contracts remain incomplete for GFT, Hilbert, Mellin, NUFFT, QFT, Radon, SDFT, SFT, SHT, STFT, and Wavelet.
+- Mixed-precision GPU/cudatile capability contracts remain incomplete for FFT-WGPU, CZT-WGPU, DCTDST-WGPU, DHT-WGPU, FrFT-WGPU, FWHT-WGPU, GFT-WGPU, Hilbert-WGPU, Mellin-WGPU, NTT-WGPU, NUFFT-WGPU, QFT-WGPU, Radon-WGPU, SDFT-WGPU, SFT-WGPU, SHT-WGPU, STFT-WGPU, Wavelet-WGPU, and cudatile.
+
 ## Closed Gaps
 
 All items below are implemented, tested, and verified in completed sprints.
+
+### Closure Phase
+
+- Fixed `[workspace.lints.clippy]` priority: assigned `all` and `pedantic` groups `priority = -1` so individual overrides at default priority 0 take precedence; eliminated 22 clippy compilation failures across all transform crates.
+- Propagated workspace lints to all 39 crates via `[lints] workspace = true` in every `Cargo.toml`; added comprehensive DSP-appropriate pedantic suppressions (cast truncation/precision/loss, needless_range_loop, too_many_arguments, manual_is_multiple_of, manual_div_ceil, etc.).
+- Fixed `apollo-fft` doc-lint warnings: replaced `- ` list markers with `* ` in `direct.rs` module doc; replaced `for k in 0..n { output[k] = }` with `iter_mut().enumerate()` in `dft_forward` and `dft_inverse`.
+- Replaced `CpuBackend::default()` with `CpuBackend` (unit-struct literal) in `apollo-fft` transport tests to satisfy `clippy::default_constructed_unit_structs`.
+- Added `#![allow(missing_docs)]` and doc comments to `apollo-fft/benches/kernel_strategy.rs`.
+- Added `fast_type2_1d_normalization_invariance_when_device_exists` test to `apollo-nufft-wgpu` verification: single non-zero coefficient at k=0, verifies GPU output matches CPU gridded reference and that output is constant across positions (detects 1/m rescaling regressions).
+- Added normalization convention documentation to `nufft_fast_1d.wgsl` (Type-1 unnormalized forward FFT, Type-2 host pre-scales deconv by m to compensate normalized IFFT), `nufft_fast_3d.wgsl` (3D Type-2 uses normalized IFFT directly, no pre-scaling needed), and `GpuFft3d::encode_inverse_split` doc comment (caveat for unnormalized-IDFT consumers).
+- Removed 22 scratch/temporary files from repository root and `scratch/` directory.
+- Added scratch-file gitignore patterns to `.gitignore`.
+- Verified zero clippy errors, zero clippy warnings, zero test failures across full workspace.
 
 ### Workspace and Infrastructure
 
@@ -49,6 +67,8 @@ All items below are implemented, tested, and verified in completed sprints.
 - Extended validation precision benchmarks so forward and inverse timing reports cover high-accuracy `f64`, low-precision `f32`, and mixed `f16` storage profiles.
 - Added typed caller-owned DHT and DCT/DST execution paths for `f64`, `f32`, and mixed `f16` storage profiles without duplicating transform kernels.
 - Added typed caller-owned FWHT execution paths for `f64`, `f32`, and mixed `f16` storage profiles without duplicating the Hadamard butterfly schedule.
+- Added typed caller-owned CZT execution paths for `Complex64`, `Complex32`, and mixed `[f16; 2]` storage profiles without duplicating the Bluestein transform path.
+- Added typed caller-owned FrFT execution paths for `Complex64`, `Complex32`, and mixed `[f16; 2]` storage profiles without duplicating the direct fractional-kernel path.
 
 ### New Transform Crates
 

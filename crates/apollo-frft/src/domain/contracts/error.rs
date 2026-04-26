@@ -19,4 +19,7 @@ pub enum FrftError {
         /// Required plan length.
         plan: usize,
     },
+    /// Requested precision profile does not match the selected storage type.
+    #[error("precision profile does not match the selected storage type")]
+    PrecisionMismatch,
 }

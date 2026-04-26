@@ -14,7 +14,7 @@ pub mod domain;
 /// CPU execution helpers.
 pub mod infrastructure;
 
-pub use application::execution::plan::czt::dimension_1d::CztPlan;
+pub use application::execution::plan::czt::dimension_1d::{CztPlan, CztStorage};
 pub use domain::contracts::error::CztError;
 pub use domain::metadata::CztParameters;
 pub use infrastructure::transport::cpu::{czt, czt_direct};

@@ -6,9 +6,10 @@ use crate::application::execution::kernel::bluestein::{
 use crate::application::execution::kernel::direct::czt_direct_forward;
 use crate::domain::contracts::error::CztError;
 use apollo_fft::application::plan::FftPlan1D;
+use apollo_fft::f16;
 use apollo_fft::types::{PrecisionProfile, Shape1D};
 use ndarray::Array1;
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 
 /// Return whether a CZT input or output length satisfies the non-zero contract.
 #[must_use]
@@ -171,11 +172,114 @@ impl CztPlan {
         Ok(())
     }
 
+    /// Forward CZT for `Complex64`, `Complex32`, or mixed two-lane `f16` storage.
+    ///
+    /// `Complex64` uses the native high-accuracy path. `Complex32` and mixed
+    /// `[f16; 2]` storage convert through the owner kernel and quantize once
+    /// into the caller-owned output.
+    pub fn forward_typed_into<T: CztStorage>(
+        &self,
+        input: &Array1<T>,
+        output: &mut Array1<T>,
+        profile: PrecisionProfile,
+    ) -> Result<(), CztError> {
+        T::forward_into(self, input, output, profile)
+    }
+
     /// In-place forward CZT.
     pub fn forward_inplace(&self, data: &mut Array1<Complex64>) -> Result<(), CztError> {
         let transformed = self.forward(data)?;
         *data = transformed;
         Ok(())
+    }
+}
+
+/// Complex storage accepted by typed CZT paths.
+pub trait CztStorage: Copy + Send + Sync + 'static {
+    /// Required precision profile for this storage type.
+    const PROFILE: PrecisionProfile;
+
+    /// Convert storage into the owner `Complex64` arithmetic path.
+    fn to_complex64(self) -> Complex64;
+
+    /// Convert owner arithmetic result back to storage.
+    fn from_complex64(value: Complex64) -> Self;
+
+    /// Execute forward transform into caller-owned storage.
+    fn forward_into(
+        plan: &CztPlan,
+        input: &Array1<Self>,
+        output: &mut Array1<Self>,
+        profile: PrecisionProfile,
+    ) -> Result<(), CztError> {
+        validate_profile(profile, Self::PROFILE)?;
+        if input.len() != plan.input_len() || output.len() != plan.output_len() {
+            return Err(CztError::LengthMismatch);
+        }
+        let input64 = Array1::from_iter(input.iter().copied().map(Self::to_complex64));
+        let mut output64 = Array1::zeros(plan.output_len());
+        plan.forward_into(&input64, &mut output64)?;
+        for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+            *slot = Self::from_complex64(value);
+        }
+        Ok(())
+    }
+}
+
+impl CztStorage for Complex64 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::HIGH_ACCURACY_F64;
+
+    fn to_complex64(self) -> Complex64 {
+        self
+    }
+
+    fn from_complex64(value: Complex64) -> Self {
+        value
+    }
+
+    fn forward_into(
+        plan: &CztPlan,
+        input: &Array1<Self>,
+        output: &mut Array1<Self>,
+        profile: PrecisionProfile,
+    ) -> Result<(), CztError> {
+        validate_profile(profile, Self::PROFILE)?;
+        plan.forward_into(input, output)
+    }
+}
+
+impl CztStorage for Complex32 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::LOW_PRECISION_F32;
+
+    fn to_complex64(self) -> Complex64 {
+        Complex64::new(f64::from(self.re), f64::from(self.im))
+    }
+
+    fn from_complex64(value: Complex64) -> Self {
+        Complex32::new(value.re as f32, value.im as f32)
+    }
+}
+
+impl CztStorage for [f16; 2] {
+    const PROFILE: PrecisionProfile = PrecisionProfile::MIXED_PRECISION_F16_F32;
+
+    fn to_complex64(self) -> Complex64 {
+        Complex64::new(f64::from(self[0].to_f32()), f64::from(self[1].to_f32()))
+    }
+
+    fn from_complex64(value: Complex64) -> Self {
+        [
+            f16::from_f32(value.re as f32),
+            f16::from_f32(value.im as f32),
+        ]
+    }
+}
+
+fn validate_profile(actual: PrecisionProfile, expected: PrecisionProfile) -> Result<(), CztError> {
+    if actual.storage == expected.storage && actual.compute == expected.compute {
+        Ok(())
+    } else {
+        Err(CztError::PrecisionMismatch)
     }
 }
 
@@ -355,5 +459,78 @@ mod tests {
             assert_relative_eq!(lhs.re, rhs.re, epsilon = 1.0e-12);
             assert_relative_eq!(lhs.im, rhs.im, epsilon = 1.0e-12);
         }
+    }
+
+    #[test]
+    fn typed_paths_support_complex64_complex32_and_mixed_f16_storage() {
+        let input64 = Array1::from_vec(vec![
+            Complex64::new(0.25, 0.5),
+            Complex64::new(-0.75, 1.0),
+            Complex64::new(1.25, -0.25),
+            Complex64::new(0.5, 0.125),
+            Complex64::new(-0.375, -0.75),
+        ]);
+        let plan = CztPlan::new(
+            input64.len(),
+            7,
+            Complex64::from_polar(1.0, 0.125),
+            Complex64::from_polar(1.0, -std::f64::consts::TAU / 11.0),
+        )
+        .expect("valid plan");
+        let expected = plan.forward(&input64).expect("reference");
+
+        let mut out64 = Array1::<Complex64>::zeros(plan.output_len());
+        plan.forward_typed_into(&input64, &mut out64, PrecisionProfile::HIGH_ACCURACY_F64)
+            .expect("complex64 typed");
+        for (actual, expected) in out64.iter().zip(expected.iter()) {
+            assert_relative_eq!(actual.re, expected.re, epsilon = 1.0e-12);
+            assert_relative_eq!(actual.im, expected.im, epsilon = 1.0e-12);
+        }
+
+        let input32 = input64.mapv(|value| Complex32::new(value.re as f32, value.im as f32));
+        let mut out32 = Array1::<Complex32>::zeros(plan.output_len());
+        plan.forward_typed_into(&input32, &mut out32, PrecisionProfile::LOW_PRECISION_F32)
+            .expect("complex32 typed");
+        for (actual, expected) in out32.iter().zip(expected.iter()) {
+            assert!((f64::from(actual.re) - expected.re).abs() < 1.0e-5);
+            assert!((f64::from(actual.im) - expected.im).abs() < 1.0e-5);
+        }
+
+        let input16 = input64.mapv(|value| {
+            [
+                f16::from_f32(value.re as f32),
+                f16::from_f32(value.im as f32),
+            ]
+        });
+        let mut out16 = Array1::from_elem(plan.output_len(), [f16::from_f32(0.0); 2]);
+        plan.forward_typed_into(
+            &input16,
+            &mut out16,
+            PrecisionProfile::MIXED_PRECISION_F16_F32,
+        )
+        .expect("mixed f16 typed");
+        for (actual, expected) in out16.iter().zip(expected.iter()) {
+            let re_bound = expected.re.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
+            let im_bound = expected.im.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
+            assert!((f64::from(actual[0].to_f32()) - expected.re).abs() <= re_bound);
+            assert!((f64::from(actual[1].to_f32()) - expected.im).abs() <= im_bound);
+        }
+    }
+
+    #[test]
+    fn typed_path_rejects_profile_storage_mismatch() {
+        let plan = CztPlan::new(
+            4,
+            4,
+            Complex64::new(1.0, 0.0),
+            Complex64::from_polar(1.0, -std::f64::consts::TAU / 8.0),
+        )
+        .expect("valid plan");
+        let input = Array1::from_vec(vec![Complex32::new(1.0, 0.0); 4]);
+        let mut output = Array1::<Complex32>::zeros(4);
+        assert!(matches!(
+            plan.forward_typed_into(&input, &mut output, PrecisionProfile::HIGH_ACCURACY_F64),
+            Err(CztError::PrecisionMismatch)
+        ));
     }
 }
