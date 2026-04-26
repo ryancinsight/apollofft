@@ -28,6 +28,11 @@ deconvolution against the same Kaiser-Bessel metadata used by `apollo-nufft`.
 The 3D fast grid uses radix-2 oversampled dimensions large enough to avoid
 periodic overlap of the compact Kaiser-Bessel support.
 
+Shared fast-path bind-group layouts keep inactive entry-point bindings as
+device-only placeholder storage buffers. The backend does not allocate or
+upload host-side zero vectors for bindings that a selected shader entry point
+does not read.
+
 ## Verification
 
 Tests cover capability truthfulness, descriptor metadata preservation, input

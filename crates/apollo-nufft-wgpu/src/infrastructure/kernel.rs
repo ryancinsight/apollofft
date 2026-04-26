@@ -568,16 +568,12 @@ impl NufftGpuKernel {
         let position_data = positions_to_complex_pods_1d(positions);
         let value_data = complex_to_pods(values);
         let deconv_data = real_to_complex_pods(deconv);
-        let empty_coefficients = vec![ComplexPod::zeroed(); n.max(1)];
         let position_buffer =
             storage_buffer(device, "apollo-nufft-wgpu fast positions", &position_data);
         let value_buffer = storage_buffer(device, "apollo-nufft-wgpu fast values", &value_data);
         let deconv_buffer = storage_buffer(device, "apollo-nufft-wgpu fast deconv", &deconv_data);
-        let coefficient_buffer = storage_buffer(
-            device,
-            "apollo-nufft-wgpu fast empty coefficients",
-            &empty_coefficients,
-        );
+        let coefficient_buffer =
+            placeholder_storage_buffer(device, "apollo-nufft-wgpu fast empty coefficients", n);
         let (re_buffer, im_buffer) = split_grid_buffers(device, oversampled_len);
         let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("apollo-nufft-wgpu fast type1 output"),
@@ -810,16 +806,15 @@ impl NufftGpuKernel {
             })
             .collect();
         let value_data = complex_to_pods(values);
-        let empty_coeff = vec![ComplexPod::zeroed(); output_len.max(1)];
 
         let position_buffer =
             storage_buffer(device, "apollo-nufft-wgpu fast3d positions", &position_data);
         let value_buffer = storage_buffer(device, "apollo-nufft-wgpu fast3d values", &value_data);
         let deconv_buffer = storage_buffer(device, "apollo-nufft-wgpu fast3d deconv", deconv_xyz);
-        let coeff_buffer = storage_buffer(
+        let coeff_buffer = placeholder_storage_buffer(
             device,
             "apollo-nufft-wgpu fast3d coeffs placeholder",
-            &empty_coeff,
+            output_len,
         );
         let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("apollo-nufft-wgpu fast3d type1 output"),
@@ -949,7 +944,6 @@ impl NufftGpuKernel {
                 _pad: 0.0,
             })
             .collect();
-        let empty_values = vec![ComplexPod::zeroed(); positions.len().max(1)];
 
         let coeff_buffer =
             storage_buffer(device, "apollo-nufft-wgpu fast3d type2 coeffs", &coeff_data);
@@ -960,10 +954,10 @@ impl NufftGpuKernel {
         );
         let deconv_buffer =
             storage_buffer(device, "apollo-nufft-wgpu fast3d type2 deconv", deconv_xyz);
-        let values_placeholder = storage_buffer(
+        let values_placeholder = placeholder_storage_buffer(
             device,
             "apollo-nufft-wgpu fast3d type2 values placeholder",
-            &empty_values,
+            positions.len(),
         );
         let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("apollo-nufft-wgpu fast3d type2 output"),
@@ -1268,6 +1262,19 @@ fn storage_buffer<T: Pod>(device: &wgpu::Device, label: &'static str, data: &[T]
         label: Some(label),
         contents: bytemuck::cast_slice(data),
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    })
+}
+
+fn placeholder_storage_buffer(
+    device: &wgpu::Device,
+    label: &'static str,
+    len: usize,
+) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: (len.max(1) * std::mem::size_of::<ComplexPod>()) as u64,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
     })
 }
 
