@@ -17,6 +17,11 @@ src/
 define admissible wavelets and coefficient ownership; infrastructure kernels
 only evaluate mathematical primitives.
 
+Typed execution uses the same owner kernels for `f64`, `f32`, and mixed `f16`
+storage. The typed DWT and CWT APIs convert represented input into the
+authoritative `f64` arithmetic path and quantize once into caller-owned output
+buffers, so storage precision does not create parallel algorithm families.
+
 ## Mathematical Contract
 
 The DWT uses orthogonal analysis/synthesis filters with periodic boundaries. For
@@ -38,4 +43,7 @@ wavelet response.
 
 The crate verifies analytical Haar coefficients, Haar/Daubechies-4 inverse
 reconstruction, invalid contracts, CWT impulse localization, zero-signal
-response, Morlet finite coefficients, and Morlet zero-mean admissibility.
+response, Morlet finite coefficients, Morlet zero-mean admissibility, typed
+DWT/CWT parity for `f64`, represented-input parity for `f32` and mixed `f16`,
+inverse DWT roundtrip for `f32`, shape rejection, and profile/storage mismatch
+rejection.

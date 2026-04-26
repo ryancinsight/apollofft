@@ -525,6 +525,7 @@ dependencies = [
 name = "apollo-wavelet"
 version = "0.1.0"
 dependencies = [
+ "apollo-fft",
  "approx",
  "ndarray",
  "num-complex",

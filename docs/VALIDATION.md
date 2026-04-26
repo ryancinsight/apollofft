@@ -339,3 +339,8 @@ by unit and property tests against analytical identities and direct references.
   inverse execution for `f64`/`Complex64`, `f32`/`Complex32`, and mixed
   `f16`/`[f16; 2]`, represented-input spectrum parity, inverse roundtrip, and
   profile/storage mismatch rejection against the owner frame/window/FFT path.
+- `apollo-wavelet` typed CPU storage validation covers caller-owned DWT and CWT
+  execution for `f64`, `f32`, and mixed `f16`, represented-input coefficient
+  parity, DWT inverse roundtrip, shape rejection, and profile/storage mismatch
+  rejection against the owner orthogonal filter-bank and continuous wavelet
+  kernels.

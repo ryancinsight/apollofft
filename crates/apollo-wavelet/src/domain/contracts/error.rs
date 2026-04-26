@@ -32,4 +32,7 @@ pub enum WaveletError {
     /// Coefficient storage does not match the plan.
     #[error("coefficient storage does not match the plan")]
     CoefficientShapeMismatch,
+    /// Precision profile does not match the storage type.
+    #[error("precision profile does not match wavelet storage type")]
+    PrecisionMismatch,
 }
