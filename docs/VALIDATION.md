@@ -344,3 +344,9 @@ by unit and property tests against analytical identities and direct references.
   parity, DWT inverse roundtrip, shape rejection, and profile/storage mismatch
   rejection against the owner orthogonal filter-bank and continuous wavelet
   kernels.
+- `apollo-sft` typed CPU storage validation covers caller-owned sparse
+  forward/inverse execution for `Complex64`, `Complex32`, and mixed `[f16; 2]`,
+  represented-input sparse coefficient parity, inverse roundtrip, sparse
+  frequency/value shape rejection, and profile/storage mismatch rejection
+  against the owner dense FFT, deterministic top-K selector, and sparse inverse
+  path.

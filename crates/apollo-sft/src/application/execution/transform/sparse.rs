@@ -58,8 +58,9 @@
 use crate::domain::plan::config::SparseFftConfig;
 use crate::domain::spectrum::sparse::SparseSpectrum;
 use apollo_fft::error::{ApolloError, ApolloResult};
+use apollo_fft::{f16, PrecisionProfile};
 use ndarray::Array1;
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
@@ -264,5 +265,350 @@ impl SparseFftPlan {
             .copied()
             .zip(spectrum.values.iter().copied())
             .collect()
+    }
+
+    /// Forward sparse transform for `Complex64`, `Complex32`, or mixed `[f16; 2]` storage.
+    ///
+    /// The owner path remains the `Complex64` dense FFT plus deterministic top-K
+    /// selector. Typed storage converts represented input into owner arithmetic
+    /// and quantizes retained coefficients once into caller-owned output vectors.
+    pub fn forward_typed_into<T: SparseComplexStorage>(
+        &self,
+        signal: &[T],
+        frequencies: &mut Vec<usize>,
+        values: &mut Vec<T>,
+        profile: PrecisionProfile,
+    ) -> ApolloResult<()> {
+        T::forward_into(self, signal, frequencies, values, profile)
+    }
+
+    /// Inverse sparse transform for `Complex64`, `Complex32`, or mixed `[f16; 2]` storage.
+    pub fn inverse_typed_into<T: SparseComplexStorage>(
+        &self,
+        frequencies: &[usize],
+        values: &[T],
+        output: &mut [T],
+        profile: PrecisionProfile,
+    ) -> ApolloResult<()> {
+        T::inverse_into(self, frequencies, values, output, profile)
+    }
+}
+
+/// Complex storage accepted by typed SFT paths.
+pub trait SparseComplexStorage: Copy + Send + Sync + 'static {
+    /// Required precision profile.
+    const PROFILE: PrecisionProfile;
+
+    /// Convert storage value into owner `Complex64` arithmetic.
+    fn to_complex64(self) -> Complex64;
+
+    /// Convert owner arithmetic result back to storage.
+    fn from_complex64(value: Complex64) -> Self;
+
+    /// Execute typed forward sparse transform.
+    fn forward_into(
+        plan: &SparseFftPlan,
+        signal: &[Self],
+        frequencies: &mut Vec<usize>,
+        values: &mut Vec<Self>,
+        profile: PrecisionProfile,
+    ) -> ApolloResult<()> {
+        validate_profile(profile, Self::PROFILE)?;
+        if signal.len() != plan.len() {
+            return Err(ApolloError::ShapeMismatch {
+                expected: plan.len().to_string(),
+                actual: signal.len().to_string(),
+            });
+        }
+        let signal64: Vec<Complex64> = signal.iter().copied().map(Self::to_complex64).collect();
+        let spectrum = plan.forward(&signal64)?;
+        frequencies.clear();
+        values.clear();
+        frequencies.reserve(spectrum.frequencies.len());
+        values.reserve(spectrum.values.len());
+        frequencies.extend_from_slice(&spectrum.frequencies);
+        values.extend(spectrum.values.into_iter().map(Self::from_complex64));
+        Ok(())
+    }
+
+    /// Execute typed inverse sparse transform.
+    fn inverse_into(
+        plan: &SparseFftPlan,
+        frequencies: &[usize],
+        values: &[Self],
+        output: &mut [Self],
+        profile: PrecisionProfile,
+    ) -> ApolloResult<()> {
+        validate_profile(profile, Self::PROFILE)?;
+        if output.len() != plan.len() {
+            return Err(ApolloError::ShapeMismatch {
+                expected: plan.len().to_string(),
+                actual: output.len().to_string(),
+            });
+        }
+        if frequencies.len() != values.len() {
+            return Err(ApolloError::validation(
+                "sparse_values",
+                values.len().to_string(),
+                "frequency and value counts must match",
+            ));
+        }
+        let mut spectrum = SparseSpectrum::new(plan.len());
+        for (&frequency, &value) in frequencies.iter().zip(values.iter()) {
+            spectrum.insert(frequency, value.to_complex64())?;
+        }
+        let signal = plan.inverse(&spectrum)?;
+        for (slot, value) in output.iter_mut().zip(signal.into_iter()) {
+            *slot = Self::from_complex64(value);
+        }
+        Ok(())
+    }
+}
+
+impl SparseComplexStorage for Complex64 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::HIGH_ACCURACY_F64;
+
+    fn to_complex64(self) -> Complex64 {
+        self
+    }
+
+    fn from_complex64(value: Complex64) -> Self {
+        value
+    }
+
+    fn forward_into(
+        plan: &SparseFftPlan,
+        signal: &[Self],
+        frequencies: &mut Vec<usize>,
+        values: &mut Vec<Self>,
+        profile: PrecisionProfile,
+    ) -> ApolloResult<()> {
+        validate_profile(profile, Self::PROFILE)?;
+        let spectrum = plan.forward(signal)?;
+        frequencies.clear();
+        values.clear();
+        frequencies.extend_from_slice(&spectrum.frequencies);
+        values.extend_from_slice(&spectrum.values);
+        Ok(())
+    }
+
+    fn inverse_into(
+        plan: &SparseFftPlan,
+        frequencies: &[usize],
+        values: &[Self],
+        output: &mut [Self],
+        profile: PrecisionProfile,
+    ) -> ApolloResult<()> {
+        validate_profile(profile, Self::PROFILE)?;
+        if output.len() != plan.len() {
+            return Err(ApolloError::ShapeMismatch {
+                expected: plan.len().to_string(),
+                actual: output.len().to_string(),
+            });
+        }
+        if frequencies.len() != values.len() {
+            return Err(ApolloError::validation(
+                "sparse_values",
+                values.len().to_string(),
+                "frequency and value counts must match",
+            ));
+        }
+        let mut spectrum = SparseSpectrum::new(plan.len());
+        for (&frequency, &value) in frequencies.iter().zip(values.iter()) {
+            spectrum.insert(frequency, value)?;
+        }
+        let signal = plan.inverse(&spectrum)?;
+        output.copy_from_slice(&signal);
+        Ok(())
+    }
+}
+
+impl SparseComplexStorage for Complex32 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::LOW_PRECISION_F32;
+
+    fn to_complex64(self) -> Complex64 {
+        Complex64::new(f64::from(self.re), f64::from(self.im))
+    }
+
+    fn from_complex64(value: Complex64) -> Self {
+        Complex32::new(value.re as f32, value.im as f32)
+    }
+}
+
+impl SparseComplexStorage for [f16; 2] {
+    const PROFILE: PrecisionProfile = PrecisionProfile::MIXED_PRECISION_F16_F32;
+
+    fn to_complex64(self) -> Complex64 {
+        Complex64::new(f64::from(self[0].to_f32()), f64::from(self[1].to_f32()))
+    }
+
+    fn from_complex64(value: Complex64) -> Self {
+        [
+            f16::from_f32(value.re as f32),
+            f16::from_f32(value.im as f32),
+        ]
+    }
+}
+
+fn validate_profile(actual: PrecisionProfile, expected: PrecisionProfile) -> ApolloResult<()> {
+    if actual.storage == expected.storage && actual.compute == expected.compute {
+        Ok(())
+    } else {
+        Err(ApolloError::validation(
+            "precision_profile",
+            format!("{actual:?}"),
+            format!(
+                "storage {:?} with compute {:?}",
+                expected.storage, expected.compute
+            ),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_abs_diff_eq;
+
+    fn exactly_sparse_signal() -> Vec<Complex64> {
+        let plan = SparseFftPlan::new(8, 2).expect("plan");
+        let mut spectrum = SparseSpectrum::new(8);
+        spectrum
+            .insert(1, Complex64::new(3.0, -1.0))
+            .expect("insert");
+        spectrum
+            .insert(5, Complex64::new(-0.5, 2.0))
+            .expect("insert");
+        plan.inverse(&spectrum).expect("inverse")
+    }
+
+    #[test]
+    fn typed_paths_support_complex64_complex32_and_mixed_f16_storage() {
+        let plan = SparseFftPlan::new(8, 2).expect("plan");
+        let signal64 = exactly_sparse_signal();
+        let expected = plan.forward(&signal64).expect("forward");
+
+        let mut frequencies64 = Vec::new();
+        let mut values64 = Vec::new();
+        plan.forward_typed_into(
+            &signal64,
+            &mut frequencies64,
+            &mut values64,
+            PrecisionProfile::HIGH_ACCURACY_F64,
+        )
+        .expect("typed complex64 forward");
+        assert_eq!(frequencies64, expected.frequencies);
+        for (actual, expected) in values64.iter().zip(expected.values.iter()) {
+            assert_abs_diff_eq!(actual.re, expected.re, epsilon = 1.0e-12);
+            assert_abs_diff_eq!(actual.im, expected.im, epsilon = 1.0e-12);
+        }
+
+        let signal32: Vec<Complex32> = signal64
+            .iter()
+            .map(|value| Complex32::new(value.re as f32, value.im as f32))
+            .collect();
+        let represented32: Vec<Complex64> = signal32
+            .iter()
+            .copied()
+            .map(Complex32::to_complex64)
+            .collect();
+        let expected32 = plan
+            .forward(&represented32)
+            .expect("represented f32 forward");
+        let mut frequencies32 = Vec::new();
+        let mut values32 = Vec::new();
+        plan.forward_typed_into(
+            &signal32,
+            &mut frequencies32,
+            &mut values32,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("typed complex32 forward");
+        assert_eq!(frequencies32, expected32.frequencies);
+        for (actual, expected) in values32.iter().zip(expected32.values.iter()) {
+            assert!((f64::from(actual.re) - expected.re).abs() < 1.0e-5);
+            assert!((f64::from(actual.im) - expected.im).abs() < 1.0e-5);
+        }
+
+        let mut recovered32 = vec![Complex32::new(0.0, 0.0); plan.len()];
+        plan.inverse_typed_into(
+            &frequencies32,
+            &values32,
+            &mut recovered32,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("typed complex32 inverse");
+        for (actual, expected) in recovered32.iter().zip(signal32.iter()) {
+            assert!((actual.re - expected.re).abs() < 1.0e-5);
+            assert!((actual.im - expected.im).abs() < 1.0e-5);
+        }
+
+        let signal16: Vec<[f16; 2]> = signal64
+            .iter()
+            .map(|value| {
+                [
+                    f16::from_f32(value.re as f32),
+                    f16::from_f32(value.im as f32),
+                ]
+            })
+            .collect();
+        let represented16: Vec<Complex64> = signal16
+            .iter()
+            .copied()
+            .map(<[f16; 2]>::to_complex64)
+            .collect();
+        let expected16 = plan
+            .forward(&represented16)
+            .expect("represented f16 forward");
+        let mut frequencies16 = Vec::new();
+        let mut values16 = Vec::new();
+        plan.forward_typed_into(
+            &signal16,
+            &mut frequencies16,
+            &mut values16,
+            PrecisionProfile::MIXED_PRECISION_F16_F32,
+        )
+        .expect("typed f16 forward");
+        assert_eq!(frequencies16, expected16.frequencies);
+        for (actual, expected) in values16.iter().zip(expected16.values.iter()) {
+            let re_bound = expected.re.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
+            let im_bound = expected.im.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
+            assert!((f64::from(actual[0].to_f32()) - expected.re).abs() <= re_bound);
+            assert!((f64::from(actual[1].to_f32()) - expected.im).abs() <= im_bound);
+        }
+    }
+
+    #[test]
+    fn typed_paths_reject_profile_and_shape_mismatch() {
+        let plan = SparseFftPlan::new(4, 1).expect("plan");
+        let signal = vec![Complex32::new(1.0, 0.0); 4];
+        let mut frequencies = Vec::new();
+        let mut values = Vec::new();
+        let err = plan
+            .forward_typed_into(
+                &signal,
+                &mut frequencies,
+                &mut values,
+                PrecisionProfile::HIGH_ACCURACY_F64,
+            )
+            .expect_err("profile mismatch");
+        assert!(matches!(
+            err,
+            ApolloError::Validation { field, .. } if field == "precision_profile"
+        ));
+
+        let mut output = vec![Complex32::new(0.0, 0.0); 4];
+        let err = plan
+            .inverse_typed_into(
+                &[0, 1],
+                &[Complex32::new(1.0, 0.0)],
+                &mut output,
+                PrecisionProfile::LOW_PRECISION_F32,
+            )
+            .expect_err("sparse shape mismatch");
+        assert!(matches!(
+            err,
+            ApolloError::Validation { field, .. } if field == "sparse_values"
+        ));
     }
 }

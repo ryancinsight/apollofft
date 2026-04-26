@@ -16,5 +16,5 @@ pub mod infrastructure;
 #[cfg(test)]
 mod verification;
 
-pub use application::execution::transform::sparse::SparseFftPlan;
+pub use application::execution::transform::sparse::{SparseComplexStorage, SparseFftPlan};
 pub use domain::spectrum::sparse::SparseSpectrum;
