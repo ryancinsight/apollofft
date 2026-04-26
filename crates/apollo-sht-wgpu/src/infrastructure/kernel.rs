@@ -226,10 +226,11 @@ impl ShtGpuKernel {
             contents: bytemuck::cast_slice(&input_data),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
-        let basis_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let basis_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("apollo-sht-wgpu basis"),
-            contents: &vec![0_u8; mode_count * sample_count * std::mem::size_of::<ComplexPod>()],
+            size: (mode_count * sample_count * std::mem::size_of::<ComplexPod>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
         let grid_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("apollo-sht-wgpu grid"),

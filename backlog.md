@@ -64,3 +64,4 @@
 - [x] Audit and document that `realfft` is not present in the workspace dependency graph; `apollo-validation/external-references` gates only optional `rustfft`.
 - [x] Add published-reference validation fixtures for DFT, DHT, DCT-II, and DST-II under `apollo-validation::external.published_references`.
 - [x] Audit remaining transform crates against published references and add cross-crate validation fixtures where useful.
+- [x] Optimize `apollo-sht-wgpu` basis storage by removing host-side zero-vector initialization before GPU basis generation.

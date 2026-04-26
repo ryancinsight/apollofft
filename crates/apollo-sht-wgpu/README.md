@@ -24,6 +24,10 @@ grid samples, evaluates associated Legendre recurrence and spherical harmonic
 basis values in a compute pass, then consumes the generated basis buffer in the
 matrix-reduction pass.
 
+The basis buffer is allocated directly as GPU storage and is written by the
+basis-generation pass. It is not initialized through a host-side zero vector, so
+execution avoids an O(mode_count * sample_count) CPU allocation and upload.
+
 ## Verification
 
 Tests cover capability truthfulness, descriptor metadata preservation, invalid

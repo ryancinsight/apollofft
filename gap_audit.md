@@ -41,6 +41,7 @@ All items below are implemented, tested, and verified in completed sprints.
 - Implemented `FftPlan1D` zero-allocation `forward_complex_slice_inplace` and `inverse_complex_slice_inplace` methods to execute dense kernels directly from caller slices.
 - Eliminated O(M) nested `Array1` heap allocations in STFT `forward_with_window_inner` and `inverse_into` by using `FftPlan1D` slice execution and flattened arrays.
 - Eliminated dynamic `Array1::from_shape_vec` conversions in NUFFT 1D Type-1 and Type-2 evaluation kernels utilizing `FftPlan1D` slice execution.
+- Removed host-side zero-vector initialization for `apollo-sht-wgpu` generated basis storage; GPU basis generation now writes directly into device-allocated storage before reduction.
 
 ### New Transform Crates
 

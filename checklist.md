@@ -86,3 +86,4 @@
 - [x] Add NUFFT uniform-grid DFT equivalence test (type-1 at x_j=j*L/N equals DFT(c)).
 - [x] Replace existence-only Morlet CWT test with value-semantic resonance test.
 - [x] Add DHT–DFT relationship cross-check (H[k] = Re(F[k]) - Im(F[k])).
+- [x] Remove host-side zero upload for `apollo-sht-wgpu` generated basis storage.

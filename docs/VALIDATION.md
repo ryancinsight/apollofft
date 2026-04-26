@@ -214,10 +214,8 @@ by unit and property tests against analytical identities and direct references.
   DC-corrected real Morlet mother wavelet.
 - WGPU backend validation is split by transform domain: `apollo-fft-wgpu`
   owns dense FFT device and shader checks, while `apollo-nufft-wgpu` now
-  validates exact direct Type-1 and Type-2 execution for 1D and 3D against
-  `apollo-nufft` exact references. Fast gridding support remains unsupported
-  until GPU spreading/interpolation, oversampled FFT dispatch, and deconvolution
-  are implemented there.
+  validates exact direct Type-1 and Type-2 execution plus fast Kaiser-Bessel
+  gridding for 1D and 3D against `apollo-nufft` exact and gridded references.
 - `apollo-fwht-wgpu` now validates real 1D forward and inverse FWHT execution
   against the owning CPU crate and reports support only for that implemented
   `f32` kernel surface.
@@ -255,6 +253,8 @@ by unit and property tests against analytical identities and direct references.
   against the owning CPU crate and reports support for direct GPU matrix sums.
   The WGPU path now receives owner-derived quadrature samples and generates the
   associated-Legendre/spherical-harmonic basis buffer on GPU before reduction.
+  The generated basis storage is allocated on device without a host-side zero
+  upload because the basis-generation pass writes every entry before use.
 - `apollo-stft-wgpu` now validates forward Hann-windowed STFT execution
   against the owning CPU crate and reports forward-only support for the
   implemented `f32` signal / complex-spectrum surface.
