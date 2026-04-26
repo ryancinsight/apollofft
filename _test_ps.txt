@@ -1,3 +1,0 @@
-﻿struct Foo {
-    label: Some("hello world"),
-}

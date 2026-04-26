@@ -27,3 +27,6 @@ proptest = "1.6"
 [[bench]]
 name = "kernel_strategy"
 harness = false
+
+[lints]
+workspace = true

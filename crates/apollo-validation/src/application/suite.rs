@@ -18,8 +18,8 @@ use apollo_dctdst::{DctDstPlan, RealTransformKind};
 use apollo_dht::DhtPlan;
 use apollo_fft::f16;
 use apollo_fft::{
-    fft_1d_array, fft_1d_array_typed, fft_3d_array, ifft_1d_array, ifft_3d_array,
-    ifft_3d_array_typed, PrecisionProfile, Shape3D,
+    fft_1d_array, fft_1d_array_typed, fft_3d_array, ifft_1d_array, ifft_1d_array_typed,
+    ifft_3d_array, ifft_3d_array_typed, PrecisionProfile, Shape3D,
 };
 use apollo_nufft::{
     nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type1_3d_fast, nufft_type2_1d,
@@ -456,7 +456,10 @@ pub fn run_benchmark_suite() -> SuiteResult<BenchmarkReport> {
             PrecisionBenchmarkReport {
                 profile: "high_accuracy".to_string(),
                 forward_ms: Some(apollo_fft1_ms),
-                inverse_ms: None,
+                inverse_ms: Some(elapsed_ms(|| {
+                    let spectrum = fft_1d_array(&signal);
+                    let _ = ifft_1d_array(&spectrum);
+                })),
                 note: None,
             },
             PrecisionBenchmarkReport {
@@ -465,7 +468,29 @@ pub fn run_benchmark_suite() -> SuiteResult<BenchmarkReport> {
                     let input = signal.mapv(|value| value as f32);
                     let _ = fft_1d_array_typed(&input, PrecisionProfile::LOW_PRECISION_F32);
                 })),
-                inverse_ms: None,
+                inverse_ms: Some(elapsed_ms(|| {
+                    let input = signal.mapv(|value| value as f32);
+                    let spectrum = fft_1d_array_typed(&input, PrecisionProfile::LOW_PRECISION_F32);
+                    let _ =
+                        ifft_1d_array_typed::<f32>(&spectrum, PrecisionProfile::LOW_PRECISION_F32);
+                })),
+                note: None,
+            },
+            PrecisionBenchmarkReport {
+                profile: "mixed_precision".to_string(),
+                forward_ms: Some(elapsed_ms(|| {
+                    let input = signal.mapv(|value| f16::from_f32(value as f32));
+                    let _ = fft_1d_array_typed(&input, PrecisionProfile::MIXED_PRECISION_F16_F32);
+                })),
+                inverse_ms: Some(elapsed_ms(|| {
+                    let input = signal.mapv(|value| f16::from_f32(value as f32));
+                    let spectrum =
+                        fft_1d_array_typed(&input, PrecisionProfile::MIXED_PRECISION_F16_F32);
+                    let _ = ifft_1d_array_typed::<f16>(
+                        &spectrum,
+                        PrecisionProfile::MIXED_PRECISION_F16_F32,
+                    );
+                })),
                 note: None,
             },
         ],

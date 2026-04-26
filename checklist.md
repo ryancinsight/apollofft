@@ -90,3 +90,7 @@
 - [x] Fix GPU fast type-2 1D NUFFT normalization: pack deconv values scaled by `oversampled_len` in `execute_fast_type2_1d` to compensate for `encode_inverse_split` normalized IFFT (÷m), matching the CPU `type2_into` ×m rescaling without an extra host vector.
 - [x] Remove host-side zero uploads for inactive `apollo-nufft-wgpu` fast-path bind-group placeholders.
 - [x] Remove full-field lane-copy allocation from contiguous 2D row and 3D innermost FFT axis passes.
+- [x] Add value-semantic coverage for caller-owned 3D typed FFT execution across `f64`, `f32`, and mixed `f16` profiles.
+- [x] Add validation benchmark timing coverage for forward and inverse `f64`, `f32`, and mixed `f16` FFT profiles.
+- [x] Add value-semantic DHT and DCT/DST typed storage coverage for `f64`, `f32`, mixed `f16`, and profile mismatch rejection.
+- [x] Add value-semantic FWHT typed storage coverage for `f64`, `f32`, mixed `f16`, and profile mismatch rejection.

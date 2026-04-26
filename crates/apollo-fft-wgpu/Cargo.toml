@@ -14,3 +14,6 @@ ndarray = { version = "0.16", features = ["rayon"] }
 num-complex = "0.4"
 pollster = "0.4"
 wgpu = { version = "26.0", features = ["wgsl"] }
+
+[lints]
+workspace = true

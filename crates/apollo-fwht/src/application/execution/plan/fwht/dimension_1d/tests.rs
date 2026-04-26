@@ -1,0 +1,234 @@
+use super::*;
+use apollo_fft::f16;
+use approx::assert_relative_eq;
+use proptest::prelude::*;
+
+#[test]
+fn two_point_transform_matches_reference() {
+    let plan = FwhtPlan::new(2).expect("valid plan");
+    let input = Array1::from_vec(vec![1.0, 3.0]);
+    let output = plan.forward(&input).expect("forward");
+    assert_relative_eq!(output[0], 4.0, epsilon = 1.0e-12);
+    assert_relative_eq!(output[1], -2.0, epsilon = 1.0e-12);
+}
+
+#[test]
+fn roundtrip_recovers_input() {
+    let plan = FwhtPlan::new(8).expect("valid plan");
+    let input = Array1::from_vec(vec![1.0, -2.0, 3.5, 0.25, -1.5, 2.0, 0.0, 4.0]);
+    let fwd = plan.forward(&input).expect("forward");
+    let recovered = plan.inverse(&fwd).expect("inverse");
+    for (actual, expected) in recovered.iter().zip(input.iter()) {
+        assert_relative_eq!(actual, expected, epsilon = 1.0e-12);
+    }
+}
+
+#[test]
+fn caller_owned_real_paths_match_allocating_paths() {
+    let plan = FwhtPlan::new(8).expect("valid plan");
+    let input = Array1::from_vec(vec![1.0, -2.0, 3.5, 0.25, -1.5, 2.0, 0.0, 4.0]);
+    let expected_forward = plan.forward(&input).expect("forward");
+    let mut forward = Array1::zeros(8);
+    plan.forward_into(&input, &mut forward)
+        .expect("forward_into");
+    assert_eq!(forward, expected_forward);
+
+    let expected_inverse = plan.inverse(&expected_forward).expect("inverse");
+    let mut inverse = Array1::zeros(8);
+    plan.inverse_into(&forward, &mut inverse)
+        .expect("inverse_into");
+    for (actual, expected) in inverse.iter().zip(expected_inverse.iter()) {
+        assert_relative_eq!(actual, expected, epsilon = 1.0e-12);
+    }
+}
+
+#[test]
+fn typed_paths_support_f64_f32_and_mixed_f16_storage() {
+    let plan = FwhtPlan::new(8).expect("valid plan");
+    let signal64 = Array1::from_vec(vec![1.0_f64, -2.0, 0.5, 2.25, -4.0, 1.5, 0.0, -0.75]);
+    let expected = plan.forward(&signal64).expect("forward");
+
+    let mut out64 = Array1::zeros(8);
+    plan.forward_typed_into(&signal64, &mut out64, PrecisionProfile::HIGH_ACCURACY_F64)
+        .expect("typed f64 forward");
+    for (actual, expected) in out64.iter().zip(expected.iter()) {
+        assert_relative_eq!(actual, expected, epsilon = 1.0e-12);
+    }
+
+    let signal32 = signal64.mapv(|value| value as f32);
+    let mut out32 = Array1::zeros(8);
+    plan.forward_typed_into(&signal32, &mut out32, PrecisionProfile::LOW_PRECISION_F32)
+        .expect("typed f32 forward");
+    for (actual, expected) in out32.iter().zip(expected.iter()) {
+        assert!((f64::from(*actual) - *expected).abs() < 1.0e-5);
+    }
+
+    let signal16 = signal64.mapv(|value| f16::from_f32(value as f32));
+    let mut out16 = Array1::from_elem(8, f16::from_f32(0.0));
+    plan.forward_typed_into(
+        &signal16,
+        &mut out16,
+        PrecisionProfile::MIXED_PRECISION_F16_F32,
+    )
+    .expect("typed mixed f16 forward");
+    for (actual, expected) in out16.iter().zip(expected.iter()) {
+        let quantization_bound = expected.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
+        assert!((f64::from(actual.to_f32()) - *expected).abs() <= quantization_bound);
+    }
+
+    let mut recovered32 = Array1::zeros(8);
+    plan.inverse_typed_into(
+        &out32,
+        &mut recovered32,
+        PrecisionProfile::LOW_PRECISION_F32,
+    )
+    .expect("typed f32 inverse");
+    for (actual, expected) in recovered32.iter().zip(signal32.iter()) {
+        assert!((f64::from(*actual) - f64::from(*expected)).abs() < 1.0e-5);
+    }
+
+    let mut recovered16 = Array1::from_elem(8, f16::from_f32(0.0));
+    plan.inverse_typed_into(
+        &out16,
+        &mut recovered16,
+        PrecisionProfile::MIXED_PRECISION_F16_F32,
+    )
+    .expect("typed mixed f16 inverse");
+    for (actual, expected) in recovered16.iter().zip(signal64.iter()) {
+        let quantization_bound = expected.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
+        assert!((f64::from(actual.to_f32()) - *expected).abs() <= quantization_bound);
+    }
+}
+
+#[test]
+fn typed_path_rejects_profile_storage_mismatch() {
+    let plan = FwhtPlan::new(4).expect("valid plan");
+    let signal = Array1::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0]);
+    let mut output = Array1::zeros(4);
+    assert!(matches!(
+        plan.forward_typed_into(&signal, &mut output, PrecisionProfile::HIGH_ACCURACY_F64),
+        Err(FwhtError::PrecisionMismatch)
+    ));
+}
+
+#[test]
+fn complex_roundtrip_recovers_input() {
+    let plan = FwhtPlan::new(4).expect("valid plan");
+    let input = Array1::from_vec(vec![
+        Complex64::new(1.0, -1.0),
+        Complex64::new(2.0, 0.5),
+        Complex64::new(-0.75, 0.25),
+        Complex64::new(0.125, -0.625),
+    ]);
+    let fwd = plan.forward_complex(&input).expect("forward_complex");
+    let recovered = plan.inverse_complex(&fwd).expect("inverse_complex");
+    for (actual, expected) in recovered.iter().zip(input.iter()) {
+        assert_relative_eq!(actual.re, expected.re, epsilon = 1.0e-12);
+        assert_relative_eq!(actual.im, expected.im, epsilon = 1.0e-12);
+    }
+}
+
+#[test]
+fn caller_owned_complex_paths_match_allocating_paths() {
+    let plan = FwhtPlan::new(4).expect("valid plan");
+    let input = Array1::from_vec(vec![
+        Complex64::new(1.0, -1.0),
+        Complex64::new(2.0, 0.5),
+        Complex64::new(-0.75, 0.25),
+        Complex64::new(0.125, -0.625),
+    ]);
+    let expected_forward = plan.forward_complex(&input).expect("forward_complex");
+    let mut forward = Array1::from_elem(4, Complex64::new(0.0, 0.0));
+    plan.forward_complex_into(&input, &mut forward)
+        .expect("forward_complex_into");
+    assert_eq!(forward, expected_forward);
+
+    let expected_inverse = plan
+        .inverse_complex(&expected_forward)
+        .expect("inverse_complex");
+    let mut inverse = Array1::from_elem(4, Complex64::new(0.0, 0.0));
+    plan.inverse_complex_into(&forward, &mut inverse)
+        .expect("inverse_complex_into");
+    for (actual, expected) in inverse.iter().zip(expected_inverse.iter()) {
+        assert_relative_eq!(actual.re, expected.re, epsilon = 1.0e-12);
+        assert_relative_eq!(actual.im, expected.im, epsilon = 1.0e-12);
+    }
+}
+
+#[test]
+fn rejects_invalid_lengths() {
+    assert!(matches!(FwhtPlan::new(0), Err(FwhtError::EmptyInput)));
+    assert!(matches!(FwhtPlan::new(3), Err(FwhtError::NonPowerOfTwo)));
+}
+
+#[test]
+fn length_mismatch_returns_error() {
+    let plan = FwhtPlan::new(4).expect("valid plan");
+    let wrong = Array1::from_vec(vec![1.0, 2.0, 3.0]);
+    assert!(matches!(
+        plan.forward(&wrong),
+        Err(FwhtError::LengthMismatch)
+    ));
+    assert!(matches!(
+        plan.inverse(&wrong),
+        Err(FwhtError::LengthMismatch)
+    ));
+    let wrong_c = Array1::from_vec(vec![Complex64::new(1.0, 0.0); 3]);
+    assert!(matches!(
+        plan.forward_complex(&wrong_c),
+        Err(FwhtError::LengthMismatch)
+    ));
+    assert!(matches!(
+        plan.inverse_complex(&wrong_c),
+        Err(FwhtError::LengthMismatch)
+    ));
+    let mut output_c = Array1::from_vec(vec![Complex64::new(0.0, 0.0); 4]);
+    assert!(matches!(
+        plan.forward_complex_into(&wrong_c, &mut output_c),
+        Err(FwhtError::LengthMismatch)
+    ));
+    assert!(matches!(
+        plan.inverse_complex_into(&wrong_c, &mut output_c),
+        Err(FwhtError::LengthMismatch)
+    ));
+}
+
+#[test]
+fn single_element_is_identity() {
+    let plan = FwhtPlan::new(1).expect("valid plan");
+    let input = Array1::from_vec(vec![42.0f64]);
+    let fwd = plan.forward(&input).expect("forward");
+    assert_relative_eq!(fwd[0], 42.0, epsilon = 1.0e-12);
+    let inv = plan.inverse(&fwd).expect("inverse");
+    assert_relative_eq!(inv[0], 42.0, epsilon = 1.0e-12);
+}
+
+#[test]
+fn involution_property() {
+    let plan = FwhtPlan::new(8).expect("valid plan");
+    let input = Array1::from_vec(vec![1.0, -2.0, 3.5, 0.25, -1.5, 2.0, 0.0, 4.0]);
+    let fwd1 = plan.forward(&input).expect("fwd1");
+    let fwd2 = plan.forward(&fwd1).expect("fwd2");
+    for (actual, expected) in fwd2.iter().zip(input.iter()) {
+        assert_relative_eq!(*actual, *expected * 8.0, epsilon = 1.0e-10);
+    }
+}
+
+proptest::proptest! {
+    #[test]
+    fn roundtrip_holds_for_random_power_of_two_lengths(
+        power in 1usize..12,
+        samples in prop::collection::vec(-10.0f64..10.0f64, 1usize..4096)
+    ) {
+        let n = 1usize << power;
+        let input = Array1::from_vec(
+            samples.into_iter().cycle().take(n).collect::<Vec<_>>()
+        );
+        let plan = FwhtPlan::new(n).expect("valid plan");
+        let fwd = plan.forward(&input).expect("forward");
+        let recovered = plan.inverse(&fwd).expect("inverse");
+        for (actual, expected) in recovered.iter().zip(input.iter()) {
+            prop_assert!((actual - expected).abs() < 1.0e-10);
+        }
+    }
+}

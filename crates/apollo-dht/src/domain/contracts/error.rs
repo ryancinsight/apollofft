@@ -14,4 +14,7 @@ pub enum DhtError {
     /// Input length does not match the plan.
     #[error("input length does not match the plan")]
     LengthMismatch,
+    /// Precision profile does not match the selected storage type.
+    #[error("precision profile does not match the selected DHT storage type")]
+    PrecisionMismatch,
 }

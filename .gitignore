@@ -24,3 +24,16 @@
 /external/results/*
 !/external/results/.gitkeep
 
+# Scratch and temporary development artifacts
+/validation_output*.json
+/apollo_status.txt
+/_*.py
+/_*.txt
+/_*.rs
+/test_*.txt
+/test_out.txt
+/test_rust.rs
+/gen_*.py
+/tmp_*.py
+/write_*.py
+/scratch/

@@ -1,7 +1,12 @@
+//! Criterion benchmarks for Apollo FFT kernel strategies (direct, radix-2, Bluestein).
+
+#![allow(missing_docs)]
+
 use apollo_fft::application::execution::kernel::{bluestein, direct, radix2};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
 
+/// Generate a deterministic complex sinusoidal test signal of the given length.
 fn signal(len: usize) -> Vec<Complex64> {
     (0..len)
         .map(|index| {
@@ -11,6 +16,7 @@ fn signal(len: usize) -> Vec<Complex64> {
         .collect()
 }
 
+/// Benchmark direct-DFT, radix-2, and Bluestein kernel strategies across power-of-two and non-power-of-two lengths.
 fn bench_fft_kernels(c: &mut Criterion) {
     let mut group = c.benchmark_group("fft_kernel_strategy");
 

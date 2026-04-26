@@ -44,6 +44,10 @@ All items below are implemented, tested, and verified in completed sprints.
 - Removed host-side zero-vector initialization for `apollo-sht-wgpu` generated basis storage; GPU basis generation now writes directly into device-allocated storage before reduction.
 - Removed host-side zero-vector uploads for inactive `apollo-nufft-wgpu` fast-path placeholder bindings; shared layouts now bind device-only storage where shader entry points do not read that binding.
 - Removed full-field `Vec<Vec<Complex>>` lane copies for contiguous `apollo-fft` 2D row passes and 3D innermost-axis passes; Rayon now transforms backing-slice chunks in place, preserving parallelism while reducing peak pass memory and scatter traffic.
+- Added caller-owned 3D typed FFT forward/inverse paths for `f64`, `f32`, and mixed `f16` storage profiles, allowing repeated memory-bound 3D workloads to reuse output and scratch spectra.
+- Extended validation precision benchmarks so forward and inverse timing reports cover high-accuracy `f64`, low-precision `f32`, and mixed `f16` storage profiles.
+- Added typed caller-owned DHT and DCT/DST execution paths for `f64`, `f32`, and mixed `f16` storage profiles without duplicating transform kernels.
+- Added typed caller-owned FWHT execution paths for `f64`, `f32`, and mixed `f16` storage profiles without duplicating the Hadamard butterfly schedule.
 
 ### New Transform Crates
 

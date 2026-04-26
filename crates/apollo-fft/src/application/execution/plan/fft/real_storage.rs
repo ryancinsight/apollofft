@@ -30,6 +30,15 @@ pub trait RealFftData: Clone + Send + Sync + 'static {
     fn forward_3d(plan: &FftPlan3D, input: &Array3<Self>) -> Array3<Self::Spectrum>;
     /// Inverse 3D transform dispatch.
     fn inverse_3d(plan: &FftPlan3D, input: &Array3<Self::Spectrum>) -> Array3<Self>;
+    /// Forward 3D transform into caller-owned spectrum storage.
+    fn forward_3d_into(plan: &FftPlan3D, input: &Array3<Self>, output: &mut Array3<Self::Spectrum>);
+    /// Inverse 3D transform into caller-owned real storage and scratch spectrum.
+    fn inverse_3d_into(
+        plan: &FftPlan3D,
+        input: &Array3<Self::Spectrum>,
+        output: &mut Array3<Self>,
+        scratch: &mut Array3<Self::Spectrum>,
+    );
 }
 
 impl RealFftData for f64 {
@@ -57,6 +66,23 @@ impl RealFftData for f64 {
 
     fn inverse_3d(plan: &FftPlan3D, input: &Array3<Self::Spectrum>) -> Array3<Self> {
         plan.inverse(input)
+    }
+
+    fn forward_3d_into(
+        plan: &FftPlan3D,
+        input: &Array3<Self>,
+        output: &mut Array3<Self::Spectrum>,
+    ) {
+        plan.forward_real_to_complex_into(input, output);
+    }
+
+    fn inverse_3d_into(
+        plan: &FftPlan3D,
+        input: &Array3<Self::Spectrum>,
+        output: &mut Array3<Self>,
+        scratch: &mut Array3<Self::Spectrum>,
+    ) {
+        plan.inverse_complex_to_real_into(input, output, scratch);
     }
 }
 
@@ -86,6 +112,23 @@ impl RealFftData for f32 {
     fn inverse_3d(plan: &FftPlan3D, input: &Array3<Self::Spectrum>) -> Array3<Self> {
         plan.inverse_f32(input)
     }
+
+    fn forward_3d_into(
+        plan: &FftPlan3D,
+        input: &Array3<Self>,
+        output: &mut Array3<Self::Spectrum>,
+    ) {
+        plan.forward_f32_into(input, output);
+    }
+
+    fn inverse_3d_into(
+        plan: &FftPlan3D,
+        input: &Array3<Self::Spectrum>,
+        output: &mut Array3<Self>,
+        scratch: &mut Array3<Self::Spectrum>,
+    ) {
+        plan.inverse_f32_into(input, output, scratch);
+    }
 }
 
 impl RealFftData for f16 {
@@ -113,5 +156,22 @@ impl RealFftData for f16 {
 
     fn inverse_3d(plan: &FftPlan3D, input: &Array3<Self::Spectrum>) -> Array3<Self> {
         plan.inverse_f16(input)
+    }
+
+    fn forward_3d_into(
+        plan: &FftPlan3D,
+        input: &Array3<Self>,
+        output: &mut Array3<Self::Spectrum>,
+    ) {
+        plan.forward_f16_into(input, output);
+    }
+
+    fn inverse_3d_into(
+        plan: &FftPlan3D,
+        input: &Array3<Self::Spectrum>,
+        output: &mut Array3<Self>,
+        scratch: &mut Array3<Self::Spectrum>,
+    ) {
+        plan.inverse_f16_into(input, output, scratch);
     }
 }

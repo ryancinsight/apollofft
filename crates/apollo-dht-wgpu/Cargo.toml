@@ -16,3 +16,6 @@ wgpu = { version = "26.0", features = ["wgsl"] }
 
 [dev-dependencies]
 ndarray = "0.16"
+
+[lints]
+workspace = true

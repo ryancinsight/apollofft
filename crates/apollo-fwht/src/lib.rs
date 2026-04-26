@@ -15,5 +15,6 @@ pub mod domain;
 pub mod infrastructure;
 
 pub use application::execution::plan::fwht::dimension_1d::FwhtPlan;
+pub use application::execution::plan::fwht::storage::FwhtStorage;
 pub use domain::contracts::error::FwhtError;
 pub use infrastructure::transport::cpu::{fwht, ifwht};

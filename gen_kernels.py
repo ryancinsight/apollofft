@@ -1,1 +1,0 @@
-﻿import pathlib; print("ok")

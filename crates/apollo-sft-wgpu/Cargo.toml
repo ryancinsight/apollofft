@@ -17,3 +17,6 @@ wgpu = { version = "26.0", features = ["wgsl"] }
 
 [dev-dependencies]
 apollo-fft = { path = "../apollo-fft" }
+
+[lints]
+workspace = true

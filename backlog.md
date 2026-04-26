@@ -1,6 +1,18 @@
 # Apollo Backlog
 
-## Closed in this sprint
+## Closed in this sprint (Closure phase)
+- [x] Fix `[workspace.lints.clippy]` priority: assign `all` and `pedantic` groups `priority = -1` so individual overrides at default priority 0 take precedence; eliminates 22 clippy compilation failures across all transform crates.
+- [x] Propagate workspace lints to all 39 crates via `[lints] workspace = true` in every `Cargo.toml`; add comprehensive pedantic suppressions for DSP-appropriate patterns (cast truncation/precision/loss, needless_range_loop, too_many_arguments, manual_is_multiple_of, manual_div_ceil, etc.).
+- [x] Fix `apollo-fft` doc-lint warnings: replace `- ` list markers with `* ` in `direct.rs` module doc; replace `for k in 0..n { output[k] = }` with `iter_mut().enumerate()` in `dft_forward` and `dft_inverse`.
+- [x] Replace `CpuBackend::default()` with `CpuBackend` (unit-struct literal) in `apollo-fft` transport tests to satisfy `clippy::default_constructed_unit_structs`.
+- [x] Add `#![allow(missing_docs)]` and doc comments to `apollo-fft/benches/kernel_strategy.rs`.
+- [x] Add `fast_type2_1d_normalization_invariance_when_device_exists` test to `apollo-nufft-wgpu` verification: single non-zero coefficient at k=0, verifies GPU output matches CPU gridded reference and that output is constant across positions (detects 1/m rescaling regressions).
+- [x] Add normalization convention documentation to `nufft_fast_1d.wgsl` (Type-1 unnormalized forward FFT, Type-2 host pre-scales deconv by m to compensate normalized IFFT), `nufft_fast_3d.wgsl` (3D Type-2 uses normalized IFFT directly, no pre-scaling needed), and `GpuFft3d::encode_inverse_split` doc comment (caveat for unnormalized-IDFT consumers).
+- [x] Remove 22 scratch/temporary files from repository root (`_gen.py`, `_test*.rs`, `tmp_patch_ntt.py`, `validation_output*.json`, `apollo_status.txt`, etc.) and `scratch/` directory.
+- [x] Add scratch-file gitignore patterns to `.gitignore` (validation output JSON, temporary Python/Rust scripts, status files, scratch directory).
+- [x] Verify zero clippy errors, zero clippy warnings, zero test failures across full workspace.
+
+## Closed in previous sprints
 - [x] Register every `crates/apollo-*` crate in the root workspace.
 - [x] Replace incomplete `apollo-validation` orchestration with computed CPU, GPU-surface, NUFFT, external-reference, benchmark, and environment reports.
 - [x] Add real crate roots for `apollo-frft`, `apollo-gft`, and `apollo-stft`.
@@ -68,3 +80,7 @@
 - [x] Fix GPU fast type-2 1D NUFFT normalization: `execute_fast_type2_1d` packs deconv values scaled by `oversampled_len` to compensate for `encode_inverse_split` normalized IFFT (÷m), matching the CPU `type2_into` ×m rescaling without an extra host vector.
 - [x] Optimize `apollo-nufft-wgpu` fast placeholder bindings by replacing host-side zero-vector uploads with device-only storage buffers.
 - [x] Optimize `apollo-fft` 2D/3D contiguous axis passes by transforming backing-slice chunks in place instead of allocating full-field lane-copy vectors.
+- [x] Add `apollo-fft` caller-owned 3D typed forward/inverse paths for `f64`, `f32`, and mixed `f16` storage profiles.
+- [x] Extend `apollo-validation` precision benchmarks to report forward and inverse timings for `f64`, `f32`, and mixed `f16` FFT profiles.
+- [x] Add typed caller-owned DHT and DCT/DST paths for `f64`, `f32`, and mixed `f16` storage profiles.
+- [x] Add typed caller-owned FWHT paths for `f64`, `f32`, and mixed `f16` storage profiles with profile mismatch rejection.

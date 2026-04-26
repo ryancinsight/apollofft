@@ -153,6 +153,21 @@ pub fn fft_3d_array_typed<T: RealFftData>(
         .forward_typed(field)
 }
 
+/// Forward 3D FFT of a real array into caller-owned typed spectrum storage.
+pub fn fft_3d_array_typed_into<T: RealFftData>(
+    field: &Array3<T>,
+    out: &mut Array3<T::Spectrum>,
+    profile: PrecisionProfile,
+) {
+    let (nx, ny, nz) = field.dim();
+    FFT_CACHE_3D
+        .get_or_create_with_precision(
+            Shape3D::new(nx, ny, nz).expect("fft_3d_array_typed_into requires non-zero dimensions"),
+            profile,
+        )
+        .forward_typed_into(field, out);
+}
+
 /// Inverse 1D FFT of a complex signal.
 #[must_use]
 pub fn ifft_1d_array(field_hat: &Array1<Complex64>) -> Array1<f64> {
@@ -225,6 +240,23 @@ pub fn ifft_3d_array_typed<T: RealFftData>(
             profile,
         )
         .inverse_typed(field_hat)
+}
+
+/// Inverse 3D FFT into caller-owned typed real storage and typed scratch spectrum.
+pub fn ifft_3d_array_typed_into<T: RealFftData>(
+    field_hat: &Array3<T::Spectrum>,
+    out: &mut Array3<T>,
+    scratch: &mut Array3<T::Spectrum>,
+    profile: PrecisionProfile,
+) {
+    let (nx, ny, nz) = field_hat.dim();
+    FFT_CACHE_3D
+        .get_or_create_with_precision(
+            Shape3D::new(nx, ny, nz)
+                .expect("ifft_3d_array_typed_into requires non-zero dimensions"),
+            profile,
+        )
+        .inverse_typed_into(field_hat, out, scratch);
 }
 
 /// Forward complex 1D FFT in-place.
@@ -387,6 +419,82 @@ mod tests {
         fft_3d_array_into(&field, &mut actual);
         for (lhs, rhs) in expected.iter().zip(actual.iter()) {
             assert!((lhs - rhs).norm() < 1e-13);
+        }
+    }
+
+    #[test]
+    fn typed_3d_into_supports_f64_f32_and_f16_profiles() {
+        let (nx, ny, nz) = (4, 4, 4);
+        let field64 = Array3::from_shape_fn((nx, ny, nz), |(i, j, k)| {
+            ((i as f64 * 0.17) + (j as f64 * 0.31) - (k as f64 * 0.11)).sin()
+        });
+
+        let expected64 = fft_3d_array_typed(&field64, PrecisionProfile::HIGH_ACCURACY_F64);
+        let mut spectrum64 = Array3::<Complex64>::zeros((nx, ny, nz));
+        fft_3d_array_typed_into(
+            &field64,
+            &mut spectrum64,
+            PrecisionProfile::HIGH_ACCURACY_F64,
+        );
+        for (expected, actual) in expected64.iter().zip(spectrum64.iter()) {
+            assert!((expected - actual).norm() < 1e-13);
+        }
+        let mut recovered64 = Array3::<f64>::zeros((nx, ny, nz));
+        let mut scratch64 = Array3::<Complex64>::zeros((nx, ny, nz));
+        ifft_3d_array_typed_into(
+            &spectrum64,
+            &mut recovered64,
+            &mut scratch64,
+            PrecisionProfile::HIGH_ACCURACY_F64,
+        );
+        for (expected, actual) in field64.iter().zip(recovered64.iter()) {
+            assert!((expected - actual).abs() < 1e-12);
+        }
+
+        let field32 = field64.mapv(|value| value as f32);
+        let expected32 = fft_3d_array_typed(&field32, PrecisionProfile::LOW_PRECISION_F32);
+        let mut spectrum32 = Array3::<Complex32>::zeros((nx, ny, nz));
+        fft_3d_array_typed_into(
+            &field32,
+            &mut spectrum32,
+            PrecisionProfile::LOW_PRECISION_F32,
+        );
+        for (expected, actual) in expected32.iter().zip(spectrum32.iter()) {
+            assert!((expected - actual).norm() < 1e-5);
+        }
+        let mut recovered32 = Array3::<f32>::zeros((nx, ny, nz));
+        let mut scratch32 = Array3::<Complex32>::zeros((nx, ny, nz));
+        ifft_3d_array_typed_into(
+            &spectrum32,
+            &mut recovered32,
+            &mut scratch32,
+            PrecisionProfile::LOW_PRECISION_F32,
+        );
+        for (expected, actual) in field32.iter().zip(recovered32.iter()) {
+            assert!((expected - actual).abs() < 1e-5);
+        }
+
+        let field16 = field64.mapv(|value| f16::from_f32(value as f32));
+        let expected16 = fft_3d_array_typed(&field16, PrecisionProfile::MIXED_PRECISION_F16_F32);
+        let mut spectrum16 = Array3::<Complex32>::zeros((nx, ny, nz));
+        fft_3d_array_typed_into(
+            &field16,
+            &mut spectrum16,
+            PrecisionProfile::MIXED_PRECISION_F16_F32,
+        );
+        for (expected, actual) in expected16.iter().zip(spectrum16.iter()) {
+            assert!((expected - actual).norm() < 1e-5);
+        }
+        let mut recovered16 = Array3::<f16>::from_elem((nx, ny, nz), f16::from_f32(0.0));
+        let mut scratch16 = Array3::<Complex32>::zeros((nx, ny, nz));
+        ifft_3d_array_typed_into(
+            &spectrum16,
+            &mut recovered16,
+            &mut scratch16,
+            PrecisionProfile::MIXED_PRECISION_F16_F32,
+        );
+        for (expected, actual) in field16.iter().zip(recovered16.iter()) {
+            assert!((expected.to_f32() - actual.to_f32()).abs() < 2e-3);
         }
     }
 }

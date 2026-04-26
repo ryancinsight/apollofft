@@ -155,6 +155,9 @@ and NUFFT literature:
 - Prefer in-place contiguous axis execution before adding new backend variants. Current GPU FFT
   benchmark literature reports throughput in effective memory bandwidth, so removing avoidable
   full-field copies is a first-order optimization even before shader fusion.
+- Support precision as a storage/compute contract, not as parallel algorithm families: `f64`
+  remains the high-accuracy reference, `f32` halves storage and bandwidth, and `f16` storage uses
+  `f32` compute to retain dynamic range during butterfly accumulation.
 
 Primary references:
 
@@ -192,6 +195,18 @@ by unit and property tests against analytical identities and direct references.
 - FFT 2D row passes and 3D innermost-axis passes now transform contiguous
   backing-slice chunks directly with Rayon, eliminating the full-field
   `Vec<Vec<Complex>>` lane-copy allocation for those axes.
+- FFT 3D typed caller-owned paths cover `f64`, `f32`, and mixed `f16` storage:
+  callers can reuse output and scratch spectra instead of allocating a new
+  full-volume complex field on each forward/inverse pass.
+- Validation benchmark reports now time forward and inverse 1D FFT execution
+  for high-accuracy `f64`, low-precision `f32`, and mixed `f16` storage
+  profiles.
+- DHT and DCT/DST typed caller-owned paths now cover `f64`, `f32`, and mixed
+  `f16` storage by reusing their authoritative `f64` kernels and quantizing at
+  the storage boundary.
+- FWHT typed caller-owned paths now cover `f64`, `f32`, and mixed `f16` storage
+  by reusing the generic Hadamard butterfly schedule, using `f32` compute for
+  mixed `f16`, and rejecting profile/storage mismatches.
 - CZT Bluestein execution reuses its convolution workspace after the forward
   FFT, multiplies by the precomputed kernel in place, and inverse-transforms the
   same buffer instead of copying to a separate product vector.

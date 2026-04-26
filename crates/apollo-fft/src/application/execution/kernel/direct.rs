@@ -24,16 +24,16 @@
 //!
 //! ## Design notes
 //!
-//! - The kernel is generic over the scalar type through a small trait.
-//! - The implementation favors clarity and correctness first, then can be
-//! specialized later with radix decomposition or SIMD backends.
-//! - The public surface is intentionally small so plan modules can own their
-//! buffering and normalization policies.
+//! * The kernel is generic over the scalar type through a small trait.
+//! * The implementation favors clarity and correctness first, then can be
+//!   specialized later with radix decomposition or SIMD backends.
+//! * The public surface is intentionally small so plan modules can own their
+//!   buffering and normalization policies.
 //!
 //! ## Failure modes
 //!
-//! - zero-length transforms are rejected
-//! - caller-supplied buffers must match the kernel length
+//! * zero-length transforms are rejected
+//! * caller-supplied buffers must match the kernel length
 //!
 //! ## Complexity
 //!
@@ -175,7 +175,7 @@ pub fn dft_forward<T: KernelScalar>(input: &[T]) -> Vec<T> {
     let tau = std::f64::consts::TAU;
     let n_f64 = n as f64;
 
-    for k in 0..n {
+    for (k, slot) in output.iter_mut().enumerate() {
         let k_f64 = k as f64;
         let mut sum = T::zero();
         for (n_idx, &value) in input.iter().enumerate() {
@@ -183,7 +183,7 @@ pub fn dft_forward<T: KernelScalar>(input: &[T]) -> Vec<T> {
             let twiddle = T::complex(T::from_f64(angle.cos()), T::from_f64(angle.sin()));
             sum = T::add(sum, T::mul(value, twiddle));
         }
-        output[k] = sum;
+        *slot = sum;
     }
 
     output
@@ -199,7 +199,7 @@ pub fn dft_inverse<T: KernelScalar>(input: &[T]) -> Vec<T> {
     let scale = 1.0 / n as f64;
     let n_f64 = n as f64;
 
-    for n_idx in 0..n {
+    for (n_idx, slot) in output.iter_mut().enumerate() {
         let n_idx_f64 = n_idx as f64;
         let mut sum_re = 0.0;
         let mut sum_im = 0.0;
@@ -212,7 +212,7 @@ pub fn dft_inverse<T: KernelScalar>(input: &[T]) -> Vec<T> {
             sum_re += re * c - im * s;
             sum_im += re * s + im * c;
         }
-        output[n_idx] = T::complex(T::from_f64(sum_re * scale), T::from_f64(sum_im * scale));
+        *slot = T::complex(T::from_f64(sum_re * scale), T::from_f64(sum_im * scale));
     }
 
     output

@@ -74,13 +74,13 @@ mod tests {
 
     #[test]
     fn default_produces_cpu_backend() {
-        let backend = CpuBackend::default();
+        let backend = CpuBackend;
         assert_eq!(backend.backend_kind(), BackendKind::Cpu);
     }
 
     #[test]
     fn capabilities_has_any_capability() {
-        let backend = CpuBackend::default();
+        let backend = CpuBackend;
         let caps = backend.capabilities();
         assert!(
             caps.has_any_capability(),
@@ -91,7 +91,7 @@ mod tests {
 
     #[test]
     fn plan_1d_correct_roundtrip() {
-        let backend = CpuBackend::default();
+        let backend = CpuBackend;
         let shape = Shape1D::new(8).expect("valid shape");
         let plan = backend.plan_1d(shape).expect("plan_1d succeeded");
         let input = Array1::from_iter((0..8usize).map(|i| (i as f64 * 0.7).sin()));
@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn plan_2d_correct_roundtrip() {
-        let backend = CpuBackend::default();
+        let backend = CpuBackend;
         let shape = Shape2D::new(4, 4).expect("valid shape");
         let plan = backend.plan_2d(shape).expect("plan_2d succeeded");
         let input = Array2::from_shape_fn((4, 4), |(i, j)| (i as f64 * 0.3 + j as f64 * 0.5).sin());
@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn plan_3d_correct_roundtrip() {
-        let backend = CpuBackend::default();
+        let backend = CpuBackend;
         let shape = Shape3D::new(4, 4, 4).expect("valid shape");
         let plan = backend.plan_3d(shape).expect("plan_3d succeeded");
         let input = Array3::from_shape_fn((4, 4, 4), |(i, j, k)| {

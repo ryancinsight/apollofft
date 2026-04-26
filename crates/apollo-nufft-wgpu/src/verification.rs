@@ -5,6 +5,7 @@ mod tests {
     use apollo_nufft::{
         nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type1_3d_fast, nufft_type2_1d,
         nufft_type2_1d_fast, nufft_type2_3d, nufft_type2_3d_fast, UniformDomain1D, UniformGrid3D,
+        DEFAULT_NUFFT_KERNEL_WIDTH, DEFAULT_NUFFT_OVERSAMPLING,
     };
     use ndarray::{Array1, Array3};
     use num_complex::{Complex32, Complex64};
@@ -391,6 +392,92 @@ mod tests {
         assert_eq!(actual.len(), expected.len());
         for (actual, expected) in actual.iter().zip(expected.iter()) {
             assert_complex64_close(*actual, *expected, 1.2e-4);
+        }
+    }
+
+    /// Normalization invariance for fast type-2 1D with a single non-zero
+    /// coefficient at k=0 (delta function in Fourier domain).
+    ///
+    /// Mathematical contract: for f_k = δ(k), the type-2 sum collapses to
+    ///   g(x_j) = f_0 × exp(2πi × 0 × x_j / L) = f_0 = 1
+    /// for all x_j. The fast (gridded) path approximates this with
+    /// deconvolution correction, so the output equals deconv[0]/N at every
+    /// position. Any accidental 1/m rescaling would make this constant
+    /// deconv[0]/(m) instead, which is off by a factor of σ (=2 with
+    /// default oversampling), so this test detects that regression class.
+    #[test]
+    fn fast_type2_1d_normalization_invariance_when_device_exists() {
+        let Some(backend) = backend_or_skip() else {
+            return;
+        };
+
+        let n = 16;
+        let domain = UniformDomain1D::new(n, 0.25).expect("domain");
+        let plan = NufftWgpuPlan1D::new(
+            domain,
+            DEFAULT_NUFFT_OVERSAMPLING,
+            DEFAULT_NUFFT_KERNEL_WIDTH,
+        );
+
+        // Single non-zero coefficient at k=0: delta function in Fourier domain.
+        let mut coefficients = [Complex32::new(0.0, 0.0); 16];
+        coefficients[0] = Complex32::new(1.0, 0.0);
+
+        // Positions spanning the domain to verify constancy across all x_j.
+        let positions: [f32; 5] = [0.0, 0.5, 1.25, 2.75, 3.875];
+
+        let expected_coefficients: Vec<Complex64> = coefficients
+            .iter()
+            .map(|value| Complex64::new(value.re as f64, value.im as f64))
+            .collect();
+        let expected_positions: Vec<f64> = positions.iter().map(|&x| x as f64).collect();
+
+        // CPU reference via the same fast (gridded) path.
+        let expected = nufft_type2_1d_fast(
+            &Array1::from_vec(expected_coefficients),
+            &expected_positions,
+            domain,
+            DEFAULT_NUFFT_KERNEL_WIDTH,
+        );
+
+        // GPU fast type-2 1D execution.
+        let actual = backend
+            .execute_fast_type2_1d(&plan, &coefficients, &positions)
+            .expect("GPU fast type2 1D with single nonzero coefficient");
+
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "output length must match CPU reference"
+        );
+
+        // Verify each output element matches the CPU reference.
+        // Tolerance 1e-4 accounts for f32 GPU arithmetic rounding.
+        for (i, (actual_val, expected_val)) in actual.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                approx::abs_diff_eq!(actual_val.re, expected_val.re, epsilon = 1e-4),
+                "real mismatch at position index {i}: actual={actual_val:?}, expected={expected_val:?}"
+            );
+            assert!(
+                approx::abs_diff_eq!(actual_val.im, expected_val.im, epsilon = 1e-4),
+                "imag mismatch at position index {i}: actual={actual_val:?}, expected={expected_val:?}"
+            );
+        }
+
+        // Additionally verify the output is approximately constant across all
+        // positions (invariant property of k=0 delta input).
+        // A 1/m rescaling bug would shift all values by factor σ=2, so this
+        // constancy check is a direct regression guard.
+        let reference = actual[0];
+        for (i, value) in actual.iter().enumerate() {
+            assert!(
+                approx::abs_diff_eq!(value.re, reference.re, epsilon = 1e-4),
+                "constancy regression at position index {i}: {value:?} vs reference {reference:?}"
+            );
+            assert!(
+                approx::abs_diff_eq!(value.im, reference.im, epsilon = 1e-4),
+                "constancy regression at position index {i}: {value:?} vs reference {reference:?}"
+            );
         }
     }
 

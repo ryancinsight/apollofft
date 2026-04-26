@@ -191,6 +191,9 @@ impl GpuFft3d {
     /// 5. Copy `full_re_buf`/`full_im_buf` → `re_buf`/`im_buf`
     ///
     /// Buffer requirements to `encode_forward_split`.
+    ///
+    /// Consumers that need the unnormalized IDFT must pre-scale their inputs
+    /// or post-scale the outputs by the relevant axis length(s).
     pub fn encode_inverse_split(
         &self,
         encoder: &mut wgpu::CommandEncoder,

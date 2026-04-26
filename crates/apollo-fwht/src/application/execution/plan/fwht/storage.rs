@@ -1,0 +1,187 @@
+//! Precision storage contract for FWHT execution.
+
+use crate::application::execution::kernel::direct::wht_inplace;
+use crate::application::execution::plan::fwht::dimension_1d::FwhtPlan;
+use crate::domain::contracts::error::FwhtError;
+use apollo_fft::{f16, PrecisionProfile};
+use ndarray::Array1;
+
+/// Real storage accepted by typed FWHT paths.
+pub trait FwhtStorage: Copy + Send + Sync + 'static {
+    /// Required precision profile for this storage type.
+    const PROFILE: PrecisionProfile;
+
+    /// Convert storage into the owner `f64` arithmetic path.
+    fn to_f64(self) -> f64;
+
+    /// Convert an owner arithmetic result back to storage.
+    fn from_f64(value: f64) -> Self;
+
+    /// Execute forward transform into caller-owned storage.
+    fn forward_into(
+        plan: &FwhtPlan,
+        input: &Array1<Self>,
+        output: &mut Array1<Self>,
+        profile: PrecisionProfile,
+    ) -> Result<(), FwhtError> {
+        validate_profile(profile, Self::PROFILE)?;
+        if input.len() != plan.len() || output.len() != plan.len() {
+            return Err(FwhtError::LengthMismatch);
+        }
+        let input64 = Array1::from_iter(input.iter().copied().map(Self::to_f64));
+        let mut output64 = Array1::zeros(plan.len());
+        plan.forward_into(&input64, &mut output64)?;
+        for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+            *slot = Self::from_f64(value);
+        }
+        Ok(())
+    }
+
+    /// Execute inverse transform into caller-owned storage.
+    fn inverse_into(
+        plan: &FwhtPlan,
+        input: &Array1<Self>,
+        output: &mut Array1<Self>,
+        profile: PrecisionProfile,
+    ) -> Result<(), FwhtError> {
+        validate_profile(profile, Self::PROFILE)?;
+        if input.len() != plan.len() || output.len() != plan.len() {
+            return Err(FwhtError::LengthMismatch);
+        }
+        let input64 = Array1::from_iter(input.iter().copied().map(Self::to_f64));
+        let mut output64 = Array1::zeros(plan.len());
+        plan.inverse_into(&input64, &mut output64)?;
+        for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+            *slot = Self::from_f64(value);
+        }
+        Ok(())
+    }
+}
+
+impl FwhtStorage for f64 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::HIGH_ACCURACY_F64;
+
+    fn to_f64(self) -> f64 {
+        self
+    }
+
+    fn from_f64(value: f64) -> Self {
+        value
+    }
+
+    fn forward_into(
+        plan: &FwhtPlan,
+        input: &Array1<Self>,
+        output: &mut Array1<Self>,
+        profile: PrecisionProfile,
+    ) -> Result<(), FwhtError> {
+        validate_profile(profile, Self::PROFILE)?;
+        plan.forward_into(input, output)
+    }
+
+    fn inverse_into(
+        plan: &FwhtPlan,
+        input: &Array1<Self>,
+        output: &mut Array1<Self>,
+        profile: PrecisionProfile,
+    ) -> Result<(), FwhtError> {
+        validate_profile(profile, Self::PROFILE)?;
+        plan.inverse_into(input, output)
+    }
+}
+
+impl FwhtStorage for f32 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::LOW_PRECISION_F32;
+
+    fn to_f64(self) -> f64 {
+        f64::from(self)
+    }
+
+    fn from_f64(value: f64) -> Self {
+        value as f32
+    }
+
+    fn forward_into(
+        plan: &FwhtPlan,
+        input: &Array1<Self>,
+        output: &mut Array1<Self>,
+        profile: PrecisionProfile,
+    ) -> Result<(), FwhtError> {
+        validate_profile(profile, Self::PROFILE)?;
+        if input.len() != plan.len() || output.len() != plan.len() {
+            return Err(FwhtError::LengthMismatch);
+        }
+        output.assign(input);
+        wht_inplace(output.as_slice_mut().expect("Array must be contiguous"));
+        Ok(())
+    }
+
+    fn inverse_into(
+        plan: &FwhtPlan,
+        input: &Array1<Self>,
+        output: &mut Array1<Self>,
+        profile: PrecisionProfile,
+    ) -> Result<(), FwhtError> {
+        Self::forward_into(plan, input, output, profile)?;
+        let scale = 1.0_f32 / plan.len() as f32;
+        output.mapv_inplace(|value| value * scale);
+        Ok(())
+    }
+}
+
+impl FwhtStorage for f16 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::MIXED_PRECISION_F16_F32;
+
+    fn to_f64(self) -> f64 {
+        f64::from(self.to_f32())
+    }
+
+    fn from_f64(value: f64) -> Self {
+        f16::from_f32(value as f32)
+    }
+
+    fn forward_into(
+        plan: &FwhtPlan,
+        input: &Array1<Self>,
+        output: &mut Array1<Self>,
+        profile: PrecisionProfile,
+    ) -> Result<(), FwhtError> {
+        validate_profile(profile, Self::PROFILE)?;
+        if input.len() != plan.len() || output.len() != plan.len() {
+            return Err(FwhtError::LengthMismatch);
+        }
+        let mut compute: Vec<f32> = input.iter().map(|value| value.to_f32()).collect();
+        wht_inplace(&mut compute);
+        for (slot, value) in output.iter_mut().zip(compute.into_iter()) {
+            *slot = f16::from_f32(value);
+        }
+        Ok(())
+    }
+
+    fn inverse_into(
+        plan: &FwhtPlan,
+        input: &Array1<Self>,
+        output: &mut Array1<Self>,
+        profile: PrecisionProfile,
+    ) -> Result<(), FwhtError> {
+        validate_profile(profile, Self::PROFILE)?;
+        if input.len() != plan.len() || output.len() != plan.len() {
+            return Err(FwhtError::LengthMismatch);
+        }
+        let mut compute: Vec<f32> = input.iter().map(|value| value.to_f32()).collect();
+        wht_inplace(&mut compute);
+        let scale = 1.0_f32 / plan.len() as f32;
+        for (slot, value) in output.iter_mut().zip(compute.into_iter()) {
+            *slot = f16::from_f32(value * scale);
+        }
+        Ok(())
+    }
+}
+
+fn validate_profile(actual: PrecisionProfile, expected: PrecisionProfile) -> Result<(), FwhtError> {
+    if actual.storage == expected.storage && actual.compute == expected.compute {
+        Ok(())
+    } else {
+        Err(FwhtError::PrecisionMismatch)
+    }
+}

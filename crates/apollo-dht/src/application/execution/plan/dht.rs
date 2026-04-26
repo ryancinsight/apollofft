@@ -5,6 +5,7 @@ use crate::domain::metadata::length::HartleyLength;
 use crate::domain::spectrum::coefficients::HartleySpectrum;
 use crate::infrastructure::kernel::direct::transform_real;
 use crate::infrastructure::kernel::fast::dht_fast;
+use apollo_fft::{f16, PrecisionProfile};
 
 const FAST_KERNEL_THRESHOLD: usize = 512;
 
@@ -83,5 +84,197 @@ impl DhtPlan {
         let mut output = vec![0.0; self.len()];
         self.forward_into(input, &mut output)?;
         Ok(output)
+    }
+
+    /// Execute the unnormalized DHT for `f64`, `f32`, or mixed `f16` storage.
+    ///
+    /// `f64` uses the native high-accuracy path. `f32` and mixed `f16` storage
+    /// convert through the `f64` owner kernel and quantize once into the caller
+    /// supplied output. This preserves a single mathematical implementation and
+    /// avoids duplicated precision-specific kernels.
+    pub fn forward_typed_into<T: HartleyStorage>(
+        &self,
+        signal: &[T],
+        output: &mut [T],
+        profile: PrecisionProfile,
+    ) -> DhtResult<()> {
+        T::forward_into(self, signal, output, profile)
+    }
+
+    /// Execute the normalized inverse DHT for `f64`, `f32`, or mixed `f16` storage.
+    pub fn inverse_typed_into<T: HartleyStorage>(
+        &self,
+        spectrum: &[T],
+        output: &mut [T],
+        profile: PrecisionProfile,
+    ) -> DhtResult<()> {
+        T::inverse_into(self, spectrum, output, profile)
+    }
+}
+
+/// Real storage accepted by typed DHT paths.
+pub trait HartleyStorage: Copy + Send + Sync + 'static {
+    /// Required precision profile.
+    const PROFILE: PrecisionProfile;
+
+    /// Convert storage value to the owner `f64` arithmetic path.
+    fn to_f64(self) -> f64;
+    /// Convert owner arithmetic result back to storage.
+    fn from_f64(value: f64) -> Self;
+
+    /// Execute forward transform into caller-owned storage.
+    fn forward_into(
+        plan: &DhtPlan,
+        signal: &[Self],
+        output: &mut [Self],
+        profile: PrecisionProfile,
+    ) -> DhtResult<()> {
+        validate_profile(profile, Self::PROFILE)?;
+        if signal.len() != plan.len() || output.len() != plan.len() {
+            return Err(DhtError::LengthMismatch);
+        }
+        let input64: Vec<f64> = signal.iter().map(|value| value.to_f64()).collect();
+        let mut output64 = vec![0.0_f64; plan.len()];
+        plan.forward_into(&input64, &mut output64)?;
+        for (slot, value) in output.iter_mut().zip(output64.into_iter()) {
+            *slot = Self::from_f64(value);
+        }
+        Ok(())
+    }
+
+    /// Execute inverse transform into caller-owned storage.
+    fn inverse_into(
+        plan: &DhtPlan,
+        spectrum: &[Self],
+        output: &mut [Self],
+        profile: PrecisionProfile,
+    ) -> DhtResult<()> {
+        validate_profile(profile, Self::PROFILE)?;
+        if spectrum.len() != plan.len() || output.len() != plan.len() {
+            return Err(DhtError::LengthMismatch);
+        }
+        let input64: Vec<f64> = spectrum.iter().map(|value| value.to_f64()).collect();
+        let mut output64 = vec![0.0_f64; plan.len()];
+        plan.inverse_into(&input64, &mut output64)?;
+        for (slot, value) in output.iter_mut().zip(output64.into_iter()) {
+            *slot = Self::from_f64(value);
+        }
+        Ok(())
+    }
+}
+
+impl HartleyStorage for f64 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::HIGH_ACCURACY_F64;
+
+    fn to_f64(self) -> f64 {
+        self
+    }
+
+    fn from_f64(value: f64) -> Self {
+        value
+    }
+
+    fn forward_into(
+        plan: &DhtPlan,
+        signal: &[Self],
+        output: &mut [Self],
+        profile: PrecisionProfile,
+    ) -> DhtResult<()> {
+        validate_profile(profile, Self::PROFILE)?;
+        plan.forward_into(signal, output)
+    }
+
+    fn inverse_into(
+        plan: &DhtPlan,
+        spectrum: &[Self],
+        output: &mut [Self],
+        profile: PrecisionProfile,
+    ) -> DhtResult<()> {
+        validate_profile(profile, Self::PROFILE)?;
+        plan.inverse_into(spectrum, output)
+    }
+}
+
+impl HartleyStorage for f32 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::LOW_PRECISION_F32;
+
+    fn to_f64(self) -> f64 {
+        f64::from(self)
+    }
+
+    fn from_f64(value: f64) -> Self {
+        value as f32
+    }
+}
+
+impl HartleyStorage for f16 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::MIXED_PRECISION_F16_F32;
+
+    fn to_f64(self) -> f64 {
+        f64::from(self.to_f32())
+    }
+
+    fn from_f64(value: f64) -> Self {
+        f16::from_f32(value as f32)
+    }
+}
+
+fn validate_profile(actual: PrecisionProfile, expected: PrecisionProfile) -> DhtResult<()> {
+    if actual.storage == expected.storage && actual.compute == expected.compute {
+        Ok(())
+    } else {
+        Err(DhtError::PrecisionMismatch)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_abs_diff_eq;
+
+    #[test]
+    fn typed_paths_support_f64_f32_and_mixed_f16_storage() {
+        let plan = DhtPlan::new(8).expect("valid plan");
+        let signal64 = [1.0_f64, -2.0, 0.5, 2.25, -4.0, 1.5, 0.0, -0.75];
+        let expected = plan.forward(&signal64).expect("forward");
+
+        let mut out64 = [0.0_f64; 8];
+        plan.forward_typed_into(&signal64, &mut out64, PrecisionProfile::HIGH_ACCURACY_F64)
+            .expect("typed f64 forward");
+        for (actual, expected) in out64.iter().zip(expected.values()) {
+            assert_abs_diff_eq!(actual, expected, epsilon = 1.0e-12);
+        }
+
+        let signal32 = signal64.map(|value| value as f32);
+        let mut out32 = [0.0_f32; 8];
+        plan.forward_typed_into(&signal32, &mut out32, PrecisionProfile::LOW_PRECISION_F32)
+            .expect("typed f32 forward");
+        for (actual, expected) in out32.iter().zip(expected.values()) {
+            assert!((f64::from(*actual) - *expected).abs() < 1.0e-5);
+        }
+
+        let signal16 = signal64.map(|value| f16::from_f32(value as f32));
+        let mut out16 = [f16::from_f32(0.0); 8];
+        plan.forward_typed_into(
+            &signal16,
+            &mut out16,
+            PrecisionProfile::MIXED_PRECISION_F16_F32,
+        )
+        .expect("typed mixed f16 forward");
+        for (actual, expected) in out16.iter().zip(expected.values()) {
+            let quantization_bound = expected.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
+            assert!((f64::from(actual.to_f32()) - *expected).abs() <= quantization_bound);
+        }
+    }
+
+    #[test]
+    fn typed_path_rejects_profile_storage_mismatch() {
+        let plan = DhtPlan::new(4).expect("valid plan");
+        let signal = [1.0_f32, 2.0, 3.0, 4.0];
+        let mut output = [0.0_f32; 4];
+        assert!(matches!(
+            plan.forward_typed_into(&signal, &mut output, PrecisionProfile::HIGH_ACCURACY_F64),
+            Err(DhtError::PrecisionMismatch)
+        ));
     }
 }

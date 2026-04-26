@@ -17,6 +17,11 @@ src/
 execution. Domain storage remains real-valued; no complex FFT dependency is
 introduced for production execution.
 
+Typed caller-owned paths support high-accuracy `f64`, low-precision `f32`, and
+mixed `f16` storage profiles. The typed paths reuse the authoritative `f64`
+Hartley kernel and quantize once at the storage boundary, so precision support
+does not fork the mathematical implementation.
+
 ## Mathematical Contract
 
 The DHT computes
@@ -37,4 +42,5 @@ so inverse execution reuses the same transform and applies `1 / N`.
 
 Tests cover impulse response, constant-signal DC behavior, Parseval scaling,
 double-transform scaling, inverse execution, invalid contracts, and randomized
-roundtrips.
+roundtrips. Typed tests cover `f64`, `f32`, mixed `f16`, and precision/profile
+mismatch rejection.

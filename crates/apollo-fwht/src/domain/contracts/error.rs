@@ -14,4 +14,7 @@ pub enum FwhtError {
     /// Input length does not match the plan.
     #[error("input length does not match the plan")]
     LengthMismatch,
+    /// Requested precision profile does not match the selected storage type.
+    #[error("precision profile does not match the selected storage type")]
+    PrecisionMismatch,
 }
