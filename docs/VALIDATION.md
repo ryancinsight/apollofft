@@ -319,3 +319,7 @@ by unit and property tests against analytical identities and direct references.
   `f32`, and mixed `f16` quadrature execution, analytic-signal real-part
   preservation, and profile/storage mismatch rejection against the owner `f64`
   analytic-mask path.
+- `apollo-mellin` typed CPU storage validation covers caller-owned `f64`,
+  `f32`, and mixed `f16` log-resampling, represented-input moment/spectrum
+  parity, and profile/storage mismatch rejection against the owner `f64`
+  scale-domain kernels.

@@ -262,6 +262,7 @@ dependencies = [
 name = "apollo-mellin"
 version = "0.1.0"
 dependencies = [
+ "apollo-fft",
  "approx",
  "num-complex",
  "proptest",

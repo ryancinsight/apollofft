@@ -19,7 +19,7 @@ pub mod infrastructure;
 /// Value-semantic verification.
 pub mod verification;
 
-pub use application::execution::plan::mellin::{MellinPlan, MellinSpectrum};
+pub use application::execution::plan::mellin::{MellinPlan, MellinSpectrum, MellinStorage};
 pub use domain::contracts::error::{MellinError, MellinResult};
 pub use domain::metadata::scale::MellinScaleConfig;
 pub use infrastructure::kernel::resample::{

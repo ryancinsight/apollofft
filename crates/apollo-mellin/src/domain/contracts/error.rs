@@ -32,4 +32,7 @@ pub enum MellinError {
     /// Mellin exponent must be finite.
     #[error("Mellin exponent must be finite")]
     InvalidExponent,
+    /// Precision profile does not match the requested storage type.
+    #[error("precision profile does not match storage type")]
+    PrecisionMismatch,
 }
