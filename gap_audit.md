@@ -124,6 +124,8 @@ All items below are implemented, tested, and verified in completed sprints.
 - **SHT WGPU**: `apollo-sht-wgpu` executes direct complex forward/inverse SHT on WGPU using `apollo-sht` quadrature samples and GPU-generated associated-Legendre/spherical-harmonic basis values; CPU parity tested.
 - **SHT WGPU Basis Generation**: moved associated Legendre recurrence, Condon-Shortley negative-order handling, spherical harmonic normalization, conjugation, and quadrature weighting into the WGPU basis-generation pass while preserving `apollo-sht` as the quadrature SSOT.
 
+- **NUFFT WGPU Fast Type-2 1D Normalization Bug (fixed)**: `execute_fast_type2_1d` in `kernel.rs` was producing results a factor of `oversampled_len` (= m) too small. Root cause: the CPU `type2_into` path calls a normalized IFFT (divides by m) and then explicitly multiplies by m to recover the unnormalized IDFT required by the KB interpolation kernel; the GPU path called `encode_inverse_split` (which also divides by m) but omitted the compensating ×m scale. Fix: in `execute_fast_type2_1d`, deconv values are packed into `ComplexPod` with `oversampled_len as f32` scaling before the GPU grid-load pass, so the normalized IFFT output equals the unnormalized IDFT without adding a second host-side deconv vector. The 3D path is unaffected: both CPU and GPU 3D type-2 paths use the normalized IDFT directly without rescaling, so they agree.
+
 ---
 
 ## Remaining Gaps

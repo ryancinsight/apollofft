@@ -65,3 +65,4 @@
 - [x] Add published-reference validation fixtures for DFT, DHT, DCT-II, and DST-II under `apollo-validation::external.published_references`.
 - [x] Audit remaining transform crates against published references and add cross-crate validation fixtures where useful.
 - [x] Optimize `apollo-sht-wgpu` basis storage by removing host-side zero-vector initialization before GPU basis generation.
+- [x] Fix GPU fast type-2 1D NUFFT normalization: `execute_fast_type2_1d` packs deconv values scaled by `oversampled_len` to compensate for `encode_inverse_split` normalized IFFT (÷m), matching the CPU `type2_into` ×m rescaling without an extra host vector.

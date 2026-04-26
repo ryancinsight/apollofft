@@ -87,3 +87,4 @@
 - [x] Replace existence-only Morlet CWT test with value-semantic resonance test.
 - [x] Add DHT–DFT relationship cross-check (H[k] = Re(F[k]) - Im(F[k])).
 - [x] Remove host-side zero upload for `apollo-sht-wgpu` generated basis storage.
+- [x] Fix GPU fast type-2 1D NUFFT normalization: pack deconv values scaled by `oversampled_len` in `execute_fast_type2_1d` to compensate for `encode_inverse_split` normalized IFFT (÷m), matching the CPU `type2_into` ×m rescaling without an extra host vector.

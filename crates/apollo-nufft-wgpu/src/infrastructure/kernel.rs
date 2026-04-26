@@ -677,7 +677,13 @@ impl NufftGpuKernel {
     ) -> NufftWgpuResult<Vec<Complex32>> {
         let coefficient_data = complex_to_pods(coefficients);
         let position_data = positions_to_complex_pods_1d(positions);
-        let deconv_data = real_to_complex_pods(deconv);
+        // encode_inverse_split applies a normalized IFFT that divides by oversampled_len.
+        // The CPU type2_into path multiplies by oversampled_len after its normalized IFFT
+        // to recover the unnormalized IDFT required by the KB interpolation kernel.
+        // Embedding that factor here (deconv × m) achieves the same effect on the GPU:
+        //   grid_load = f[k] × (m × deconv[k])
+        //   after GPU IFFT (÷m): g[j] = Σ_k f[k]×deconv[k]×exp(2πi jk'/m)  [unnormalized IDFT]
+        let deconv_data = real_to_complex_pods_scaled(deconv, oversampled_len as f32);
         let coefficients_buffer = storage_buffer(
             device,
             "apollo-nufft-wgpu fast coefficients",
@@ -1242,6 +1248,16 @@ fn real_to_complex_pods(values: &[f32]) -> Vec<ComplexPod> {
         .iter()
         .map(|value| ComplexPod {
             re: *value,
+            im: 0.0,
+        })
+        .collect()
+}
+
+fn real_to_complex_pods_scaled(values: &[f32], scale: f32) -> Vec<ComplexPod> {
+    values
+        .iter()
+        .map(|value| ComplexPod {
+            re: *value * scale,
             im: 0.0,
         })
         .collect()
