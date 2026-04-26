@@ -9,6 +9,9 @@ pub mod domain;
 /// CPU transport infrastructure.
 pub mod infrastructure;
 
-pub use application::execution::plan::stft::dimension_1d::{is_valid_length, StftPlan};
+pub use application::execution::plan::stft::dimension_1d::{
+    is_valid_length, StftPlan, StftRealOutputStorage, StftRealStorage, StftSpectrumInput,
+    StftSpectrumStorage,
+};
 pub use domain::contracts::error::StftError;
 pub use infrastructure::transport::cpu::{istft, stft};

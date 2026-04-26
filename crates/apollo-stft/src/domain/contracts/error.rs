@@ -26,4 +26,7 @@ pub enum StftError {
     /// The window length does not match the frame length.
     #[error("window length mismatch")]
     WindowLengthMismatch,
+    /// Precision profile does not match the requested storage type.
+    #[error("precision profile does not match storage type")]
+    PrecisionMismatch,
 }

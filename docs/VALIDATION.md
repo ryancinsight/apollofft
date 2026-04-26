@@ -335,3 +335,7 @@ by unit and property tests against analytical identities and direct references.
   execution for `f64`/`Complex64`, `f32`/`Complex32`, and mixed
   `f16`/`[f16; 2]`, represented-input parity, output-length rejection, and
   profile/storage mismatch rejection against the owner direct DFT bin kernel.
+- `apollo-stft` typed CPU storage validation covers caller-owned forward and
+  inverse execution for `f64`/`Complex64`, `f32`/`Complex32`, and mixed
+  `f16`/`[f16; 2]`, represented-input spectrum parity, inverse roundtrip, and
+  profile/storage mismatch rejection against the owner frame/window/FFT path.
