@@ -6,8 +6,11 @@
 
 use crate::domain::contracts::error::{SdftError, SdftResult};
 use crate::domain::metadata::window::SlidingDftConfig;
-use crate::infrastructure::kernel::sliding::{direct_bins, update_bins, update_twiddles};
-use num_complex::Complex64;
+use crate::infrastructure::kernel::sliding::{
+    direct_bins, direct_bins_into, update_bins, update_twiddles,
+};
+use apollo_fft::{f16, PrecisionProfile};
+use num_complex::{Complex32, Complex64};
 use std::collections::VecDeque;
 
 /// Reusable SDFT plan.
@@ -68,6 +71,118 @@ impl SdftPlan {
         }
         direct_bins(window, self.bin_count())
     }
+
+    /// Compute direct DFT bins for a full window into caller-owned storage.
+    pub fn direct_bins_into(&self, window: &[f64], output: &mut [Complex64]) -> SdftResult<()> {
+        if window.len() != self.window_len() {
+            return Err(SdftError::InitialWindowLengthMismatch);
+        }
+        if output.len() != self.bin_count() {
+            return Err(SdftError::OutputBinLengthMismatch);
+        }
+        direct_bins_into(window, output)
+    }
+
+    /// Compute direct DFT bins for typed real input and typed complex output storage.
+    pub fn direct_bins_typed_into<T: SdftRealStorage, O: SdftBinStorage>(
+        &self,
+        window: &[T],
+        output: &mut [O],
+        profile: PrecisionProfile,
+    ) -> SdftResult<()> {
+        validate_profile(profile, T::PROFILE)?;
+        validate_profile(profile, O::PROFILE)?;
+        if window.len() != self.window_len() {
+            return Err(SdftError::InitialWindowLengthMismatch);
+        }
+        if output.len() != self.bin_count() {
+            return Err(SdftError::OutputBinLengthMismatch);
+        }
+        let input64: Vec<f64> = window.iter().copied().map(T::to_f64).collect();
+        let mut output64 = vec![Complex64::new(0.0, 0.0); self.bin_count()];
+        self.direct_bins_into(&input64, &mut output64)?;
+        for (slot, value) in output.iter_mut().zip(output64.into_iter()) {
+            *slot = O::from_complex64(value);
+        }
+        Ok(())
+    }
+}
+
+/// Real input storage accepted by typed SDFT direct-bin paths.
+pub trait SdftRealStorage: Copy + Send + Sync + 'static {
+    /// Required precision profile.
+    const PROFILE: PrecisionProfile;
+
+    /// Convert storage into owner `f64` arithmetic.
+    fn to_f64(self) -> f64;
+}
+
+impl SdftRealStorage for f64 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::HIGH_ACCURACY_F64;
+
+    fn to_f64(self) -> f64 {
+        self
+    }
+}
+
+impl SdftRealStorage for f32 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::LOW_PRECISION_F32;
+
+    fn to_f64(self) -> f64 {
+        f64::from(self)
+    }
+}
+
+impl SdftRealStorage for f16 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::MIXED_PRECISION_F16_F32;
+
+    fn to_f64(self) -> f64 {
+        f64::from(self.to_f32())
+    }
+}
+
+/// Complex output storage accepted by typed SDFT direct-bin paths.
+pub trait SdftBinStorage: Copy + Send + Sync + 'static {
+    /// Required precision profile.
+    const PROFILE: PrecisionProfile;
+
+    /// Convert owner arithmetic result back to storage.
+    fn from_complex64(value: Complex64) -> Self;
+}
+
+impl SdftBinStorage for Complex64 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::HIGH_ACCURACY_F64;
+
+    fn from_complex64(value: Complex64) -> Self {
+        value
+    }
+}
+
+impl SdftBinStorage for Complex32 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::LOW_PRECISION_F32;
+
+    fn from_complex64(value: Complex64) -> Self {
+        Complex32::new(value.re as f32, value.im as f32)
+    }
+}
+
+impl SdftBinStorage for [f16; 2] {
+    const PROFILE: PrecisionProfile = PrecisionProfile::MIXED_PRECISION_F16_F32;
+
+    fn from_complex64(value: Complex64) -> Self {
+        [
+            f16::from_f32(value.re as f32),
+            f16::from_f32(value.im as f32),
+        ]
+    }
+}
+
+fn validate_profile(actual: PrecisionProfile, expected: PrecisionProfile) -> SdftResult<()> {
+    if actual.storage == expected.storage && actual.compute == expected.compute {
+        Ok(())
+    } else {
+        Err(SdftError::PrecisionMismatch)
+    }
 }
 
 /// Stateful sliding DFT stream.
@@ -119,5 +234,94 @@ impl SdftState {
     #[must_use]
     pub const fn updates(&self) -> usize {
         self.updates
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_abs_diff_eq;
+
+    #[test]
+    fn caller_owned_direct_bins_match_allocating_path() {
+        let plan = SdftPlan::new(4, 4).expect("plan");
+        let window = [1.0, -2.0, 0.5, 3.0];
+        let expected = plan.direct_bins(&window).expect("direct");
+        let mut output = vec![Complex64::new(0.0, 0.0); plan.bin_count()];
+        plan.direct_bins_into(&window, &mut output)
+            .expect("caller-owned direct");
+
+        for (actual, expected) in output.iter().zip(expected.iter()) {
+            assert_abs_diff_eq!(actual.re, expected.re, epsilon = 1.0e-12);
+            assert_abs_diff_eq!(actual.im, expected.im, epsilon = 1.0e-12);
+        }
+    }
+
+    #[test]
+    fn typed_direct_bins_support_f64_f32_and_mixed_f16_storage() {
+        let plan = SdftPlan::new(4, 4).expect("plan");
+        let window64 = [1.0_f64, -2.0, 0.5, 3.0];
+        let expected = plan.direct_bins(&window64).expect("direct");
+
+        let mut out64 = vec![Complex64::new(0.0, 0.0); plan.bin_count()];
+        plan.direct_bins_typed_into(&window64, &mut out64, PrecisionProfile::HIGH_ACCURACY_F64)
+            .expect("typed f64 direct");
+        for (actual, expected) in out64.iter().zip(expected.iter()) {
+            assert_abs_diff_eq!(actual.re, expected.re, epsilon = 1.0e-12);
+            assert_abs_diff_eq!(actual.im, expected.im, epsilon = 1.0e-12);
+        }
+
+        let window32 = window64.map(|value| value as f32);
+        let represented32: Vec<f64> = window32.iter().map(|value| f64::from(*value)).collect();
+        let expected32 = plan.direct_bins(&represented32).expect("represented f32");
+        let mut out32 = vec![Complex32::new(0.0, 0.0); plan.bin_count()];
+        plan.direct_bins_typed_into(&window32, &mut out32, PrecisionProfile::LOW_PRECISION_F32)
+            .expect("typed f32 direct");
+        for (actual, expected) in out32.iter().zip(expected32.iter()) {
+            assert!((f64::from(actual.re) - expected.re).abs() < 1.0e-5);
+            assert!((f64::from(actual.im) - expected.im).abs() < 1.0e-5);
+        }
+
+        let window16 = window64.map(|value| f16::from_f32(value as f32));
+        let represented16: Vec<f64> = window16
+            .iter()
+            .map(|value| f64::from(value.to_f32()))
+            .collect();
+        let expected16 = plan.direct_bins(&represented16).expect("represented f16");
+        let mut out16 = vec![[f16::from_f32(0.0); 2]; plan.bin_count()];
+        plan.direct_bins_typed_into(
+            &window16,
+            &mut out16,
+            PrecisionProfile::MIXED_PRECISION_F16_F32,
+        )
+        .expect("typed f16 direct");
+        for (actual, expected) in out16.iter().zip(expected16.iter()) {
+            let re_bound = expected.re.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
+            let im_bound = expected.im.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
+            assert!((f64::from(actual[0].to_f32()) - expected.re).abs() <= re_bound);
+            assert!((f64::from(actual[1].to_f32()) - expected.im).abs() <= im_bound);
+        }
+    }
+
+    #[test]
+    fn typed_direct_bins_reject_profile_storage_mismatch() {
+        let plan = SdftPlan::new(4, 2).expect("plan");
+        let window = [1.0_f32, -2.0, 0.5, 3.0];
+        let mut output = vec![Complex32::new(0.0, 0.0); plan.bin_count()];
+        assert!(matches!(
+            plan.direct_bins_typed_into(&window, &mut output, PrecisionProfile::HIGH_ACCURACY_F64),
+            Err(SdftError::PrecisionMismatch)
+        ));
+    }
+
+    #[test]
+    fn caller_owned_direct_bins_reject_wrong_output_length() {
+        let plan = SdftPlan::new(4, 3).expect("plan");
+        let window = [1.0, -2.0, 0.5, 3.0];
+        let mut output = vec![Complex64::new(0.0, 0.0); 2];
+        assert_eq!(
+            plan.direct_bins_into(&window, &mut output).unwrap_err(),
+            SdftError::OutputBinLengthMismatch
+        );
     }
 }

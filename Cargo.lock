@@ -404,6 +404,7 @@ dependencies = [
 name = "apollo-sdft"
 version = "0.1.0"
 dependencies = [
+ "apollo-fft",
  "approx",
  "num-complex",
  "proptest",

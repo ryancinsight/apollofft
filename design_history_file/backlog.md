@@ -92,5 +92,6 @@
 - [x] Add typed caller-owned Mellin log-resample paths for `f64`, `f32`, and mixed `f16` storage profiles with profile mismatch rejection.
 - [x] Add typed caller-owned QFT paths for `Complex64`, `Complex32`, and mixed `[f16; 2]` storage profiles with profile mismatch rejection.
 - [x] Add typed caller-owned Radon forward/backprojection paths for `f64`, `f32`, and mixed `f16` storage profiles with profile mismatch rejection.
+- [x] Add typed caller-owned SDFT direct-bin paths for `f64`/`Complex64`, `f32`/`Complex32`, and mixed `f16`/`[f16; 2]` storage profiles with profile mismatch rejection.
 - [ ] Continue mixed-precision rollout across remaining eligible CPU transform crates.
 - [ ] Define explicit mixed-precision support/unsupported capability records for each GPU and cudatile backend crate.

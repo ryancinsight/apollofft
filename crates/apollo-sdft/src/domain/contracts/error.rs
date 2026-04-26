@@ -20,4 +20,10 @@ pub enum SdftError {
     /// Initial window length does not match the plan.
     #[error("initial window length does not match the plan")]
     InitialWindowLengthMismatch,
+    /// Output bin length does not match the plan.
+    #[error("output bin length does not match the plan")]
+    OutputBinLengthMismatch,
+    /// Precision profile does not match the requested storage type.
+    #[error("precision profile does not match storage type")]
+    PrecisionMismatch,
 }

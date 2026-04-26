@@ -24,25 +24,30 @@ pub fn update_twiddles(window_len: usize, bin_count: usize) -> Vec<Complex64> {
 /// Returns  if  is empty.
 /// Returns  if .
 pub fn direct_bins(window: &[f64], bin_count: usize) -> SdftResult<Vec<Complex64>> {
+    let mut bins = vec![Complex64::new(0.0, 0.0); bin_count];
+    direct_bins_into(window, &mut bins)?;
+    Ok(bins)
+}
+
+/// Compute direct DFT bins for a real-valued window into caller-owned storage.
+pub fn direct_bins_into(window: &[f64], bins: &mut [Complex64]) -> SdftResult<()> {
     let n = window.len();
     if n == 0 {
         return Err(SdftError::EmptyWindow);
     }
-    if bin_count > n {
+    if bins.len() > n {
         return Err(SdftError::BinCountExceedsWindow);
     }
-    let bins: Vec<Complex64> = (0..bin_count)
-        .map(|bin| {
-            window
-                .iter()
-                .enumerate()
-                .fold(Complex64::new(0.0, 0.0), |acc, (index, &value)| {
-                    let angle = -std::f64::consts::TAU * bin as f64 * index as f64 / n as f64;
-                    acc + Complex64::new(value, 0.0) * Complex64::new(angle.cos(), angle.sin())
-                })
-        })
-        .collect();
-    Ok(bins)
+    for (bin, slot) in bins.iter_mut().enumerate() {
+        *slot = window
+            .iter()
+            .enumerate()
+            .fold(Complex64::new(0.0, 0.0), |acc, (index, &value)| {
+                let angle = -std::f64::consts::TAU * bin as f64 * index as f64 / n as f64;
+                acc + Complex64::new(value, 0.0) * Complex64::new(angle.cos(), angle.sin())
+            });
+    }
+    Ok(())
 }
 
 /// Apply one O(bin_count) sliding DFT update.
