@@ -16,6 +16,16 @@ src/
 `GftPlan` builds the combinatorial Laplacian and stores the orthonormal
 eigenvector basis as the transform matrix.
 
+Typed execution uses Apollo's shared precision profile contract:
+
+- `HIGH_ACCURACY_F64`: `f64` storage and owner `f64` graph-basis multiply.
+- `LOW_PRECISION_F32`: `f32` storage converted through the owner path and
+  quantized once into the caller-owned output.
+- `MIXED_PRECISION_F16_F32`: `f16` storage converted through the owner path and
+  quantized once into the caller-owned output.
+
+Profile/storage mismatches return `GftError::PrecisionMismatch`.
+
 ## Mathematical Contract
 
 For symmetric adjacency `A`, degree matrix `D`, and Laplacian `L = D - A`, the
@@ -33,4 +43,5 @@ so inverse reconstruction follows from orthonormality.
 
 Tests cover invalid graph contracts, known two-vertex spectra, zero constant
 mode for a path graph, eigenbasis orthonormality, weighted graph roundtrips, and
-random graph roundtrips.
+random graph roundtrips. Typed tests cover `f64`, `f32`, mixed `f16`, inverse
+roundtrip, caller-owned parity, and precision/profile mismatch rejection.

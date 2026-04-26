@@ -311,3 +311,7 @@ by unit and property tests against analytical identities and direct references.
   support for those direct GPU surfaces.
 - Transform WGPU crates report execution support only for implemented kernels
   with CPU parity tests against their owning transform crates.
+- `apollo-gft` typed CPU storage validation covers caller-owned `f64`, `f32`,
+  and mixed `f16` forward execution, `f32` inverse roundtrip, and
+  profile/storage mismatch rejection against the owner `f64` graph-basis
+  multiply.

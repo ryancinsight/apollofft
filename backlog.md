@@ -87,5 +87,6 @@
 - [x] Audit all workspace crates for `Cargo.toml`, `README.md`, and `src/lib.rs`; add missing `apollo-python` architecture, mathematical contract, precision contract, and verification documentation.
 - [x] Add typed caller-owned CZT paths for `Complex64`, `Complex32`, and mixed `[f16; 2]` storage profiles with profile mismatch rejection.
 - [x] Add typed caller-owned FrFT paths for `Complex64`, `Complex32`, and mixed `[f16; 2]` storage profiles with profile mismatch rejection.
+- [x] Add typed caller-owned GFT paths for `f64`, `f32`, and mixed `f16` storage profiles with profile mismatch rejection.
 - [ ] Continue mixed-precision rollout across remaining eligible CPU transform crates.
 - [ ] Define explicit mixed-precision support/unsupported capability records for each GPU and cudatile backend crate.

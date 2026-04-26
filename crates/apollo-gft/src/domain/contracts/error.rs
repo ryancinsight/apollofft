@@ -23,4 +23,7 @@ pub enum GftError {
     /// Input length does not match the graph order.
     #[error("input length does not match graph order")]
     LengthMismatch,
+    /// Precision profile does not match the requested storage type.
+    #[error("precision profile does not match storage type")]
+    PrecisionMismatch,
 }

@@ -8,6 +8,7 @@ repository = "https://github.com/ryancinsight/kwavers"
 description = "Graph Fourier transform plans and utilities for Apollo"
 
 [dependencies]
+apollo-fft = { path = "../apollo-fft" }
 nalgebra = { workspace = true }
 ndarray = { version = "0.16", features = ["rayon"] }
 num-complex = "0.4"

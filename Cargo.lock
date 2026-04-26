@@ -210,6 +210,7 @@ dependencies = [
 name = "apollo-gft"
 version = "0.1.0"
 dependencies = [
+ "apollo-fft",
  "approx",
  "nalgebra",
  "ndarray",
