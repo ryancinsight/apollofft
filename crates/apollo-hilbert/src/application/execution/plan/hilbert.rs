@@ -4,6 +4,7 @@ use crate::domain::contracts::error::{HilbertError, HilbertResult};
 use crate::domain::metadata::length::SignalLength;
 use crate::domain::signal::analytic::AnalyticSignal;
 use crate::infrastructure::kernel::direct::{analytic_signal, hilbert_transform};
+use apollo_fft::{f16, PrecisionProfile};
 
 /// Reusable 1D Hilbert transform plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,12 +46,45 @@ impl HilbertPlan {
         Ok(AnalyticSignal::new(analytic_signal(signal)?))
     }
 
+    /// Compute the analytic signal for `f64`, `f32`, or mixed `f16` input storage.
+    ///
+    /// The owner computation remains the `f64` analytic-mask path. Lower
+    /// storage profiles are converted once at input, so the output preserves
+    /// the exact represented real values and `f64` quadrature observables.
+    pub fn analytic_signal_typed<T: HilbertStorage>(
+        &self,
+        signal: &[T],
+        profile: PrecisionProfile,
+    ) -> HilbertResult<AnalyticSignal> {
+        T::analytic_signal(self, signal, profile)
+    }
+
     /// Compute only the Hilbert quadrature component.
     pub fn transform(&self, signal: &[f64]) -> HilbertResult<Vec<f64>> {
         if signal.len() != self.len() {
             return Err(HilbertError::LengthMismatch);
         }
         hilbert_transform(signal)
+    }
+
+    /// Compute only the Hilbert quadrature component into caller-owned storage.
+    pub fn transform_into(&self, signal: &[f64], output: &mut [f64]) -> HilbertResult<()> {
+        if signal.len() != self.len() || output.len() != self.len() {
+            return Err(HilbertError::LengthMismatch);
+        }
+        let quadrature = hilbert_transform(signal)?;
+        output.copy_from_slice(&quadrature);
+        Ok(())
+    }
+
+    /// Compute Hilbert quadrature for `f64`, `f32`, or mixed `f16` storage.
+    pub fn transform_typed_into<T: HilbertStorage>(
+        &self,
+        signal: &[T],
+        output: &mut [T],
+        profile: PrecisionProfile,
+    ) -> HilbertResult<()> {
+        T::transform_into(self, signal, output, profile)
     }
 
     /// Compute the instantaneous envelope from the analytic signal.
@@ -61,5 +95,202 @@ impl HilbertPlan {
     /// Compute the wrapped instantaneous phase from the analytic signal.
     pub fn phase(&self, signal: &[f64]) -> HilbertResult<Vec<f64>> {
         Ok(self.analytic_signal(signal)?.phase())
+    }
+}
+
+/// Real storage accepted by typed Hilbert input and quadrature paths.
+pub trait HilbertStorage: Copy + Send + Sync + 'static {
+    /// Required precision profile.
+    const PROFILE: PrecisionProfile;
+
+    /// Convert storage into the owner `f64` arithmetic path.
+    fn to_f64(self) -> f64;
+
+    /// Convert owner arithmetic result back to storage.
+    fn from_f64(value: f64) -> Self;
+
+    /// Compute the analytic signal from typed input storage.
+    fn analytic_signal(
+        plan: &HilbertPlan,
+        signal: &[Self],
+        profile: PrecisionProfile,
+    ) -> HilbertResult<AnalyticSignal> {
+        validate_profile(profile, Self::PROFILE)?;
+        if signal.len() != plan.len() {
+            return Err(HilbertError::LengthMismatch);
+        }
+        let input64: Vec<f64> = signal.iter().copied().map(Self::to_f64).collect();
+        plan.analytic_signal(&input64)
+    }
+
+    /// Compute the Hilbert quadrature component into caller-owned storage.
+    fn transform_into(
+        plan: &HilbertPlan,
+        signal: &[Self],
+        output: &mut [Self],
+        profile: PrecisionProfile,
+    ) -> HilbertResult<()> {
+        validate_profile(profile, Self::PROFILE)?;
+        if signal.len() != plan.len() || output.len() != plan.len() {
+            return Err(HilbertError::LengthMismatch);
+        }
+        let input64: Vec<f64> = signal.iter().copied().map(Self::to_f64).collect();
+        let mut output64 = vec![0.0_f64; plan.len()];
+        plan.transform_into(&input64, &mut output64)?;
+        for (slot, value) in output.iter_mut().zip(output64.into_iter()) {
+            *slot = Self::from_f64(value);
+        }
+        Ok(())
+    }
+}
+
+impl HilbertStorage for f64 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::HIGH_ACCURACY_F64;
+
+    fn to_f64(self) -> f64 {
+        self
+    }
+
+    fn from_f64(value: f64) -> Self {
+        value
+    }
+
+    fn analytic_signal(
+        plan: &HilbertPlan,
+        signal: &[Self],
+        profile: PrecisionProfile,
+    ) -> HilbertResult<AnalyticSignal> {
+        validate_profile(profile, Self::PROFILE)?;
+        plan.analytic_signal(signal)
+    }
+
+    fn transform_into(
+        plan: &HilbertPlan,
+        signal: &[Self],
+        output: &mut [Self],
+        profile: PrecisionProfile,
+    ) -> HilbertResult<()> {
+        validate_profile(profile, Self::PROFILE)?;
+        plan.transform_into(signal, output)
+    }
+}
+
+impl HilbertStorage for f32 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::LOW_PRECISION_F32;
+
+    fn to_f64(self) -> f64 {
+        f64::from(self)
+    }
+
+    fn from_f64(value: f64) -> Self {
+        value as f32
+    }
+}
+
+impl HilbertStorage for f16 {
+    const PROFILE: PrecisionProfile = PrecisionProfile::MIXED_PRECISION_F16_F32;
+
+    fn to_f64(self) -> f64 {
+        f64::from(self.to_f32())
+    }
+
+    fn from_f64(value: f64) -> Self {
+        f16::from_f32(value as f32)
+    }
+}
+
+fn validate_profile(actual: PrecisionProfile, expected: PrecisionProfile) -> HilbertResult<()> {
+    if actual.storage == expected.storage && actual.compute == expected.compute {
+        Ok(())
+    } else {
+        Err(HilbertError::PrecisionMismatch)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_abs_diff_eq;
+
+    #[test]
+    fn caller_owned_transform_matches_allocating_path() {
+        let len = 16;
+        let signal: Vec<f64> = (0..len)
+            .map(|n| (std::f64::consts::TAU * n as f64 / len as f64).cos())
+            .collect();
+        let plan = HilbertPlan::new(len).expect("plan");
+        let expected = plan.transform(&signal).expect("quadrature");
+        let mut output = vec![0.0; len];
+        plan.transform_into(&signal, &mut output)
+            .expect("caller-owned transform");
+        for (actual, expected) in output.iter().zip(expected.iter()) {
+            assert_abs_diff_eq!(actual, expected, epsilon = 1.0e-12);
+        }
+    }
+
+    #[test]
+    fn typed_paths_support_f64_f32_and_mixed_f16_storage() {
+        let len = 16;
+        let signal64: Vec<f64> = (0..len)
+            .map(|n| (std::f64::consts::TAU * n as f64 / len as f64).cos())
+            .collect();
+        let plan = HilbertPlan::new(len).expect("plan");
+        let expected = plan.transform(&signal64).expect("quadrature");
+
+        let analytic64 = plan
+            .analytic_signal_typed(&signal64, PrecisionProfile::HIGH_ACCURACY_F64)
+            .expect("typed f64 analytic");
+        for (sample, original) in analytic64.values().iter().zip(signal64.iter()) {
+            assert_abs_diff_eq!(sample.re, *original, epsilon = 1.0e-12);
+        }
+
+        let mut out64 = vec![0.0_f64; len];
+        plan.transform_typed_into(&signal64, &mut out64, PrecisionProfile::HIGH_ACCURACY_F64)
+            .expect("typed f64 transform");
+        for (actual, expected) in out64.iter().zip(expected.iter()) {
+            assert_abs_diff_eq!(actual, expected, epsilon = 1.0e-12);
+        }
+
+        let signal32: Vec<f32> = signal64.iter().map(|value| *value as f32).collect();
+        let expected32_input: Vec<f64> = signal32.iter().map(|value| f64::from(*value)).collect();
+        let expected32 = plan.transform(&expected32_input).expect("f32 represented");
+        let mut out32 = vec![0.0_f32; len];
+        plan.transform_typed_into(&signal32, &mut out32, PrecisionProfile::LOW_PRECISION_F32)
+            .expect("typed f32 transform");
+        for (actual, expected) in out32.iter().zip(expected32.iter()) {
+            assert!((f64::from(*actual) - *expected).abs() < 1.0e-5);
+        }
+
+        let signal16: Vec<f16> = signal64
+            .iter()
+            .map(|value| f16::from_f32(*value as f32))
+            .collect();
+        let expected16_input: Vec<f64> = signal16
+            .iter()
+            .map(|value| f64::from(value.to_f32()))
+            .collect();
+        let expected16 = plan.transform(&expected16_input).expect("f16 represented");
+        let mut out16 = vec![f16::from_f32(0.0); len];
+        plan.transform_typed_into(
+            &signal16,
+            &mut out16,
+            PrecisionProfile::MIXED_PRECISION_F16_F32,
+        )
+        .expect("typed f16 transform");
+        for (actual, expected) in out16.iter().zip(expected16.iter()) {
+            let quantization_bound = expected.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
+            assert!((f64::from(actual.to_f32()) - *expected).abs() <= quantization_bound);
+        }
+    }
+
+    #[test]
+    fn typed_path_rejects_profile_storage_mismatch() {
+        let plan = HilbertPlan::new(4).expect("plan");
+        let signal = [1.0_f32, -2.0, 0.5, 0.25];
+        let mut output = [0.0_f32; 4];
+        assert!(matches!(
+            plan.transform_typed_into(&signal, &mut output, PrecisionProfile::HIGH_ACCURACY_F64),
+            Err(HilbertError::PrecisionMismatch)
+        ));
     }
 }

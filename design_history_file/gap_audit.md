@@ -2,7 +2,7 @@
 
 ## Open Gaps
 
-- Mixed-precision CPU storage contracts remain incomplete for Hilbert, Mellin, NUFFT, QFT, Radon, SDFT, SFT, SHT, STFT, and Wavelet.
+- Mixed-precision CPU storage contracts remain incomplete for Mellin, NUFFT, QFT, Radon, SDFT, SFT, SHT, STFT, and Wavelet.
 - Mixed-precision GPU/cudatile capability contracts remain incomplete for FFT-WGPU, CZT-WGPU, DCTDST-WGPU, DHT-WGPU, FrFT-WGPU, FWHT-WGPU, GFT-WGPU, Hilbert-WGPU, Mellin-WGPU, NTT-WGPU, NUFFT-WGPU, QFT-WGPU, Radon-WGPU, SDFT-WGPU, SFT-WGPU, SHT-WGPU, STFT-WGPU, Wavelet-WGPU, and cudatile.
 
 ## Closed Gaps
@@ -70,6 +70,7 @@ All items below are implemented, tested, and verified in completed sprints.
 - Added typed caller-owned CZT execution paths for `Complex64`, `Complex32`, and mixed `[f16; 2]` storage profiles without duplicating the Bluestein transform path.
 - Added typed caller-owned FrFT execution paths for `Complex64`, `Complex32`, and mixed `[f16; 2]` storage profiles without duplicating the direct fractional-kernel path.
 - Added typed caller-owned GFT execution paths for `f64`, `f32`, and mixed `f16` storage profiles without duplicating the graph-basis multiply path.
+- Added typed caller-owned Hilbert quadrature paths for `f64`, `f32`, and mixed `f16` storage profiles without duplicating the analytic-mask path.
 
 ### New Transform Crates
 
@@ -158,5 +159,5 @@ All items below are implemented, tested, and verified in completed sprints.
 
 ## Remaining Gaps
 
-- Continue mixed-precision CPU storage rollout for Hilbert, Mellin, NUFFT, QFT, Radon, SDFT, SFT, SHT, STFT, and Wavelet.
+- Continue mixed-precision CPU storage rollout for Mellin, NUFFT, QFT, Radon, SDFT, SFT, SHT, STFT, and Wavelet.
 - Define explicit mixed-precision support or unsupported records for WGPU/cudatile backend crates.

@@ -237,6 +237,7 @@ dependencies = [
 name = "apollo-hilbert"
 version = "0.1.0"
 dependencies = [
+ "apollo-fft",
  "approx",
  "num-complex",
  "proptest",

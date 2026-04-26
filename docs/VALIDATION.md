@@ -315,3 +315,7 @@ by unit and property tests against analytical identities and direct references.
   and mixed `f16` forward execution, `f32` inverse roundtrip, and
   profile/storage mismatch rejection against the owner `f64` graph-basis
   multiply.
+- `apollo-hilbert` typed CPU storage validation covers caller-owned `f64`,
+  `f32`, and mixed `f16` quadrature execution, analytic-signal real-part
+  preservation, and profile/storage mismatch rejection against the owner `f64`
+  analytic-mask path.

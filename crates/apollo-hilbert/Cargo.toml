@@ -8,6 +8,7 @@ repository = "https://github.com/ryancinsight/kwavers"
 description = "Hilbert transform and analytic-signal plans for Apollo"
 
 [dependencies]
+apollo-fft = { path = "../apollo-fft" }
 num-complex = "0.4"
 rayon = "1.10"
 serde = { version = "1.0", features = ["derive"] }
