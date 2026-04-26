@@ -8,6 +8,7 @@ repository = "https://github.com/ryancinsight/kwavers"
 description = "Discrete Radon transform and filtered backprojection plans for Apollo"
 
 [dependencies]
+apollo-fft = { path = "../apollo-fft" }
 ndarray = { version = "0.16", features = ["rayon"] }
 num-complex = "0.4"
 rayon = "1.10"

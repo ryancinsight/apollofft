@@ -327,3 +327,7 @@ by unit and property tests against analytical identities and direct references.
   `Complex32`, and mixed `[f16; 2]` forward/inverse execution, represented-input
   parity, inverse roundtrip, and profile/storage mismatch rejection against the
   owner `Complex64` dense unitary QFT path.
+- `apollo-radon` typed CPU storage validation covers caller-owned `f64`, `f32`,
+  and mixed `f16` forward/backprojection execution, represented-input projection
+  parity, and profile/storage mismatch rejection against the owner discrete
+  projection and adjoint kernels.

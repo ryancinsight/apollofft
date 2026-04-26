@@ -32,4 +32,7 @@ pub enum RadonError {
     /// Sinogram shape does not match the plan.
     #[error("sinogram shape does not match the plan")]
     SinogramShapeMismatch,
+    /// Precision profile does not match the requested storage type.
+    #[error("precision profile does not match storage type")]
+    PrecisionMismatch,
 }

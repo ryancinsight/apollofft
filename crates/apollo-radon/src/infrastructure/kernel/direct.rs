@@ -12,6 +12,20 @@ use rayon::prelude::*;
 #[must_use]
 pub fn forward_project(image: &Array2<f64>, geometry: &ParallelBeamGeometry) -> Array2<f64> {
     let mut sinogram = Array2::zeros((geometry.angle_count(), geometry.detector_count()));
+    forward_project_into(image, geometry, &mut sinogram);
+    sinogram
+}
+
+/// Execute the forward discrete Radon projection into caller-owned storage.
+///
+/// The output is cleared before accumulation so callers can safely reuse a
+/// sinogram buffer across repeated projections.
+pub fn forward_project_into(
+    image: &Array2<f64>,
+    geometry: &ParallelBeamGeometry,
+    sinogram: &mut Array2<f64>,
+) {
+    sinogram.fill(0.0);
     sinogram
         .axis_iter_mut(Axis(0))
         .into_par_iter()
@@ -25,7 +39,6 @@ pub fn forward_project(image: &Array2<f64>, geometry: &ParallelBeamGeometry) -> 
                 }
             }
         });
-    sinogram
 }
 
 /// Execute the adjoint of the discrete Radon projection.
@@ -37,6 +50,17 @@ pub fn forward_project(image: &Array2<f64>, geometry: &ParallelBeamGeometry) -> 
 pub fn adjoint_backproject(sinogram: &Array2<f64>, geometry: &ParallelBeamGeometry) -> Array2<f64> {
     let cols = geometry.cols();
     let mut image = Array2::zeros((geometry.rows(), cols));
+    adjoint_backproject_into(sinogram, geometry, &mut image);
+    image
+}
+
+/// Execute the adjoint projection into caller-owned image storage.
+pub fn adjoint_backproject_into(
+    sinogram: &Array2<f64>,
+    geometry: &ParallelBeamGeometry,
+    image: &mut Array2<f64>,
+) {
+    let cols = geometry.cols();
     image
         .axis_iter_mut(Axis(0))
         .into_par_iter()
@@ -55,7 +79,6 @@ pub fn adjoint_backproject(sinogram: &Array2<f64>, geometry: &ParallelBeamGeomet
                 row[c] = value;
             }
         });
-    image
 }
 
 /// Deposit mass at fractional detector index into a single sinogram row

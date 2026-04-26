@@ -22,9 +22,11 @@ pub mod infrastructure;
 /// Value-semantic verification.
 pub mod verification;
 
-pub use application::execution::plan::radon::RadonPlan;
+pub use application::execution::plan::radon::{RadonPlan, RadonStorage};
 pub use domain::contracts::error::{RadonError, RadonResult};
 pub use domain::geometry::parallel_beam::ParallelBeamGeometry;
 pub use domain::projection::sinogram::Sinogram;
-pub use infrastructure::kernel::direct::{adjoint_backproject, forward_project};
+pub use infrastructure::kernel::direct::{
+    adjoint_backproject, adjoint_backproject_into, forward_project, forward_project_into,
+};
 pub use infrastructure::kernel::filter::{ramp_filter_projection, ramp_filter_projection_into};
