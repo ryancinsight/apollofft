@@ -17,6 +17,7 @@ pub use application::plan::NttWgpuPlan;
 pub use domain::capabilities::WgpuCapabilities;
 pub use domain::error::{WgpuError, WgpuResult};
 pub use infrastructure::device::{wgpu_available, NttWgpuBackend};
+pub use infrastructure::kernel::NttGpuBuffers;
 
 /// CPU transform marker proving dependency direction into the owning transform crate.
 pub type CpuTransformMarker = apollo_ntt::NttPlan;

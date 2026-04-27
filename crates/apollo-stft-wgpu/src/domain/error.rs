@@ -58,4 +58,7 @@ pub enum WgpuError {
         /// Name of the unsupported operation.
         operation: &'static str,
     },
+    /// Requested precision profile does not match the typed storage.
+    #[error("precision profile does not match typed STFT WGPU storage")]
+    InvalidPrecisionProfile,
 }

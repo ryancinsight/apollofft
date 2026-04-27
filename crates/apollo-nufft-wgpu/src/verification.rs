@@ -2,6 +2,7 @@
 
 #[cfg(test)]
 mod tests {
+    use apollo_fft::{f16, PrecisionProfile};
     use apollo_nufft::{
         nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type1_3d_fast, nufft_type2_1d,
         nufft_type2_1d_fast, nufft_type2_3d, nufft_type2_3d_fast, UniformDomain1D, UniformGrid3D,
@@ -24,6 +25,11 @@ mod tests {
         assert!(capabilities.supports_type2_3d);
         assert!(!capabilities.supports_fast_type1_1d);
         assert!(!capabilities.supports_fast_type2_1d);
+        assert!(!capabilities.supports_mixed_precision);
+        assert_eq!(
+            capabilities.default_precision_profile,
+            PrecisionProfile::LOW_PRECISION_F32
+        );
     }
 
     #[test]
@@ -38,6 +44,11 @@ mod tests {
         assert!(capabilities.supports_fast_type2_1d);
         assert!(capabilities.supports_fast_type1_3d);
         assert!(capabilities.supports_fast_type2_3d);
+        assert!(capabilities.supports_mixed_precision);
+        assert_eq!(
+            capabilities.default_precision_profile,
+            PrecisionProfile::LOW_PRECISION_F32
+        );
     }
 
     #[test]
@@ -120,6 +131,48 @@ mod tests {
     }
 
     #[test]
+    fn type1_1d_typed_mixed_storage_matches_represented_input_when_device_exists() {
+        let Some(backend) = backend_or_skip() else {
+            return;
+        };
+        let domain = UniformDomain1D::new(8, 0.25).expect("domain");
+        let plan = NufftWgpuPlan1D::new(domain, 2, 6);
+        let positions = [0.0_f32, 0.25, 0.7, 1.15];
+        let values16 = [
+            [f16::from_f32(1.0), f16::from_f32(0.0)],
+            [f16::from_f32(0.5), f16::from_f32(-0.25)],
+            [f16::from_f32(-0.75), f16::from_f32(0.5)],
+            [f16::from_f32(0.25), f16::from_f32(0.75)],
+        ];
+        let represented: Vec<Complex32> = values16
+            .iter()
+            .map(|value| Complex32::new(value[0].to_f32(), value[1].to_f32()))
+            .collect();
+        let expected = backend
+            .execute_type1_1d(&plan, &positions, &represented)
+            .expect("represented type1 1D");
+        let mut actual = vec![[f16::from_f32(0.0), f16::from_f32(0.0)]; domain.n];
+
+        backend
+            .execute_type1_1d_typed_into(
+                &plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &positions,
+                &values16,
+                &mut actual,
+            )
+            .expect("mixed type1 1D");
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            let expected_re = f16::from_f32(expected.re as f32);
+            let expected_im = f16::from_f32(expected.im as f32);
+            assert_eq!(actual[0].to_bits(), expected_re.to_bits());
+            assert_eq!(actual[1].to_bits(), expected_im.to_bits());
+        }
+    }
+
+    #[test]
     fn type1_3d_matches_cpu_exact_reference_when_device_exists() {
         let Some(backend) = backend_or_skip() else {
             return;
@@ -149,6 +202,50 @@ mod tests {
         assert_eq!(actual.dim(), expected.dim());
         for (actual, expected) in actual.iter().zip(expected.iter()) {
             assert_complex64_close(*actual, *expected, 8.0e-5);
+        }
+    }
+
+    #[test]
+    fn type1_3d_typed_mixed_storage_matches_represented_input_when_device_exists() {
+        let Some(backend) = backend_or_skip() else {
+            return;
+        };
+        let grid = UniformGrid3D::new(3, 2, 2, 0.5, 0.75, 1.0).expect("grid");
+        let plan = NufftWgpuPlan3D::new(grid, 2, 6);
+        let positions = [(0.0_f32, 0.0, 0.0), (0.35, 0.7, 0.5), (1.1, 0.2, 1.4)];
+        let values16 = [
+            [f16::from_f32(1.0), f16::from_f32(0.0)],
+            [f16::from_f32(-0.25), f16::from_f32(0.5)],
+            [f16::from_f32(0.75), f16::from_f32(-0.5)],
+        ];
+        let represented: Vec<Complex32> = values16
+            .iter()
+            .map(|value| Complex32::new(value[0].to_f32(), value[1].to_f32()))
+            .collect();
+        let expected = backend
+            .execute_type1_3d(&plan, &positions, &represented)
+            .expect("represented type1 3D");
+        let mut actual = Array3::from_elem(
+            (grid.nx, grid.ny, grid.nz),
+            [f16::from_f32(0.0), f16::from_f32(0.0)],
+        );
+
+        backend
+            .execute_type1_3d_typed_into(
+                &plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &positions,
+                &values16,
+                &mut actual,
+            )
+            .expect("mixed type1 3D");
+
+        assert_eq!(actual.dim(), expected.dim());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            let expected_re = f16::from_f32(expected.re as f32);
+            let expected_im = f16::from_f32(expected.im as f32);
+            assert_eq!(actual[0].to_bits(), expected_re.to_bits());
+            assert_eq!(actual[1].to_bits(), expected_im.to_bits());
         }
     }
 
@@ -211,6 +308,52 @@ mod tests {
     }
 
     #[test]
+    fn type2_1d_typed_mixed_storage_matches_represented_input_when_device_exists() {
+        let Some(backend) = backend_or_skip() else {
+            return;
+        };
+        let domain = UniformDomain1D::new(8, 0.25).expect("domain");
+        let plan = NufftWgpuPlan1D::new(domain, 2, 6);
+        let positions = [0.0_f32, 0.25, 0.7, 1.15, 1.8];
+        let coefficients16 = [
+            [f16::from_f32(1.0), f16::from_f32(0.0)],
+            [f16::from_f32(0.5), f16::from_f32(-0.25)],
+            [f16::from_f32(-0.75), f16::from_f32(0.5)],
+            [f16::from_f32(0.25), f16::from_f32(0.75)],
+            [f16::from_f32(-0.5), f16::from_f32(-0.1)],
+            [f16::from_f32(0.125), f16::from_f32(0.25)],
+            [f16::from_f32(0.8), f16::from_f32(-0.6)],
+            [f16::from_f32(-0.3), f16::from_f32(0.4)],
+        ];
+        let represented: Vec<Complex32> = coefficients16
+            .iter()
+            .map(|value| Complex32::new(value[0].to_f32(), value[1].to_f32()))
+            .collect();
+        let expected = backend
+            .execute_type2_1d(&plan, &represented, &positions)
+            .expect("represented type2 1D");
+        let mut actual = vec![[f16::from_f32(0.0), f16::from_f32(0.0)]; positions.len()];
+
+        backend
+            .execute_type2_1d_typed_into(
+                &plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &coefficients16,
+                &positions,
+                &mut actual,
+            )
+            .expect("mixed type2 1D");
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            let expected_re = f16::from_f32(expected.re as f32);
+            let expected_im = f16::from_f32(expected.im as f32);
+            assert_eq!(actual[0].to_bits(), expected_re.to_bits());
+            assert_eq!(actual[1].to_bits(), expected_im.to_bits());
+        }
+    }
+
+    #[test]
     fn fast_type1_1d_matches_cpu_gridded_reference_when_device_exists() {
         let Some(backend) = backend_or_skip() else {
             return;
@@ -238,6 +381,48 @@ mod tests {
         assert_eq!(actual.len(), expected.len());
         for (actual, expected) in actual.iter().zip(expected.iter()) {
             assert_complex64_close(*actual, *expected, 1.5e-3);
+        }
+    }
+
+    #[test]
+    fn fast_type1_1d_typed_mixed_storage_matches_represented_input_when_device_exists() {
+        let Some(backend) = backend_or_skip() else {
+            return;
+        };
+        let domain = UniformDomain1D::new(8, 0.25).expect("domain");
+        let plan = NufftWgpuPlan1D::new(domain, 2, 6);
+        let positions = [0.0_f32, 0.25, 0.7, 1.15];
+        let values16 = [
+            [f16::from_f32(1.0), f16::from_f32(0.0)],
+            [f16::from_f32(0.5), f16::from_f32(-0.25)],
+            [f16::from_f32(-0.75), f16::from_f32(0.5)],
+            [f16::from_f32(0.25), f16::from_f32(0.75)],
+        ];
+        let represented: Vec<Complex32> = values16
+            .iter()
+            .map(|value| Complex32::new(value[0].to_f32(), value[1].to_f32()))
+            .collect();
+        let expected = backend
+            .execute_fast_type1_1d(&plan, &positions, &represented)
+            .expect("represented fast type1 1D");
+        let mut actual = vec![[f16::from_f32(0.0), f16::from_f32(0.0)]; domain.n];
+
+        backend
+            .execute_fast_type1_1d_typed_into(
+                &plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &positions,
+                &values16,
+                &mut actual,
+            )
+            .expect("mixed fast type1 1D");
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            let expected_re = f16::from_f32(expected.re as f32);
+            let expected_im = f16::from_f32(expected.im as f32);
+            assert_eq!(actual[0].to_bits(), expected_re.to_bits());
+            assert_eq!(actual[1].to_bits(), expected_im.to_bits());
         }
     }
 
@@ -282,6 +467,52 @@ mod tests {
     }
 
     #[test]
+    fn fast_type2_1d_typed_mixed_storage_matches_represented_input_when_device_exists() {
+        let Some(backend) = backend_or_skip() else {
+            return;
+        };
+        let domain = UniformDomain1D::new(8, 0.25).expect("domain");
+        let plan = NufftWgpuPlan1D::new(domain, 2, 6);
+        let positions = [0.0_f32, 0.25, 0.7, 1.15, 1.8];
+        let coefficients16 = [
+            [f16::from_f32(1.0), f16::from_f32(0.0)],
+            [f16::from_f32(0.5), f16::from_f32(-0.25)],
+            [f16::from_f32(-0.75), f16::from_f32(0.5)],
+            [f16::from_f32(0.25), f16::from_f32(0.75)],
+            [f16::from_f32(-0.5), f16::from_f32(-0.1)],
+            [f16::from_f32(0.125), f16::from_f32(0.25)],
+            [f16::from_f32(0.8), f16::from_f32(-0.6)],
+            [f16::from_f32(-0.3), f16::from_f32(0.4)],
+        ];
+        let represented: Vec<Complex32> = coefficients16
+            .iter()
+            .map(|value| Complex32::new(value[0].to_f32(), value[1].to_f32()))
+            .collect();
+        let expected = backend
+            .execute_fast_type2_1d(&plan, &represented, &positions)
+            .expect("represented fast type2 1D");
+        let mut actual = vec![[f16::from_f32(0.0), f16::from_f32(0.0)]; positions.len()];
+
+        backend
+            .execute_fast_type2_1d_typed_into(
+                &plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &coefficients16,
+                &positions,
+                &mut actual,
+            )
+            .expect("mixed fast type2 1D");
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            let expected_re = f16::from_f32(expected.re as f32);
+            let expected_im = f16::from_f32(expected.im as f32);
+            assert_eq!(actual[0].to_bits(), expected_re.to_bits());
+            assert_eq!(actual[1].to_bits(), expected_im.to_bits());
+        }
+    }
+
+    #[test]
     fn fast_type1_3d_matches_cpu_gridded_reference_when_device_exists() {
         let Some(backend) = backend_or_skip() else {
             return;
@@ -315,6 +546,50 @@ mod tests {
     }
 
     #[test]
+    fn fast_type1_3d_typed_mixed_storage_matches_represented_input_when_device_exists() {
+        let Some(backend) = backend_or_skip() else {
+            return;
+        };
+        let grid = UniformGrid3D::new(3, 2, 2, 0.5, 0.75, 1.0).expect("grid");
+        let plan = NufftWgpuPlan3D::new(grid, 2, 6);
+        let positions = [(0.0_f32, 0.0, 0.0), (0.35, 0.7, 0.5), (1.1, 0.2, 1.4)];
+        let values16 = [
+            [f16::from_f32(1.0), f16::from_f32(0.0)],
+            [f16::from_f32(-0.25), f16::from_f32(0.5)],
+            [f16::from_f32(0.75), f16::from_f32(-0.5)],
+        ];
+        let represented: Vec<Complex32> = values16
+            .iter()
+            .map(|value| Complex32::new(value[0].to_f32(), value[1].to_f32()))
+            .collect();
+        let expected = backend
+            .execute_fast_type1_3d(&plan, &positions, &represented)
+            .expect("represented fast type1 3D");
+        let mut actual = Array3::from_elem(
+            (grid.nx, grid.ny, grid.nz),
+            [f16::from_f32(0.0), f16::from_f32(0.0)],
+        );
+
+        backend
+            .execute_fast_type1_3d_typed_into(
+                &plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &positions,
+                &values16,
+                &mut actual,
+            )
+            .expect("mixed fast type1 3D");
+
+        assert_eq!(actual.dim(), expected.dim());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            let expected_re = f16::from_f32(expected.re as f32);
+            let expected_im = f16::from_f32(expected.im as f32);
+            assert_eq!(actual[0].to_bits(), expected_re.to_bits());
+            assert_eq!(actual[1].to_bits(), expected_im.to_bits());
+        }
+    }
+
+    #[test]
     fn fast_type2_3d_matches_cpu_gridded_reference_when_device_exists() {
         let Some(backend) = backend_or_skip() else {
             return;
@@ -343,6 +618,119 @@ mod tests {
         for (actual, expected) in actual.iter().zip(expected.iter()) {
             assert_complex64_close(*actual, *expected, 2.0e-3);
         }
+    }
+
+    #[test]
+    fn fast_type2_3d_typed_mixed_storage_matches_represented_input_when_device_exists() {
+        let Some(backend) = backend_or_skip() else {
+            return;
+        };
+        let grid = UniformGrid3D::new(3, 2, 2, 0.5, 0.75, 1.0).expect("grid");
+        let plan = NufftWgpuPlan3D::new(grid, 2, 6);
+        let positions = [(0.0_f32, 0.0, 0.0), (0.35, 0.7, 0.5), (1.1, 0.2, 1.4)];
+        let modes16 = Array3::from_shape_fn((grid.nx, grid.ny, grid.nz), |(kx, ky, kz)| {
+            [
+                f16::from_f32(0.25 + 0.1 * kx as f32 - 0.05 * ky as f32 + 0.03 * kz as f32),
+                f16::from_f32(-0.4 + 0.07 * kx as f32 + 0.11 * ky as f32 - 0.02 * kz as f32),
+            ]
+        });
+        let represented =
+            modes16.mapv(|value| Complex32::new(value[0].to_f32(), value[1].to_f32()));
+        let expected = backend
+            .execute_fast_type2_3d(&plan, &represented, &positions)
+            .expect("represented fast type2 3D");
+        let mut actual = vec![[f16::from_f32(0.0), f16::from_f32(0.0)]; positions.len()];
+
+        backend
+            .execute_fast_type2_3d_typed_into(
+                &plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &modes16,
+                &positions,
+                &mut actual,
+            )
+            .expect("mixed fast type2 3D");
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            let expected_re = f16::from_f32(expected.re as f32);
+            let expected_im = f16::from_f32(expected.im as f32);
+            assert_eq!(actual[0].to_bits(), expected_re.to_bits());
+            assert_eq!(actual[1].to_bits(), expected_im.to_bits());
+        }
+    }
+
+    #[test]
+    fn fast_type2_3d_diagnostics_capture_load_and_ifft_grids_when_device_exists() {
+        let Some(backend) = backend_or_skip() else {
+            return;
+        };
+        let grid = UniformGrid3D::new(3, 2, 2, 0.5, 0.75, 1.0).expect("grid");
+        let plan = NufftWgpuPlan3D::new(grid, 2, 6);
+        let positions = [(0.0_f32, 0.0, 0.0), (0.35, 0.7, 0.5), (1.1, 0.2, 1.4)];
+        let modes = Array3::from_shape_fn((grid.nx, grid.ny, grid.nz), |(kx, ky, kz)| {
+            Complex32::new(
+                0.25 + 0.1 * kx as f32 - 0.05 * ky as f32 + 0.03 * kz as f32,
+                -0.4 + 0.07 * kx as f32 + 0.11 * ky as f32 - 0.02 * kz as f32,
+            )
+        });
+
+        let expected = backend
+            .execute_fast_type2_3d(&plan, &modes, &positions)
+            .expect("standard fast type2 3D");
+        let (actual, diagnostics) = backend
+            .execute_fast_type2_3d_with_diagnostics(&plan, &modes, &positions)
+            .expect("diagnostic fast type2 3D");
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            assert_complex64_close(*actual, *expected, 1.0e-6);
+        }
+
+        let mx = (grid.nx * plan.oversampling())
+            .max(2 * plan.kernel_width() + 1)
+            .next_power_of_two();
+        let my = (grid.ny * plan.oversampling())
+            .max(2 * plan.kernel_width() + 1)
+            .next_power_of_two();
+        let mz = (grid.nz * plan.oversampling())
+            .max(2 * plan.kernel_width() + 1)
+            .next_power_of_two();
+        let grid_len = mx * my * mz;
+        assert_eq!(diagnostics.after_load.re.len(), grid_len);
+        assert_eq!(diagnostics.after_load.im.len(), grid_len);
+        assert_eq!(diagnostics.after_ifft.re.len(), grid_len);
+        assert_eq!(diagnostics.after_ifft.im.len(), grid_len);
+        assert!(diagnostics
+            .after_load
+            .re
+            .iter()
+            .chain(diagnostics.after_load.im.iter())
+            .all(|value| value.is_finite()));
+        assert!(diagnostics
+            .after_ifft
+            .re
+            .iter()
+            .chain(diagnostics.after_ifft.im.iter())
+            .all(|value| value.is_finite()));
+        assert!(
+            diagnostics
+                .after_load
+                .re
+                .iter()
+                .chain(diagnostics.after_load.im.iter())
+                .any(|value| value.abs() > 0.0),
+            "loaded 3D diagnostic grid must contain deconvolved Fourier coefficients"
+        );
+        assert!(
+            diagnostics
+                .after_ifft
+                .re
+                .iter()
+                .chain(diagnostics.after_ifft.im.iter())
+                .any(|value| value.abs() > 0.0),
+            "3D IFFT diagnostic grid must contain interpolable spatial samples"
+        );
     }
 
     #[test]
@@ -392,6 +780,46 @@ mod tests {
         assert_eq!(actual.len(), expected.len());
         for (actual, expected) in actual.iter().zip(expected.iter()) {
             assert_complex64_close(*actual, *expected, 1.2e-4);
+        }
+    }
+
+    #[test]
+    fn type2_3d_typed_mixed_storage_matches_represented_input_when_device_exists() {
+        let Some(backend) = backend_or_skip() else {
+            return;
+        };
+        let grid = UniformGrid3D::new(3, 2, 2, 0.5, 0.75, 1.0).expect("grid");
+        let plan = NufftWgpuPlan3D::new(grid, 2, 6);
+        let positions = [(0.0_f32, 0.0, 0.0), (0.35, 0.7, 0.5), (1.1, 0.2, 1.4)];
+        let modes16 = Array3::from_shape_fn((grid.nx, grid.ny, grid.nz), |(kx, ky, kz)| {
+            [
+                f16::from_f32(0.25 + 0.1 * kx as f32 - 0.05 * ky as f32 + 0.03 * kz as f32),
+                f16::from_f32(-0.4 + 0.07 * kx as f32 + 0.11 * ky as f32 - 0.02 * kz as f32),
+            ]
+        });
+        let represented =
+            modes16.mapv(|value| Complex32::new(value[0].to_f32(), value[1].to_f32()));
+        let expected = backend
+            .execute_type2_3d(&plan, &represented, &positions)
+            .expect("represented type2 3D");
+        let mut actual = vec![[f16::from_f32(0.0), f16::from_f32(0.0)]; positions.len()];
+
+        backend
+            .execute_type2_3d_typed_into(
+                &plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &modes16,
+                &positions,
+                &mut actual,
+            )
+            .expect("mixed type2 3D");
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            let expected_re = f16::from_f32(expected.re as f32);
+            let expected_im = f16::from_f32(expected.im as f32);
+            assert_eq!(actual[0].to_bits(), expected_re.to_bits());
+            assert_eq!(actual[1].to_bits(), expected_im.to_bits());
         }
     }
 
@@ -479,6 +907,74 @@ mod tests {
                 "constancy regression at position index {i}: {value:?} vs reference {reference:?}"
             );
         }
+    }
+
+    #[test]
+    fn fast_type2_1d_diagnostics_capture_load_and_ifft_grids_when_device_exists() {
+        let Some(backend) = backend_or_skip() else {
+            return;
+        };
+        let domain = UniformDomain1D::new(8, 0.25).expect("domain");
+        let plan = NufftWgpuPlan1D::new(domain, 2, 6);
+        let positions = [0.0_f32, 0.25, 0.7, 1.15, 1.8];
+        let coefficients = [
+            Complex32::new(1.0, 0.0),
+            Complex32::new(0.5, -0.25),
+            Complex32::new(-0.75, 0.5),
+            Complex32::new(0.25, 0.75),
+            Complex32::new(-0.5, -0.1),
+            Complex32::new(0.125, 0.25),
+            Complex32::new(0.8, -0.6),
+            Complex32::new(-0.3, 0.4),
+        ];
+
+        let expected = backend
+            .execute_fast_type2_1d(&plan, &coefficients, &positions)
+            .expect("standard fast type2 1D");
+        let (actual, diagnostics) = backend
+            .execute_fast_type2_1d_with_diagnostics(&plan, &coefficients, &positions)
+            .expect("diagnostic fast type2 1D");
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            assert_complex64_close(*actual, *expected, 1.0e-6);
+        }
+
+        let oversampled_len = plan.oversampling() * plan.domain().n;
+        assert_eq!(diagnostics.after_load.re.len(), oversampled_len);
+        assert_eq!(diagnostics.after_load.im.len(), oversampled_len);
+        assert_eq!(diagnostics.after_ifft.re.len(), oversampled_len);
+        assert_eq!(diagnostics.after_ifft.im.len(), oversampled_len);
+        assert!(diagnostics
+            .after_load
+            .re
+            .iter()
+            .chain(diagnostics.after_load.im.iter())
+            .all(|value| value.is_finite()));
+        assert!(diagnostics
+            .after_ifft
+            .re
+            .iter()
+            .chain(diagnostics.after_ifft.im.iter())
+            .all(|value| value.is_finite()));
+        assert!(
+            diagnostics
+                .after_load
+                .re
+                .iter()
+                .chain(diagnostics.after_load.im.iter())
+                .any(|value| value.abs() > 0.0),
+            "loaded diagnostic grid must contain deconvolved Fourier coefficients"
+        );
+        assert!(
+            diagnostics
+                .after_ifft
+                .re
+                .iter()
+                .chain(diagnostics.after_ifft.im.iter())
+                .any(|value| value.abs() > 0.0),
+            "IFFT diagnostic grid must contain interpolable spatial samples"
+        );
     }
 
     fn backend_or_skip() -> Option<NufftWgpuBackend> {

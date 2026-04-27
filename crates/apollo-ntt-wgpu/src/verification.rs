@@ -13,6 +13,12 @@ mod tests {
         assert!(capabilities.device_available);
         assert!(capabilities.supports_forward);
         assert!(capabilities.supports_inverse);
+        assert!(!capabilities.supports_mixed_precision);
+        assert!(capabilities.supports_quantized_storage);
+        assert_eq!(
+            capabilities.default_precision_profile,
+            apollo_fft::PrecisionProfile::LOW_PRECISION_F32
+        );
     }
 
     #[test]
@@ -81,6 +87,152 @@ mod tests {
             .expect("wgpu inverse execution");
 
         assert_eq!(recovered, input);
+    }
+
+    #[test]
+    fn quantized_u32_storage_matches_allocating_u64_execution_when_device_exists() {
+        let Ok(backend) = NttWgpuBackend::try_default() else {
+            return;
+        };
+        let input = vec![1_u32, 1, 2, 3, 5, 8, 13, 21];
+        let input64: Vec<u64> = input.iter().map(|&value| u64::from(value)).collect();
+        let plan = backend.plan(input.len());
+
+        let expected_forward = backend
+            .execute_forward(&plan, &input64)
+            .expect("allocating forward");
+        let mut quantized_forward = vec![0_u32; input.len()];
+        backend
+            .execute_forward_quantized_into(&plan, &input, &mut quantized_forward)
+            .expect("quantized forward");
+        assert_eq!(
+            quantized_forward,
+            expected_forward
+                .iter()
+                .map(|&value| value as u32)
+                .collect::<Vec<_>>()
+        );
+
+        let mut quantized_inverse = vec![0_u32; input.len()];
+        backend
+            .execute_inverse_quantized_into(&plan, &quantized_forward, &mut quantized_inverse)
+            .expect("quantized inverse");
+        assert_eq!(quantized_inverse, input);
+    }
+
+    #[test]
+    fn quantized_u32_reusable_buffers_match_allocating_quantized_path_when_device_exists() {
+        let Ok(backend) = NttWgpuBackend::try_default() else {
+            return;
+        };
+        let input = vec![3_u32, 1, 4, 1, 5, 9, 2, 6];
+        let plan = backend.plan(input.len());
+        let mut buffers = backend.create_buffers(&plan).expect("reusable buffers");
+
+        let mut allocating_forward = vec![0_u32; input.len()];
+        backend
+            .execute_forward_quantized_into(&plan, &input, &mut allocating_forward)
+            .expect("allocating quantized forward");
+        backend
+            .execute_forward_quantized_with_buffers(&plan, &input, &mut buffers)
+            .expect("buffered quantized forward");
+        let expected_forward: Vec<u64> = allocating_forward
+            .iter()
+            .map(|&value| u64::from(value))
+            .collect();
+        assert_eq!(backend.buffer_output(&buffers), expected_forward.as_slice());
+
+        let spectrum = allocating_forward;
+        let mut allocating_inverse = vec![0_u32; input.len()];
+        backend
+            .execute_inverse_quantized_into(&plan, &spectrum, &mut allocating_inverse)
+            .expect("allocating quantized inverse");
+        backend
+            .execute_inverse_quantized_with_buffers(&plan, &spectrum, &mut buffers)
+            .expect("buffered quantized inverse");
+        let expected_inverse: Vec<u64> = allocating_inverse
+            .iter()
+            .map(|&value| u64::from(value))
+            .collect();
+        assert_eq!(backend.buffer_output(&buffers), expected_inverse.as_slice());
+        assert_eq!(allocating_inverse, input);
+    }
+
+    #[test]
+    fn quantized_u32_storage_rejects_output_length_mismatch_when_device_exists() {
+        let Ok(backend) = NttWgpuBackend::try_default() else {
+            return;
+        };
+        let plan = backend.plan(8);
+        let mut output = vec![0_u32; 4];
+        let err = backend
+            .execute_forward_quantized_into(&plan, &[0; 8], &mut output)
+            .expect_err("output length mismatch must fail");
+        assert_eq!(
+            err,
+            WgpuError::OutputLengthMismatch {
+                expected: 8,
+                actual: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn reusable_buffers_match_allocating_forward_and_inverse_when_device_exists() {
+        let Ok(backend) = NttWgpuBackend::try_default() else {
+            return;
+        };
+        let input = vec![1_u64, 4, 9, 16, 25, 36, 49, 64];
+        let plan = backend.plan(input.len());
+        let mut buffers = backend
+            .create_buffers(&plan)
+            .expect("reusable buffers for plan");
+
+        let allocating_forward = backend
+            .execute_forward(&plan, &input)
+            .expect("allocating forward");
+        backend
+            .execute_forward_with_buffers(&plan, &input, &mut buffers)
+            .expect("buffered forward");
+        assert_eq!(
+            backend.buffer_output(&buffers),
+            allocating_forward.as_slice()
+        );
+
+        let spectrum = backend.buffer_output(&buffers).to_vec();
+        let allocating_inverse = backend
+            .execute_inverse(&plan, &spectrum)
+            .expect("allocating inverse");
+        backend
+            .execute_inverse_with_buffers(&plan, &spectrum, &mut buffers)
+            .expect("buffered inverse");
+        assert_eq!(
+            backend.buffer_output(&buffers),
+            allocating_inverse.as_slice()
+        );
+        assert_eq!(backend.buffer_output(&buffers), input.as_slice());
+    }
+
+    #[test]
+    fn reusable_buffers_reject_plan_length_mismatch_when_device_exists() {
+        let Ok(backend) = NttWgpuBackend::try_default() else {
+            return;
+        };
+        let plan = backend.plan(8);
+        let short_plan = backend.plan(4);
+        let mut short_buffers = backend
+            .create_buffers(&short_plan)
+            .expect("short reusable buffers");
+        let err = backend
+            .execute_forward_with_buffers(&plan, &[0; 8], &mut short_buffers)
+            .expect_err("buffer length mismatch must fail");
+        assert_eq!(
+            err,
+            WgpuError::BufferLengthMismatch {
+                expected: 8,
+                actual: 4,
+            }
+        );
     }
 
     #[test]

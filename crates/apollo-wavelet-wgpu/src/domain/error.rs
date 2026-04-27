@@ -44,6 +44,9 @@ pub enum WgpuError {
         /// Error detail from the WGPU runtime.
         message: String,
     },
+    /// Requested precision profile does not match the typed storage.
+    #[error("precision profile does not match typed Haar DWT WGPU storage")]
+    InvalidPrecisionProfile,
     /// The requested operation is not implemented by the current WGPU capability set.
     #[error("{operation} is unsupported by the current WGPU capability set")]
     UnsupportedExecution {

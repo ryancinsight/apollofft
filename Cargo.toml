@@ -34,7 +34,6 @@ members = [
     "crates/apollo-stft-wgpu",
     "crates/apollo-fft-wgpu",
     "crates/apollo-nufft-wgpu",
-    "crates/apollo-cudatile",
     "crates/apollo-validation",
     "crates/apollo-wavelet",
     "crates/apollo-wavelet-wgpu",

@@ -2,8 +2,9 @@
 
 #[cfg(test)]
 mod tests {
+    use apollo_fft::{f16, PrecisionProfile};
     use apollo_radon::RadonPlan;
-    use ndarray::array;
+    use ndarray::{array, Array2};
 
     use crate::{RadonWgpuBackend, RadonWgpuPlan, WgpuCapabilities, WgpuError};
 
@@ -13,6 +14,11 @@ mod tests {
         assert!(capabilities.device_available);
         assert!(capabilities.supports_forward);
         assert!(!capabilities.supports_inverse);
+        assert!(capabilities.supports_mixed_precision);
+        assert_eq!(
+            capabilities.default_precision_profile,
+            apollo_fft::PrecisionProfile::LOW_PRECISION_F32
+        );
     }
 
     #[test]
@@ -83,6 +89,64 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn typed_flat_mixed_storage_matches_represented_f32_execution_when_device_exists() {
+        let Ok(backend) = RadonWgpuBackend::try_default() else {
+            return;
+        };
+        let angles = vec![0.0_f32, std::f32::consts::FRAC_PI_2];
+        let plan = backend.plan(3, 3, angles.len(), 5, 1.0);
+
+        // Build flat f32 image matching the existing forward test.
+        let flat_f32: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+
+        // Quantize to f16 and recover represented f32 for the reference path.
+        let flat_f16: Vec<f16> = flat_f32.iter().copied().map(f16::from_f32).collect();
+        let represented_f32: Vec<f32> = flat_f16.iter().map(|v| v.to_f32()).collect();
+        let image_represented = Array2::from_shape_vec((3, 3), represented_f32).expect("reshape");
+
+        let expected = backend
+            .execute_forward(&plan, &image_represented, &angles)
+            .expect("represented f32 forward");
+        let actual = backend
+            .execute_forward_flat_typed(
+                &plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &flat_f16,
+                &angles,
+            )
+            .expect("typed flat mixed forward");
+
+        assert_eq!(actual.dim(), expected.dim());
+        for (index, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (f64::from(*a) - f64::from(*e)).abs() < 0.1,
+                "mismatch at index {index}: actual={a}, expected={e}"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_flat_path_rejects_profile_mismatch_when_device_exists() {
+        let Ok(backend) = RadonWgpuBackend::try_default() else {
+            return;
+        };
+        let angles = vec![0.0_f32, std::f32::consts::FRAC_PI_2];
+        let plan = backend.plan(3, 3, angles.len(), 5, 1.0);
+        let flat_f16: Vec<f16> = vec![f16::from_f32(1.0); plan.rows() * plan.cols()];
+
+        // f16 carries MIXED_PRECISION_F16_F32; passing LOW_PRECISION_F32 must fail.
+        let err = backend
+            .execute_forward_flat_typed::<f16>(
+                &plan,
+                PrecisionProfile::LOW_PRECISION_F32,
+                &flat_f16,
+                &angles,
+            )
+            .expect_err("profile mismatch must fail");
+        assert_eq!(err, WgpuError::InvalidPrecisionProfile);
     }
 
     #[test]

@@ -42,6 +42,9 @@ pub enum WgpuError {
         /// Length supplied by the caller.
         actual: usize,
     },
+    /// Requested precision profile does not match the typed storage.
+    #[error("precision profile does not match typed GFT WGPU storage")]
+    InvalidPrecisionProfile,
     /// Basis slice length does not equal len*len.
     #[error("basis length mismatch: expected {expected}, got {actual}")]
     BasisLengthMismatch {

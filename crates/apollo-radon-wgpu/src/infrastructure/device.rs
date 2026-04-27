@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use apollo_fft::PrecisionProfile;
+use apollo_radon::RadonStorage;
 use ndarray::Array2;
 
 use crate::application::plan::RadonWgpuPlan;
@@ -116,6 +118,45 @@ impl RadonWgpuBackend {
         Err(WgpuError::UnsupportedExecution {
             operation: "inverse",
         })
+    }
+
+    /// Execute the forward Radon projection from a flat typed image slice.
+    ///
+    /// `flat_image` must have exactly `plan.rows() * plan.cols()` elements in
+    /// row-major order. Promotes represented input once to `f32` before dispatch.
+    pub fn execute_forward_flat_typed<T: RadonStorage>(
+        &self,
+        plan: &RadonWgpuPlan,
+        precision: PrecisionProfile,
+        flat_image: &[T],
+        angles: &[f32],
+    ) -> WgpuResult<Array2<f32>> {
+        let expected = T::PROFILE;
+        if precision.storage != expected.storage || precision.compute != expected.compute {
+            return Err(WgpuError::InvalidPrecisionProfile);
+        }
+        let expected_len = plan.rows() * plan.cols();
+        if flat_image.len() != expected_len {
+            return Err(WgpuError::ImageShapeMismatch {
+                expected_rows: plan.rows(),
+                expected_cols: plan.cols(),
+                actual_rows: flat_image.len(),
+                actual_cols: 1,
+            });
+        }
+        let promoted: Vec<f32> = flat_image.iter().map(|v| v.to_f64() as f32).collect();
+        let image_2d =
+            Array2::from_shape_vec((plan.rows(), plan.cols()), promoted).map_err(|_| {
+                WgpuError::InvalidPlan {
+                    rows: plan.rows(),
+                    cols: plan.cols(),
+                    angle_count: plan.angle_count(),
+                    detector_count: plan.detector_count(),
+                    detector_spacing: plan.detector_spacing(),
+                    message: "flat image reshape failed",
+                }
+            })?;
+        self.execute_forward(plan, &image_2d, angles)
     }
 
     fn validate_inputs(

@@ -8,6 +8,7 @@ repository = "https://github.com/ryancinsight/kwavers"
 description = "WGPU backend boundary for Apollo FrFT"
 
 [dependencies]
+apollo-fft = { path = "../apollo-fft" }
 apollo-frft = { path = "../apollo-frft" }
 bytemuck = { version = "1.19", features = ["derive"] }
 num-complex = "0.4"

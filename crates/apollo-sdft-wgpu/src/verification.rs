@@ -2,6 +2,7 @@
 
 #[cfg(test)]
 mod tests {
+    use apollo_fft::{f16, PrecisionProfile};
     use apollo_sdft::SdftPlan;
 
     use crate::{SdftWgpuBackend, SdftWgpuPlan, WgpuCapabilities, WgpuError};
@@ -12,6 +13,11 @@ mod tests {
         assert!(capabilities.device_available);
         assert!(capabilities.supports_forward);
         assert!(!capabilities.supports_inverse);
+        assert!(capabilities.supports_mixed_precision);
+        assert_eq!(
+            capabilities.default_precision_profile,
+            apollo_fft::PrecisionProfile::LOW_PRECISION_F32
+        );
     }
 
     #[test]
@@ -105,5 +111,67 @@ mod tests {
                 actual: 4
             }
         );
+    }
+
+    #[test]
+    fn typed_mixed_storage_matches_represented_f32_execution_when_device_exists() {
+        let Ok(backend) = SdftWgpuBackend::try_default() else {
+            return;
+        };
+        let window_f32: [f32; 8] = [1.0, 0.5, -0.5, -1.0, 0.5, 1.0, -0.25, 0.75];
+        let window_f16: Vec<f16> = window_f32.iter().map(|&x| f16::from_f32(x)).collect();
+        let represented: Vec<f32> = window_f16.iter().map(|v| v.to_f32()).collect();
+        let plan = backend.plan(window_f16.len(), 4);
+        let f32_result = backend
+            .execute_forward(&plan, &represented)
+            .expect("f32 reference");
+        let mut typed_out: Vec<[f16; 2]> = vec![[f16::from_f32(0.0), f16::from_f32(0.0)]; 4];
+        backend
+            .execute_forward_typed_into(
+                &plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &window_f16,
+                &mut typed_out,
+            )
+            .expect("typed mixed forward");
+        for (actual, expected) in typed_out.iter().zip(f32_result.iter()) {
+            let expected_f16 = [f16::from_f32(expected.re), f16::from_f32(expected.im)];
+            assert_eq!(
+                actual[0].to_bits(),
+                expected_f16[0].to_bits(),
+                "re bits mismatch: actual={:?} expected={:?}",
+                actual[0],
+                expected_f16[0]
+            );
+            assert_eq!(
+                actual[1].to_bits(),
+                expected_f16[1].to_bits(),
+                "im bits mismatch: actual={:?} expected={:?}",
+                actual[1],
+                expected_f16[1]
+            );
+        }
+    }
+
+    #[test]
+    fn typed_path_rejects_profile_mismatch() {
+        let Ok(backend) = SdftWgpuBackend::try_default() else {
+            return;
+        };
+        let window_f16: Vec<f16> = vec![f16::from_f32(1.0); 8];
+        let mut out: Vec<[f16; 2]> = vec![[f16::from_f32(0.0), f16::from_f32(0.0)]; 4];
+        let plan = backend.plan(window_f16.len(), 4);
+        // f16 input requires MIXED_PRECISION_F16_F32; passing LOW_PRECISION_F32 must fail.
+        let error = backend
+            .execute_forward_typed_into(
+                &plan,
+                PrecisionProfile::LOW_PRECISION_F32,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &window_f16,
+                &mut out,
+            )
+            .expect_err("profile mismatch must fail");
+        assert_eq!(error, WgpuError::InvalidPrecisionProfile);
     }
 }

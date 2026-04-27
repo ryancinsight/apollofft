@@ -2,7 +2,8 @@
 
 use std::sync::Arc;
 
-use apollo_sft::SparseSpectrum;
+use apollo_fft::PrecisionProfile;
+use apollo_sft::{SparseComplexStorage, SparseSpectrum};
 use num_complex::{Complex32, Complex64};
 
 use crate::application::plan::SftWgpuPlan;
@@ -135,6 +136,55 @@ impl SftWgpuBackend {
             plan.len(),
             SftMode::Inverse,
         )
+    }
+
+    /// Execute the forward SFT with typed `Complex64`, `Complex32`, or mixed `[f16; 2]` input storage.
+    ///
+    /// Promotes represented input once to `Complex32` before dispatch.
+    /// Returns an allocated `SparseSpectrum` with `Complex64` internal representation.
+    pub fn execute_forward_typed<T: SparseComplexStorage>(
+        &self,
+        plan: &SftWgpuPlan,
+        precision: PrecisionProfile,
+        input: &[T],
+    ) -> WgpuResult<SparseSpectrum> {
+        let expected = T::PROFILE;
+        if precision.storage != expected.storage || precision.compute != expected.compute {
+            return Err(WgpuError::InvalidPrecisionProfile);
+        }
+        let represented: Vec<Complex32> = input
+            .iter()
+            .map(|v| {
+                let c = v.to_complex64();
+                Complex32::new(c.re as f32, c.im as f32)
+            })
+            .collect();
+        self.execute_forward(plan, &represented)
+    }
+
+    /// Execute the inverse SFT from a sparse spectrum with typed complex output storage.
+    pub fn execute_inverse_typed_into<T: SparseComplexStorage>(
+        &self,
+        plan: &SftWgpuPlan,
+        precision: PrecisionProfile,
+        spectrum: &SparseSpectrum,
+        output: &mut [T],
+    ) -> WgpuResult<()> {
+        let expected = T::PROFILE;
+        if precision.storage != expected.storage || precision.compute != expected.compute {
+            return Err(WgpuError::InvalidPrecisionProfile);
+        }
+        if output.len() != plan.len() {
+            return Err(WgpuError::InputLengthMismatch {
+                expected: plan.len(),
+                actual: output.len(),
+            });
+        }
+        let computed = self.execute_inverse(plan, spectrum)?;
+        for (slot, value) in output.iter_mut().zip(computed.iter().copied()) {
+            *slot = T::from_complex64(Complex64::new(f64::from(value.re), f64::from(value.im)));
+        }
+        Ok(())
     }
 
     fn validate_plan(plan: &SftWgpuPlan) -> WgpuResult<()> {

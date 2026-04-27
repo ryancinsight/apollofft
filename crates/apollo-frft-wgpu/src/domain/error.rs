@@ -45,6 +45,9 @@ pub enum WgpuError {
         /// Length supplied by the caller.
         actual: usize,
     },
+    /// Requested precision profile does not match the typed storage.
+    #[error("precision profile does not match typed FrFT WGPU storage")]
+    InvalidPrecisionProfile,
     /// GPU buffer map operation failed.
     #[error("buffer map failed: {message}")]
     BufferMapFailed {

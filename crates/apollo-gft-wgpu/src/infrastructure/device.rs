@@ -2,6 +2,9 @@
 
 use std::sync::Arc;
 
+use apollo_fft::PrecisionProfile;
+use apollo_gft::GftStorage;
+
 use crate::application::plan::GftWgpuPlan;
 use crate::domain::capabilities::WgpuCapabilities;
 use crate::domain::error::{WgpuError, WgpuResult};
@@ -117,6 +120,64 @@ impl GftWgpuBackend {
             plan.len(),
             1,
         )
+    }
+
+    /// Execute the forward GFT with typed `f64`, `f32`, or mixed `f16` storage.
+    ///
+    /// The graph basis matrix must always be supplied as `f32`.
+    pub fn execute_forward_typed_into<T: GftStorage>(
+        &self,
+        plan: &GftWgpuPlan,
+        precision: PrecisionProfile,
+        signal: &[T],
+        basis: &[f32],
+        output: &mut [T],
+    ) -> WgpuResult<()> {
+        Self::validate_gft_typed_precision::<T>(precision)?;
+        if output.len() != plan.len() {
+            return Err(WgpuError::LengthMismatch {
+                expected: plan.len(),
+                actual: output.len(),
+            });
+        }
+        let represented: Vec<f32> = signal.iter().map(|v| v.to_f64() as f32).collect();
+        let computed = self.execute_forward(plan, &represented, basis)?;
+        for (slot, value) in output.iter_mut().zip(computed.iter().copied()) {
+            *slot = T::from_f64(f64::from(value));
+        }
+        Ok(())
+    }
+
+    /// Execute the inverse GFT with typed `f64`, `f32`, or mixed `f16` storage.
+    pub fn execute_inverse_typed_into<T: GftStorage>(
+        &self,
+        plan: &GftWgpuPlan,
+        precision: PrecisionProfile,
+        spectrum: &[T],
+        basis: &[f32],
+        output: &mut [T],
+    ) -> WgpuResult<()> {
+        Self::validate_gft_typed_precision::<T>(precision)?;
+        if output.len() != plan.len() {
+            return Err(WgpuError::LengthMismatch {
+                expected: plan.len(),
+                actual: output.len(),
+            });
+        }
+        let represented: Vec<f32> = spectrum.iter().map(|v| v.to_f64() as f32).collect();
+        let computed = self.execute_inverse(plan, &represented, basis)?;
+        for (slot, value) in output.iter_mut().zip(computed.iter().copied()) {
+            *slot = T::from_f64(f64::from(value));
+        }
+        Ok(())
+    }
+
+    fn validate_gft_typed_precision<T: GftStorage>(precision: PrecisionProfile) -> WgpuResult<()> {
+        let expected = T::PROFILE;
+        if precision.storage != expected.storage || precision.compute != expected.compute {
+            return Err(WgpuError::InvalidPrecisionProfile);
+        }
+        Ok(())
     }
 
     fn validate(plan: &GftWgpuPlan, signal: &[f32], basis: &[f32]) -> WgpuResult<()> {

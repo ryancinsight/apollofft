@@ -8,6 +8,7 @@ repository = "https://github.com/ryancinsight/kwavers"
 description = "WGPU backend boundary for Apollo Radon"
 
 [dependencies]
+apollo-fft = { path = "../apollo-fft" }
 apollo-radon = { path = "../apollo-radon" }
 bytemuck = { version = "1.19", features = ["derive"] }
 ndarray = "0.16"

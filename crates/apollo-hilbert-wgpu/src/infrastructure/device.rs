@@ -4,6 +4,9 @@ use std::sync::Arc;
 
 use num_complex::Complex32;
 
+use apollo_fft::PrecisionProfile;
+use apollo_hilbert::HilbertStorage;
+
 use crate::application::plan::HilbertWgpuPlan;
 use crate::domain::capabilities::WgpuCapabilities;
 use crate::domain::error::{WgpuError, WgpuResult};
@@ -99,6 +102,42 @@ impl HilbertWgpuBackend {
             .into_iter()
             .map(|value| value.im)
             .collect())
+    }
+
+    /// Execute the forward Hilbert quadrature transform with typed `f64`, `f32`, or mixed `f16` storage.
+    ///
+    /// Promotes represented input once to `f32`, dispatches the GPU analytic-signal kernel,
+    /// extracts the imaginary (quadrature) component, and quantizes output back to storage type.
+    pub fn execute_forward_typed_into<T: HilbertStorage>(
+        &self,
+        plan: &HilbertWgpuPlan,
+        precision: PrecisionProfile,
+        input: &[T],
+        output: &mut [T],
+    ) -> WgpuResult<()> {
+        Self::validate_hilbert_typed_precision::<T>(precision)?;
+        if output.len() != plan.len() {
+            return Err(WgpuError::LengthMismatch {
+                expected: plan.len(),
+                actual: output.len(),
+            });
+        }
+        let represented: Vec<f32> = input.iter().map(|v| v.to_f64() as f32).collect();
+        let computed = self.execute_forward(plan, &represented)?;
+        for (slot, value) in output.iter_mut().zip(computed.iter().copied()) {
+            *slot = T::from_f64(f64::from(value));
+        }
+        Ok(())
+    }
+
+    fn validate_hilbert_typed_precision<T: HilbertStorage>(
+        precision: PrecisionProfile,
+    ) -> WgpuResult<()> {
+        let expected = T::PROFILE;
+        if precision.storage != expected.storage || precision.compute != expected.compute {
+            return Err(WgpuError::InvalidPrecisionProfile);
+        }
+        Ok(())
     }
 
     /// Inverse or adjoint execution is unsupported until the owning Hilbert crate defines it.

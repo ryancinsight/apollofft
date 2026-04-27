@@ -2,8 +2,9 @@
 
 use std::sync::Arc;
 
+use apollo_fft::PrecisionProfile;
 use apollo_sht::infrastructure::kernel::spherical_harmonic::gauss_legendre_nodes_weights;
-use apollo_sht::{SphericalGridSpec, SphericalHarmonicCoefficients};
+use apollo_sht::{ShtComplexStorage, SphericalGridSpec, SphericalHarmonicCoefficients};
 use ndarray::Array2;
 use num_complex::{Complex32, Complex64};
 
@@ -154,6 +155,77 @@ impl ShtWgpuBackend {
             max_degree: plan.max_degree(),
             message: "inverse output shape does not match plan",
         })
+    }
+
+    /// Execute forward complex SHT from a flat typed sample slice.
+    ///
+    /// `flat_samples` must have exactly `plan.latitudes() * plan.longitudes()` elements
+    /// in row-major (latitude × longitude) order.
+    /// Promotes represented input once to `Complex32` and returns `SphericalHarmonicCoefficients`.
+    pub fn execute_forward_flat_typed<T: ShtComplexStorage>(
+        &self,
+        plan: &ShtWgpuPlan,
+        precision: PrecisionProfile,
+        flat_samples: &[T],
+    ) -> WgpuResult<SphericalHarmonicCoefficients> {
+        let expected = T::PROFILE;
+        if precision.storage != expected.storage || precision.compute != expected.compute {
+            return Err(WgpuError::InvalidPrecisionProfile);
+        }
+        let expected_len = plan.latitudes() * plan.longitudes();
+        if flat_samples.len() != expected_len {
+            return Err(WgpuError::SampleShapeMismatch {
+                expected_latitudes: plan.latitudes(),
+                expected_longitudes: plan.longitudes(),
+                actual_latitudes: flat_samples.len(),
+                actual_longitudes: 1,
+            });
+        }
+        let promoted: Vec<Complex32> = flat_samples
+            .iter()
+            .map(|v| {
+                let c = v.to_complex64();
+                Complex32::new(c.re as f32, c.im as f32)
+            })
+            .collect();
+        let samples_2d = Array2::from_shape_vec((plan.latitudes(), plan.longitudes()), promoted)
+            .map_err(|_| WgpuError::InvalidPlan {
+                latitudes: plan.latitudes(),
+                longitudes: plan.longitudes(),
+                max_degree: plan.max_degree(),
+                message: "flat sample reshape failed",
+            })?;
+        self.execute_forward(plan, &samples_2d)
+    }
+
+    /// Execute inverse complex SHT and write the flat output to a typed slice.
+    ///
+    /// The output slice must have exactly `plan.latitudes() * plan.longitudes()` elements.
+    pub fn execute_inverse_flat_typed_into<T: ShtComplexStorage>(
+        &self,
+        plan: &ShtWgpuPlan,
+        precision: PrecisionProfile,
+        coefficients: &SphericalHarmonicCoefficients,
+        output: &mut [T],
+    ) -> WgpuResult<()> {
+        let expected = T::PROFILE;
+        if precision.storage != expected.storage || precision.compute != expected.compute {
+            return Err(WgpuError::InvalidPrecisionProfile);
+        }
+        let expected_len = plan.latitudes() * plan.longitudes();
+        if output.len() != expected_len {
+            return Err(WgpuError::SampleShapeMismatch {
+                expected_latitudes: plan.latitudes(),
+                expected_longitudes: plan.longitudes(),
+                actual_latitudes: output.len(),
+                actual_longitudes: 1,
+            });
+        }
+        let result = self.execute_inverse(plan, coefficients)?;
+        for (slot, value) in output.iter_mut().zip(result.iter()) {
+            *slot = T::from_complex64(*value);
+        }
+        Ok(())
     }
 }
 

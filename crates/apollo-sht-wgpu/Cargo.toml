@@ -8,6 +8,7 @@ repository = "https://github.com/ryancinsight/kwavers"
 description = "WGPU backend boundary for Apollo SHT"
 
 [dependencies]
+apollo-fft = { path = "../apollo-fft" }
 apollo-sht = { path = "../apollo-sht" }
 bytemuck = { version = "1.19", features = ["derive"] }
 ndarray = "0.16"

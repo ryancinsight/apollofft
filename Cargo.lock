@@ -39,14 +39,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
-name = "apollo-cudatile"
-version = "0.1.0"
-dependencies = [
- "apollo-fft",
- "serde",
-]
-
-[[package]]
 name = "apollo-czt"
 version = "0.1.0"
 dependencies = [
@@ -65,6 +57,7 @@ name = "apollo-czt-wgpu"
 version = "0.1.0"
 dependencies = [
  "apollo-czt",
+ "apollo-fft",
  "bytemuck",
  "ndarray",
  "num-complex",
@@ -92,6 +85,7 @@ name = "apollo-dctdst-wgpu"
 version = "0.1.0"
 dependencies = [
  "apollo-dctdst",
+ "apollo-fft",
  "bytemuck",
  "pollster",
  "thiserror 1.0.69",
@@ -116,6 +110,7 @@ name = "apollo-dht-wgpu"
 version = "0.1.0"
 dependencies = [
  "apollo-dht",
+ "apollo-fft",
  "bytemuck",
  "ndarray",
  "pollster",
@@ -171,6 +166,7 @@ dependencies = [
 name = "apollo-frft-wgpu"
 version = "0.1.0"
 dependencies = [
+ "apollo-fft",
  "apollo-frft",
  "bytemuck",
  "ndarray",
@@ -198,6 +194,7 @@ dependencies = [
 name = "apollo-fwht-wgpu"
 version = "0.1.0"
 dependencies = [
+ "apollo-fft",
  "apollo-fwht",
  "bytemuck",
  "ndarray",
@@ -224,6 +221,7 @@ dependencies = [
 name = "apollo-gft-wgpu"
 version = "0.1.0"
 dependencies = [
+ "apollo-fft",
  "apollo-gft",
  "bytemuck",
  "nalgebra",
@@ -250,6 +248,7 @@ dependencies = [
 name = "apollo-hilbert-wgpu"
 version = "0.1.0"
 dependencies = [
+ "apollo-fft",
  "apollo-hilbert",
  "bytemuck",
  "num-complex",
@@ -275,6 +274,7 @@ dependencies = [
 name = "apollo-mellin-wgpu"
 version = "0.1.0"
 dependencies = [
+ "apollo-fft",
  "apollo-mellin",
  "bytemuck",
  "num-complex",
@@ -299,6 +299,7 @@ dependencies = [
 name = "apollo-ntt-wgpu"
 version = "0.1.0"
 dependencies = [
+ "apollo-fft",
  "apollo-ntt",
  "bytemuck",
  "ndarray",
@@ -312,6 +313,7 @@ name = "apollo-nufft"
 version = "0.1.0"
 dependencies = [
  "apollo-fft",
+ "approx",
  "ndarray",
  "num-complex",
  "proptest",
@@ -324,6 +326,7 @@ dependencies = [
 name = "apollo-nufft-wgpu"
 version = "0.1.0"
 dependencies = [
+ "apollo-fft",
  "apollo-fft-wgpu",
  "apollo-nufft",
  "approx",
@@ -365,6 +368,7 @@ dependencies = [
 name = "apollo-qft-wgpu"
 version = "0.1.0"
 dependencies = [
+ "apollo-fft",
  "apollo-qft",
  "bytemuck",
  "ndarray",
@@ -392,6 +396,7 @@ dependencies = [
 name = "apollo-radon-wgpu"
 version = "0.1.0"
 dependencies = [
+ "apollo-fft",
  "apollo-radon",
  "bytemuck",
  "ndarray",
@@ -416,6 +421,7 @@ dependencies = [
 name = "apollo-sdft-wgpu"
 version = "0.1.0"
 dependencies = [
+ "apollo-fft",
  "apollo-sdft",
  "bytemuck",
  "ndarray",
@@ -469,6 +475,7 @@ dependencies = [
 name = "apollo-sht-wgpu"
 version = "0.1.0"
 dependencies = [
+ "apollo-fft",
  "apollo-sht",
  "bytemuck",
  "ndarray",
@@ -496,6 +503,7 @@ dependencies = [
 name = "apollo-stft-wgpu"
 version = "0.1.0"
 dependencies = [
+ "apollo-fft",
  "apollo-stft",
  "bytemuck",
  "ndarray",
@@ -540,6 +548,7 @@ dependencies = [
 name = "apollo-wavelet-wgpu"
 version = "0.1.0"
 dependencies = [
+ "apollo-fft",
  "apollo-wavelet",
  "bytemuck",
  "ndarray",

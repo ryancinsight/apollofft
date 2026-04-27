@@ -40,6 +40,36 @@ pub struct NttGpuKernel {
     pipeline: wgpu::ComputePipeline,
 }
 
+/// Reusable device and host storage for repeated NTT dispatches at one length.
+///
+/// The buffers preserve the direct NTT contract while moving allocation out of
+/// the hot execution path. The input scratch stores canonical `u32` residues,
+/// because the current WGPU surface is explicitly bounded to 32-bit moduli.
+#[derive(Debug)]
+pub struct NttGpuBuffers {
+    len: usize,
+    input_residues: Vec<u32>,
+    output_residues: Vec<u64>,
+    input_buffer: wgpu::Buffer,
+    output_buffer: wgpu::Buffer,
+    staging_buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+}
+
+impl NttGpuBuffers {
+    /// Return the logical transform length these buffers support.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Return whether these buffers carry zero length.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
 impl NttGpuKernel {
     /// Compile shader state and allocate the uniform parameter buffer.
     #[must_use]
@@ -86,52 +116,34 @@ impl NttGpuKernel {
         }
     }
 
-    /// Execute the direct modular transform.
-    pub fn execute(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        input: &[u64],
-        len: usize,
-        modulus: u64,
-        root: u64,
-        mode: NttMode,
-    ) -> WgpuResult<Vec<u64>> {
-        let input_u32: Vec<u32> = input
-            .iter()
-            .map(|&value| (value % modulus) as u32)
-            .collect();
-        let input_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("apollo-ntt-wgpu input"),
-            contents: bytemuck::cast_slice(&input_u32),
+    /// Allocate reusable buffers for one direct NTT length.
+    pub fn create_buffers(&self, device: &wgpu::Device, len: usize) -> WgpuResult<NttGpuBuffers> {
+        if len == 0 {
+            return Err(WgpuError::InvalidBufferLength { len });
+        }
+        let byte_len = buffer_byte_len(len);
+        let input_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-ntt-wgpu reusable input"),
+            size: byte_len,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
         let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("apollo-ntt-wgpu output"),
-            size: (len * std::mem::size_of::<u32>()) as u64,
+            label: Some("apollo-ntt-wgpu reusable output"),
+            size: byte_len,
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("apollo-ntt-wgpu staging"),
-            size: (len * std::mem::size_of::<u32>()) as u64,
+        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-ntt-wgpu reusable staging"),
+            size: byte_len,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(
-            &self.params_buffer,
-            0,
-            bytemuck::bytes_of(&NttParams {
-                len: len as u32,
-                modulus: modulus as u32,
-                root: root as u32,
-                mode: mode as u32,
-            }),
-        );
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("apollo-ntt-wgpu bind group"),
+            label: Some("apollo-ntt-wgpu reusable bind group"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -148,6 +160,113 @@ impl NttGpuKernel {
                 },
             ],
         });
+        Ok(NttGpuBuffers {
+            len,
+            input_residues: vec![0; len],
+            output_residues: vec![0; len],
+            input_buffer,
+            output_buffer,
+            staging_buffer,
+            bind_group,
+        })
+    }
+
+    /// Execute the direct modular transform.
+    pub fn execute(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        input: &[u64],
+        len: usize,
+        modulus: u64,
+        root: u64,
+        mode: NttMode,
+    ) -> WgpuResult<Vec<u64>> {
+        let mut buffers = self.create_buffers(device, len)?;
+        self.execute_with_buffers(device, queue, input, modulus, root, mode, &mut buffers)?;
+        Ok(buffers.output_residues.clone())
+    }
+
+    /// Execute the direct modular transform with caller-owned reusable buffers.
+    pub fn execute_with_buffers(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        input: &[u64],
+        modulus: u64,
+        root: u64,
+        mode: NttMode,
+        buffers: &mut NttGpuBuffers,
+    ) -> WgpuResult<()> {
+        let len = buffers.len;
+        if input.len() != len {
+            return Err(WgpuError::LengthMismatch {
+                expected: len,
+                actual: input.len(),
+            });
+        }
+        for (slot, &value) in buffers.input_residues.iter_mut().zip(input.iter()) {
+            *slot = (value % modulus) as u32;
+        }
+        queue.write_buffer(
+            &buffers.input_buffer,
+            0,
+            bytemuck::cast_slice(&buffers.input_residues),
+        );
+        self.dispatch_with_bound_buffers(device, queue, len, modulus, root, mode, buffers)?;
+        Ok(())
+    }
+
+    /// Execute with caller-owned reusable buffers from exact `u32` residue storage.
+    pub fn execute_quantized_with_buffers(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        input: &[u32],
+        modulus: u64,
+        root: u64,
+        mode: NttMode,
+        buffers: &mut NttGpuBuffers,
+    ) -> WgpuResult<()> {
+        let len = buffers.len;
+        if input.len() != len {
+            return Err(WgpuError::LengthMismatch {
+                expected: len,
+                actual: input.len(),
+            });
+        }
+        for (slot, &value) in buffers.input_residues.iter_mut().zip(input.iter()) {
+            *slot = (u64::from(value) % modulus) as u32;
+        }
+        queue.write_buffer(
+            &buffers.input_buffer,
+            0,
+            bytemuck::cast_slice(&buffers.input_residues),
+        );
+        self.dispatch_with_bound_buffers(device, queue, len, modulus, root, mode, buffers)?;
+        Ok(())
+    }
+
+    fn dispatch_with_bound_buffers(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        len: usize,
+        modulus: u64,
+        root: u64,
+        mode: NttMode,
+        buffers: &mut NttGpuBuffers,
+    ) -> WgpuResult<()> {
+        queue.write_buffer(
+            &self.params_buffer,
+            0,
+            bytemuck::bytes_of(&NttParams {
+                len: len as u32,
+                modulus: modulus as u32,
+                root: root as u32,
+                mode: mode as u32,
+            }),
+        );
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("apollo-ntt-wgpu encoder"),
@@ -158,19 +277,19 @@ impl NttGpuKernel {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_bind_group(0, &buffers.bind_group, &[]);
             pass.dispatch_workgroups(dispatch_count(len as u32), 1, 1);
         }
         encoder.copy_buffer_to_buffer(
-            &output_buffer,
+            &buffers.output_buffer,
             0,
-            &staging,
+            &buffers.staging_buffer,
             0,
-            (len * std::mem::size_of::<u32>()) as u64,
+            buffer_byte_len(len),
         );
         queue.submit(std::iter::once(encoder.finish()));
 
-        let slice = staging.slice(..);
+        let slice = buffers.staging_buffer.slice(..);
         let (sender, receiver) = mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = sender.send(result);
@@ -190,13 +309,21 @@ impl NttGpuKernel {
             }
         }
 
-        let output = {
+        {
             let mapped = slice.get_mapped_range();
             let values: &[u32] = bytemuck::cast_slice(&mapped);
-            values.iter().map(|&value| u64::from(value)).collect()
-        };
-        staging.unmap();
-        Ok(output)
+            for (slot, &value) in buffers.output_residues.iter_mut().zip(values.iter()) {
+                *slot = u64::from(value);
+            }
+        }
+        buffers.staging_buffer.unmap();
+        Ok(())
+    }
+
+    /// Return the last readback values written by `execute_with_buffers`.
+    #[must_use]
+    pub fn buffer_output<'a>(&self, buffers: &'a NttGpuBuffers) -> &'a [u64] {
+        &buffers.output_residues
     }
 }
 
@@ -231,4 +358,8 @@ fn uniform_layout_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 
 fn dispatch_count(items: u32) -> u32 {
     items.div_ceil(WORKGROUP_SIZE)
+}
+
+fn buffer_byte_len(len: usize) -> u64 {
+    (len * std::mem::size_of::<u32>()) as u64
 }

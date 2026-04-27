@@ -10,6 +10,11 @@ mod tests {
         assert!(capabilities.device_available);
         assert!(capabilities.supports_forward);
         assert!(capabilities.supports_inverse);
+        assert!(capabilities.supports_mixed_precision);
+        assert_eq!(
+            capabilities.default_precision_profile,
+            apollo_fft::PrecisionProfile::LOW_PRECISION_F32
+        );
     }
 
     #[test]
@@ -132,5 +137,81 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn typed_mixed_storage_matches_represented_f32_execution_when_device_exists() {
+        let Ok(backend) = GftWgpuBackend::try_default() else {
+            return;
+        };
+        use apollo_fft::{f16, PrecisionProfile};
+
+        let (_cpu_plan, basis_f32, signal_f32) = path4_plan_and_basis();
+        let input: Vec<f16> = signal_f32.iter().copied().map(f16::from_f32).collect();
+        let represented_input: Vec<f32> = input.iter().map(|v| v.to_f64() as f32).collect();
+        let gpu_plan = GftWgpuPlan::new(4);
+        let expected_fwd = backend
+            .execute_forward(&gpu_plan, &represented_input, &basis_f32)
+            .expect("represented forward");
+        let mut typed_fwd = vec![f16::from_f32(0.0); input.len()];
+        backend
+            .execute_forward_typed_into(
+                &gpu_plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &input,
+                &basis_f32,
+                &mut typed_fwd,
+            )
+            .expect("typed mixed forward");
+        assert_eq!(typed_fwd.len(), expected_fwd.len());
+        for (actual, expected) in typed_fwd.iter().zip(expected_fwd.iter()) {
+            let expected_f16 = f16::from_f32(*expected);
+            assert_eq!(actual.to_bits(), expected_f16.to_bits());
+        }
+
+        let expected_inv = backend
+            .execute_inverse(&gpu_plan, &expected_fwd, &basis_f32)
+            .expect("represented inverse");
+        let mut typed_inv = vec![f16::from_f32(0.0); input.len()];
+        backend
+            .execute_inverse_typed_into(
+                &gpu_plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &typed_fwd,
+                &basis_f32,
+                &mut typed_inv,
+            )
+            .expect("typed mixed inverse");
+        for (actual, expected) in typed_inv.iter().zip(expected_inv.iter()) {
+            let q = expected.abs() * 2.0_f32.powi(-10) + f32::from(f16::MIN_POSITIVE);
+            assert!(
+                (actual.to_f32() - expected).abs() <= q,
+                "f16 quantization mismatch: actual={}, expected={}",
+                actual.to_f32(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn typed_path_rejects_profile_mismatch_when_device_exists() {
+        let Ok(backend) = GftWgpuBackend::try_default() else {
+            return;
+        };
+        use apollo_fft::{f16, PrecisionProfile};
+        let (_cpu_plan, basis_f32, _) = path4_plan_and_basis();
+        let plan = GftWgpuPlan::new(4);
+        let input = vec![f16::from_f32(1.0); 4];
+        let mut output = vec![f16::from_f32(0.0); 4];
+        let err = backend
+            .execute_forward_typed_into(
+                &plan,
+                PrecisionProfile::LOW_PRECISION_F32,
+                &input,
+                &basis_f32,
+                &mut output,
+            )
+            .expect_err("profile mismatch must fail");
+        assert_eq!(err, WgpuError::InvalidPrecisionProfile);
     }
 }

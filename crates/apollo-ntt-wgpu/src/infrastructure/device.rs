@@ -7,7 +7,7 @@ use apollo_ntt::{DEFAULT_MODULUS, DEFAULT_PRIMITIVE_ROOT};
 use crate::application::plan::NttWgpuPlan;
 use crate::domain::capabilities::WgpuCapabilities;
 use crate::domain::error::{WgpuError, WgpuResult};
-use crate::infrastructure::kernel::{NttGpuKernel, NttMode};
+use crate::infrastructure::kernel::{NttGpuBuffers, NttGpuKernel, NttMode};
 
 /// Return whether a default WGPU adapter/device can be acquired.
 #[must_use]
@@ -92,6 +92,15 @@ impl NttWgpuBackend {
         NttWgpuPlan::new(len, modulus, primitive_root)
     }
 
+    /// Allocate reusable GPU and host buffers for repeated execution of one plan length.
+    pub fn create_buffers(&self, plan: &NttWgpuPlan) -> WgpuResult<NttGpuBuffers> {
+        let len = plan.len();
+        if len == 0 {
+            return Err(WgpuError::InvalidBufferLength { len });
+        }
+        self.kernel.create_buffers(self.device.as_ref(), len)
+    }
+
     /// Execute the direct forward NTT over the configured residue field.
     pub fn execute_forward(&self, plan: &NttWgpuPlan, input: &[u64]) -> WgpuResult<Vec<u64>> {
         let root = Self::validate_plan_and_input(plan, input)?;
@@ -103,6 +112,49 @@ impl NttWgpuBackend {
             plan.modulus(),
             root,
             NttMode::Forward,
+        )
+    }
+
+    /// Execute forward NTT from exact `u32` residue storage into caller-owned `u32` output.
+    ///
+    /// This is quantized integer storage, not floating mixed precision. It is
+    /// exact when the plan modulus is bounded by `u32::MAX`, which is already
+    /// required by the current WGPU shader surface.
+    pub fn execute_forward_quantized_into(
+        &self,
+        plan: &NttWgpuPlan,
+        input: &[u32],
+        output: &mut [u32],
+    ) -> WgpuResult<()> {
+        self.execute_quantized_into(plan, input, output, NttMode::Forward)
+    }
+
+    /// Execute forward NTT from exact `u32` residues with caller-owned reusable buffers.
+    pub fn execute_forward_quantized_with_buffers(
+        &self,
+        plan: &NttWgpuPlan,
+        input: &[u32],
+        buffers: &mut NttGpuBuffers,
+    ) -> WgpuResult<()> {
+        self.execute_quantized_with_buffers(plan, input, buffers, NttMode::Forward)
+    }
+
+    /// Execute the direct forward NTT with caller-owned reusable buffers.
+    pub fn execute_forward_with_buffers(
+        &self,
+        plan: &NttWgpuPlan,
+        input: &[u64],
+        buffers: &mut NttGpuBuffers,
+    ) -> WgpuResult<()> {
+        let root = Self::validate_plan_input_and_buffers(plan, input, buffers)?;
+        self.kernel.execute_with_buffers(
+            self.device.as_ref(),
+            self.queue.as_ref(),
+            input,
+            plan.modulus(),
+            root,
+            NttMode::Forward,
+            buffers,
         )
     }
 
@@ -120,7 +172,129 @@ impl NttWgpuBackend {
         )
     }
 
+    /// Execute inverse NTT from exact `u32` residue storage into caller-owned `u32` output.
+    pub fn execute_inverse_quantized_into(
+        &self,
+        plan: &NttWgpuPlan,
+        input: &[u32],
+        output: &mut [u32],
+    ) -> WgpuResult<()> {
+        self.execute_quantized_into(plan, input, output, NttMode::Inverse)
+    }
+
+    /// Execute inverse NTT from exact `u32` residues with caller-owned reusable buffers.
+    pub fn execute_inverse_quantized_with_buffers(
+        &self,
+        plan: &NttWgpuPlan,
+        input: &[u32],
+        buffers: &mut NttGpuBuffers,
+    ) -> WgpuResult<()> {
+        self.execute_quantized_with_buffers(plan, input, buffers, NttMode::Inverse)
+    }
+
+    /// Execute the direct inverse NTT with caller-owned reusable buffers.
+    pub fn execute_inverse_with_buffers(
+        &self,
+        plan: &NttWgpuPlan,
+        input: &[u64],
+        buffers: &mut NttGpuBuffers,
+    ) -> WgpuResult<()> {
+        let root = Self::validate_plan_input_and_buffers(plan, input, buffers)?;
+        self.kernel.execute_with_buffers(
+            self.device.as_ref(),
+            self.queue.as_ref(),
+            input,
+            plan.modulus(),
+            root,
+            NttMode::Inverse,
+            buffers,
+        )
+    }
+
+    /// Return the last readback values written by a reusable-buffer execution.
+    #[must_use]
+    pub fn buffer_output<'a>(&self, buffers: &'a NttGpuBuffers) -> &'a [u64] {
+        self.kernel.buffer_output(buffers)
+    }
+
+    fn execute_quantized_into(
+        &self,
+        plan: &NttWgpuPlan,
+        input: &[u32],
+        output: &mut [u32],
+        mode: NttMode,
+    ) -> WgpuResult<()> {
+        let len = plan.len();
+        if output.len() != len {
+            return Err(WgpuError::OutputLengthMismatch {
+                expected: len,
+                actual: output.len(),
+            });
+        }
+        let root = Self::validate_plan_and_len(plan, input.len())?;
+        let mut buffers = self.create_buffers(plan)?;
+        self.kernel.execute_quantized_with_buffers(
+            self.device.as_ref(),
+            self.queue.as_ref(),
+            input,
+            plan.modulus(),
+            root,
+            mode,
+            &mut buffers,
+        )?;
+        for (slot, &value) in output.iter_mut().zip(self.buffer_output(&buffers).iter()) {
+            *slot = value as u32;
+        }
+        Ok(())
+    }
+
+    fn execute_quantized_with_buffers(
+        &self,
+        plan: &NttWgpuPlan,
+        input: &[u32],
+        buffers: &mut NttGpuBuffers,
+        mode: NttMode,
+    ) -> WgpuResult<()> {
+        let root = Self::validate_plan_input_and_buffers_len(plan, input.len(), buffers)?;
+        self.kernel.execute_quantized_with_buffers(
+            self.device.as_ref(),
+            self.queue.as_ref(),
+            input,
+            plan.modulus(),
+            root,
+            mode,
+            buffers,
+        )
+    }
+
+    fn validate_plan_input_and_buffers(
+        plan: &NttWgpuPlan,
+        input: &[u64],
+        buffers: &NttGpuBuffers,
+    ) -> WgpuResult<u64> {
+        Self::validate_plan_input_and_buffers_len(plan, input.len(), buffers)
+    }
+
+    fn validate_plan_input_and_buffers_len(
+        plan: &NttWgpuPlan,
+        input_len: usize,
+        buffers: &NttGpuBuffers,
+    ) -> WgpuResult<u64> {
+        let root = Self::validate_plan_and_len(plan, input_len)?;
+        if buffers.len() != plan.len() {
+            return Err(WgpuError::BufferLengthMismatch {
+                expected: plan.len(),
+                actual: buffers.len(),
+            });
+        }
+        Ok(root)
+    }
+
     fn validate_plan_and_input(plan: &NttWgpuPlan, input: &[u64]) -> WgpuResult<u64> {
+        Self::validate_plan_and_len(plan, input.len())
+    }
+
+    fn validate_plan_and_len(plan: &NttWgpuPlan, input_len: usize) -> WgpuResult<u64> {
         let len = plan.len();
         let modulus = plan.modulus();
         let primitive_root = plan.primitive_root();
@@ -164,10 +338,10 @@ impl NttWgpuBackend {
                 message: "transform length is not supported by the modulus",
             });
         }
-        if input.len() != len {
+        if input_len != len {
             return Err(WgpuError::LengthMismatch {
                 expected: len,
-                actual: input.len(),
+                actual: input_len,
             });
         }
         let root = mod_pow_u64(primitive_root, (modulus - 1) / len as u64, modulus);

@@ -14,10 +14,20 @@ mod tests {
         assert!(caps.device_available);
         assert!(caps.supports_forward);
         assert!(caps.supports_inverse);
+        assert!(caps.supports_mixed_precision);
+        assert_eq!(
+            caps.default_precision_profile,
+            apollo_fft::PrecisionProfile::LOW_PRECISION_F32
+        );
         let caps_off = WgpuCapabilities::implemented(false);
         assert!(!caps_off.device_available);
         assert!(!caps_off.supports_forward);
         assert!(!caps_off.supports_inverse);
+        assert!(caps_off.supports_mixed_precision);
+        assert_eq!(
+            caps_off.default_precision_profile,
+            apollo_fft::PrecisionProfile::LOW_PRECISION_F32
+        );
     }
 
     #[test]
@@ -255,5 +265,76 @@ mod tests {
                 "reconstruction mismatch at index {index}: gpu={actual}, cpu={expected}"
             );
         }
+    }
+
+    #[test]
+    fn typed_mixed_storage_matches_represented_f32_execution_when_device_exists() {
+        let Ok(backend) = WaveletWgpuBackend::try_default() else {
+            return;
+        };
+        use apollo_fft::{f16, PrecisionProfile};
+        let represented = [1.0_f32, -0.5, 2.0, 0.25, -1.25, 0.75, 3.0, -2.0];
+        let input: Vec<f16> = represented.iter().copied().map(f16::from_f32).collect();
+        let represented_input: Vec<f32> = input.iter().map(|v| v.to_f64() as f32).collect();
+        let plan = WaveletWgpuPlan::new(input.len(), 3);
+        let expected_fwd = backend
+            .execute_forward(&plan, &represented_input)
+            .expect("represented forward");
+        let mut typed_fwd = vec![f16::from_f32(0.0); input.len()];
+        backend
+            .execute_forward_typed_into(
+                &plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &input,
+                &mut typed_fwd,
+            )
+            .expect("typed mixed forward");
+        assert_eq!(typed_fwd.len(), expected_fwd.len());
+        for (actual, expected) in typed_fwd.iter().zip(expected_fwd.iter()) {
+            let expected_f16 = f16::from_f32(*expected);
+            assert_eq!(actual.to_bits(), expected_f16.to_bits());
+        }
+
+        let expected_inv = backend
+            .execute_inverse(&plan, &expected_fwd)
+            .expect("represented inverse");
+        let mut typed_inv = vec![f16::from_f32(0.0); input.len()];
+        backend
+            .execute_inverse_typed_into(
+                &plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &typed_fwd,
+                &mut typed_inv,
+            )
+            .expect("typed mixed inverse");
+        for (actual, expected) in typed_inv.iter().zip(expected_inv.iter()) {
+            let q = expected.abs() * 2.0_f32.powi(-10) + f32::from(f16::MIN_POSITIVE);
+            assert!(
+                (actual.to_f32() - expected).abs() <= q,
+                "f16 quantization mismatch: actual={}, expected={}",
+                actual.to_f32(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn typed_path_rejects_profile_mismatch_when_device_exists() {
+        let Ok(backend) = WaveletWgpuBackend::try_default() else {
+            return;
+        };
+        use apollo_fft::{f16, PrecisionProfile};
+        let plan = WaveletWgpuPlan::new(8, 3);
+        let input = vec![f16::from_f32(1.0); 8];
+        let mut output = vec![f16::from_f32(0.0); 8];
+        let err = backend
+            .execute_forward_typed_into(
+                &plan,
+                PrecisionProfile::LOW_PRECISION_F32,
+                &input,
+                &mut output,
+            )
+            .expect_err("profile mismatch must fail");
+        assert_eq!(err, WgpuError::InvalidPrecisionProfile);
     }
 }

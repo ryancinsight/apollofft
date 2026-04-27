@@ -2,7 +2,115 @@
 
 use crate::infrastructure::gpu_fft::pipeline::GpuFft3d;
 use crate::infrastructure::gpu_fft::strategy::{Axis, AxisStrategy};
+use apollo_fft::f16;
 use ndarray::Array3;
+
+/// Reusable GPU and host buffers for repeated `GpuFft3d` dispatch.
+///
+/// The buffer shape is part of the value invariant:
+/// `len = nx * ny * nz`, every split component buffer stores exactly `len`
+/// `f32` values, and every interleaved complex buffer stores exactly `2 * len`
+/// values. Reusing this object removes per-call device buffer allocation and
+/// host-side scratch vector allocation for repeated forward/inverse transforms
+/// with one fixed 3D shape.
+pub struct GpuFft3dBuffers {
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    re_buf: wgpu::Buffer,
+    im_buf: wgpu::Buffer,
+    re_staging: wgpu::Buffer,
+    im_staging: wgpu::Buffer,
+    re_host: Vec<f32>,
+    im_host: Vec<f32>,
+}
+
+impl GpuFft3dBuffers {
+    /// Allocate reusable buffers for a `GpuFft3d` plan.
+    #[must_use]
+    pub fn new(plan: &GpuFft3d) -> Self {
+        let len = plan.element_count();
+        let size = plan.component_buffer_size();
+        let working_usage = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST;
+        let staging_usage = wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ;
+        let re_buf = plan.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-fft-wgpu reusable re"),
+            size,
+            usage: working_usage,
+            mapped_at_creation: false,
+        });
+        let im_buf = plan.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-fft-wgpu reusable im"),
+            size,
+            usage: working_usage,
+            mapped_at_creation: false,
+        });
+        let re_staging = plan.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-fft-wgpu reusable re staging"),
+            size,
+            usage: staging_usage,
+            mapped_at_creation: false,
+        });
+        let im_staging = plan.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-fft-wgpu reusable im staging"),
+            size,
+            usage: staging_usage,
+            mapped_at_creation: false,
+        });
+        Self {
+            nx: plan.nx,
+            ny: plan.ny,
+            nz: plan.nz,
+            re_buf,
+            im_buf,
+            re_staging,
+            im_staging,
+            re_host: vec![0.0; len],
+            im_host: vec![0.0; len],
+        }
+    }
+
+    #[inline]
+    fn assert_matches(&self, plan: &GpuFft3d) {
+        assert_eq!((self.nx, self.ny, self.nz), (plan.nx, plan.ny, plan.nz));
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.nx * self.ny * self.nz
+    }
+
+    fn read_split_into_host(&mut self, plan: &GpuFft3d) {
+        let size = plan.component_buffer_size();
+        let mut encoder = plan
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("apollo-fft-wgpu reusable readback encoder"),
+            });
+        encoder.copy_buffer_to_buffer(&self.re_buf, 0, &self.re_staging, 0, size);
+        encoder.copy_buffer_to_buffer(&self.im_buf, 0, &self.im_staging, 0, size);
+        plan.queue.submit(std::iter::once(encoder.finish()));
+
+        let re_slice = self.re_staging.slice(..size);
+        let im_slice = self.im_staging.slice(..size);
+        re_slice.map_async(wgpu::MapMode::Read, |_| {});
+        im_slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = plan.device.poll(wgpu::PollType::Wait);
+
+        {
+            let mapped = re_slice.get_mapped_range();
+            self.re_host.copy_from_slice(bytemuck::cast_slice(&mapped));
+        }
+        {
+            let mapped = im_slice.get_mapped_range();
+            self.im_host.copy_from_slice(bytemuck::cast_slice(&mapped));
+        }
+        self.re_staging.unmap();
+        self.im_staging.unmap();
+    }
+}
 
 impl GpuFft3d {
     /// Forward transform of a real field into an interleaved complex buffer.
@@ -47,6 +155,109 @@ impl GpuFft3d {
         }
     }
 
+    /// Forward transform using caller-retained reusable GPU and host buffers.
+    pub fn forward_into_with_buffers(
+        &self,
+        field: &Array3<f64>,
+        out: &mut [f32],
+        buffers: &mut GpuFft3dBuffers,
+    ) {
+        buffers.assert_matches(self);
+        assert_eq!(field.dim(), (self.nx, self.ny, self.nz));
+        assert_eq!(out.len(), 2 * buffers.len());
+
+        buffers.im_host.fill(0.0);
+        buffers
+            .re_host
+            .iter_mut()
+            .zip(field.iter().copied())
+            .for_each(|(dst, src)| *dst = src as f32);
+
+        self.queue
+            .write_buffer(&buffers.re_buf, 0, bytemuck::cast_slice(&buffers.re_host));
+        self.queue
+            .write_buffer(&buffers.im_buf, 0, bytemuck::cast_slice(&buffers.im_host));
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("apollo-fft-wgpu reusable forward encoder"),
+            });
+        self.encode_forward_split(&mut encoder, &buffers.re_buf, &buffers.im_buf);
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        buffers.read_split_into_host(self);
+        for ((re, im), pair) in buffers
+            .re_host
+            .iter()
+            .zip(buffers.im_host.iter())
+            .zip(out.chunks_exact_mut(2))
+        {
+            pair[0] = *re;
+            pair[1] = *im;
+        }
+    }
+
+    /// Forward mixed-precision transform from `f16` storage into an interleaved
+    /// `f32` complex spectrum.
+    ///
+    /// The storage contract matches `PrecisionProfile::MIXED_PRECISION_F16_F32`:
+    /// host inputs are stored as `f16`, promoted once to `f32` at the GPU buffer
+    /// boundary, and the existing `f32` WGPU FFT kernels remain the single
+    /// authoritative device implementation.
+    #[must_use]
+    pub fn forward_f16(&self, field: &Array3<f16>) -> Vec<f32> {
+        let n = self.nx * self.ny * self.nz;
+        let mut out = vec![0.0_f32; 2 * n];
+        let mut buffers = GpuFft3dBuffers::new(self);
+        self.forward_f16_into_with_buffers(field, &mut out, &mut buffers);
+        out
+    }
+
+    /// Forward mixed-precision transform using caller-retained reusable GPU and
+    /// host buffers.
+    pub fn forward_f16_into_with_buffers(
+        &self,
+        field: &Array3<f16>,
+        out: &mut [f32],
+        buffers: &mut GpuFft3dBuffers,
+    ) {
+        buffers.assert_matches(self);
+        assert_eq!(field.dim(), (self.nx, self.ny, self.nz));
+        assert_eq!(out.len(), 2 * buffers.len());
+
+        buffers.im_host.fill(0.0);
+        buffers
+            .re_host
+            .iter_mut()
+            .zip(field.iter().copied())
+            .for_each(|(dst, src)| *dst = src.to_f32());
+
+        self.queue
+            .write_buffer(&buffers.re_buf, 0, bytemuck::cast_slice(&buffers.re_host));
+        self.queue
+            .write_buffer(&buffers.im_buf, 0, bytemuck::cast_slice(&buffers.im_host));
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("apollo-fft-wgpu reusable f16 forward encoder"),
+            });
+        self.encode_forward_split(&mut encoder, &buffers.re_buf, &buffers.im_buf);
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        buffers.read_split_into_host(self);
+        for ((re, im), pair) in buffers
+            .re_host
+            .iter()
+            .zip(buffers.im_host.iter())
+            .zip(out.chunks_exact_mut(2))
+        {
+            pair[0] = *re;
+            pair[1] = *im;
+        }
+    }
+
     /// Inverse transform of an interleaved complex buffer into a real field.
     pub fn inverse(&self, field_hat: &[f32], out: &mut Array3<f64>) {
         assert_eq!(field_hat.len(), 2 * self.nx * self.ny * self.nz);
@@ -73,6 +284,84 @@ impl GpuFft3d {
 
         for (dst, &value) in out.iter_mut().zip(re_out.iter()) {
             *dst = value as f64;
+        }
+    }
+
+    /// Inverse transform using caller-retained reusable GPU and host buffers.
+    pub fn inverse_with_buffers(
+        &self,
+        field_hat: &[f32],
+        out: &mut Array3<f64>,
+        buffers: &mut GpuFft3dBuffers,
+    ) {
+        buffers.assert_matches(self);
+        assert_eq!(field_hat.len(), 2 * buffers.len());
+        assert_eq!(out.dim(), (self.nx, self.ny, self.nz));
+
+        for (idx, pair) in field_hat.chunks_exact(2).enumerate() {
+            buffers.re_host[idx] = pair[0];
+            buffers.im_host[idx] = pair[1];
+        }
+
+        self.queue
+            .write_buffer(&buffers.re_buf, 0, bytemuck::cast_slice(&buffers.re_host));
+        self.queue
+            .write_buffer(&buffers.im_buf, 0, bytemuck::cast_slice(&buffers.im_host));
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("apollo-fft-wgpu reusable inverse encoder"),
+            });
+        self.encode_inverse_split(&mut encoder, &buffers.re_buf, &buffers.im_buf);
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        buffers.read_split_into_host(self);
+        for (dst, &value) in out.iter_mut().zip(buffers.re_host.iter()) {
+            *dst = value as f64;
+        }
+    }
+
+    /// Inverse mixed-precision transform from an interleaved `f32` complex
+    /// spectrum into `f16` real storage.
+    pub fn inverse_f16(&self, field_hat: &[f32], out: &mut Array3<f16>) {
+        let mut buffers = GpuFft3dBuffers::new(self);
+        self.inverse_f16_with_buffers(field_hat, out, &mut buffers);
+    }
+
+    /// Inverse mixed-precision transform using caller-retained reusable GPU and
+    /// host buffers.
+    pub fn inverse_f16_with_buffers(
+        &self,
+        field_hat: &[f32],
+        out: &mut Array3<f16>,
+        buffers: &mut GpuFft3dBuffers,
+    ) {
+        buffers.assert_matches(self);
+        assert_eq!(field_hat.len(), 2 * buffers.len());
+        assert_eq!(out.dim(), (self.nx, self.ny, self.nz));
+
+        for (idx, pair) in field_hat.chunks_exact(2).enumerate() {
+            buffers.re_host[idx] = pair[0];
+            buffers.im_host[idx] = pair[1];
+        }
+
+        self.queue
+            .write_buffer(&buffers.re_buf, 0, bytemuck::cast_slice(&buffers.re_host));
+        self.queue
+            .write_buffer(&buffers.im_buf, 0, bytemuck::cast_slice(&buffers.im_host));
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("apollo-fft-wgpu reusable f16 inverse encoder"),
+            });
+        self.encode_inverse_split(&mut encoder, &buffers.re_buf, &buffers.im_buf);
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        buffers.read_split_into_host(self);
+        for (dst, &value) in out.iter_mut().zip(buffers.re_host.iter()) {
+            *dst = f16::from_f32(value);
         }
     }
 
@@ -135,6 +424,16 @@ impl GpuFft3d {
         }
         self.dispatch_unpack(&mut encoder, axis, axis_len, batch_count);
         self.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    #[inline]
+    pub(crate) fn element_count(&self) -> usize {
+        self.nx * self.ny * self.nz
+    }
+
+    #[inline]
+    pub(crate) fn component_buffer_size(&self) -> u64 {
+        (self.element_count() * std::mem::size_of::<f32>()) as u64
     }
 
     /// Encode a forward 3D FFT using external split real/imaginary wgpu buffers.
@@ -309,5 +608,110 @@ impl GpuFft3d {
         self.full_re_staging.unmap();
         self.full_im_staging.unmap();
         (re_out, im_out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::WgpuBackend;
+    use apollo_fft::backend::FftBackend;
+    use apollo_fft::{f16, PrecisionProfile, Shape3D};
+
+    use super::GpuFft3dBuffers;
+
+    #[test]
+    fn reusable_buffers_match_allocating_forward_and_inverse_when_device_exists() {
+        let Ok(backend) = WgpuBackend::try_default() else {
+            return;
+        };
+        let plan = backend
+            .plan_3d(Shape3D::new(2, 2, 2).expect("shape"))
+            .expect("gpu plan");
+        let field = ndarray::Array3::from_shape_vec(
+            (2, 2, 2),
+            vec![1.0_f64, -2.0, 0.5, 3.0, -1.25, 0.75, 2.5, -0.5],
+        )
+        .expect("field");
+        let mut buffers = GpuFft3dBuffers::new(&plan);
+
+        let allocating_forward = plan.forward(&field);
+        let mut reusable_forward = vec![0.0_f32; allocating_forward.len()];
+        plan.forward_into_with_buffers(&field, &mut reusable_forward, &mut buffers);
+
+        assert_eq!(reusable_forward.len(), allocating_forward.len());
+        for (actual, expected) in reusable_forward.iter().zip(allocating_forward.iter()) {
+            assert!(
+                (actual - expected).abs() < 1.0e-5,
+                "forward mismatch: actual={actual}, expected={expected}"
+            );
+        }
+
+        let mut allocating_inverse = ndarray::Array3::<f64>::zeros((2, 2, 2));
+        let mut reusable_inverse = ndarray::Array3::<f64>::zeros((2, 2, 2));
+        plan.inverse(&allocating_forward, &mut allocating_inverse);
+        plan.inverse_with_buffers(&reusable_forward, &mut reusable_inverse, &mut buffers);
+
+        for (actual, expected) in reusable_inverse.iter().zip(allocating_inverse.iter()) {
+            assert!(
+                (actual - expected).abs() < 1.0e-5,
+                "inverse mismatch: actual={actual}, expected={expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_precision_f16_storage_matches_represented_f32_path_when_device_exists() {
+        let Ok(backend) = WgpuBackend::try_default() else {
+            return;
+        };
+        let capabilities = backend.capabilities();
+        assert!(capabilities.supports_mixed_precision);
+        assert!(capabilities
+            .supported_precision_profiles
+            .contains(&PrecisionProfile::MIXED_PRECISION_F16_F32));
+
+        let plan = backend
+            .plan_3d(Shape3D::new(2, 2, 2).expect("shape"))
+            .expect("gpu plan");
+        let values = [1.0_f32, -2.0, 0.5, 3.0, -1.25, 0.75, 2.5, -0.5];
+        let field_f16 = ndarray::Array3::from_shape_vec(
+            (2, 2, 2),
+            values.iter().copied().map(f16::from_f32).collect(),
+        )
+        .expect("f16 field");
+        let represented = ndarray::Array3::from_shape_vec(
+            (2, 2, 2),
+            field_f16
+                .iter()
+                .copied()
+                .map(|value| value.to_f32() as f64)
+                .collect(),
+        )
+        .expect("represented field");
+        let mut buffers = GpuFft3dBuffers::new(&plan);
+
+        let expected = plan.forward(&represented);
+        let mut actual = vec![0.0_f32; expected.len()];
+        plan.forward_f16_into_with_buffers(&field_f16, &mut actual, &mut buffers);
+
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            assert!(
+                (actual - expected).abs() < 1.0e-5,
+                "mixed forward mismatch: actual={actual}, expected={expected}"
+            );
+        }
+
+        let mut reconstructed = ndarray::Array3::from_elem((2, 2, 2), f16::from_f32(0.0));
+        plan.inverse_f16_with_buffers(&actual, &mut reconstructed, &mut buffers);
+
+        for (actual, expected) in reconstructed.iter().zip(field_f16.iter()) {
+            assert_eq!(
+                actual.to_bits(),
+                expected.to_bits(),
+                "mixed inverse mismatch: actual={}, expected={}",
+                actual.to_f32(),
+                expected.to_f32()
+            );
+        }
     }
 }

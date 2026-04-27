@@ -36,6 +36,9 @@ pub enum WgpuError {
         /// Input length.
         actual: usize,
     },
+    /// Requested precision profile does not match the typed storage.
+    #[error("precision profile does not match typed DHT-WGPU storage")]
+    InvalidPrecisionProfile,
     /// Host readback from the staging buffer failed.
     #[error("wgpu buffer map failed: {message}")]
     BufferMapFailed {
