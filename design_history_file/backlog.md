@@ -6,6 +6,7 @@
 - [x] Add `NufftGpuBuffers1D` and `NufftGpuBuffers3D` reusable GPU buffer structs to `apollo-nufft-wgpu` for repeated fast-path execution
 - [x] Add `execute_fast_type1_1d_with_buffers`, `execute_fast_type2_1d_with_buffers`, `execute_fast_type1_3d_with_buffers`, `execute_fast_type2_3d_with_buffers` methods to `NufftGpuKernel`
 - [x] Add `GpuFft3dBuffers` reusable GPU/host buffer struct and value-semantic parity tests to `apollo-fft-wgpu` for repeated 3D FFT dispatch
+- [x] Add `NttGpuBuffers` reusable GPU/host buffer struct and value-semantic parity tests to `apollo-ntt-wgpu` for repeated direct NTT dispatch
 - [x] Add FFT-WGPU 3D mixed-precision `f16` host-storage / `f32` GPU-compute helpers with represented-input parity tests
 - [x] Add NUFFT-WGPU fast Type-1/Type-2 1D/3D typed mixed-storage wrappers using `f16` host storage and `f32` GPU kernels
 - [x] Add NUFFT-WGPU direct Type-1/Type-2 1D/3D typed mixed-storage wrappers using `f16` host storage and `f32` GPU kernels

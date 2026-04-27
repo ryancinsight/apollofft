@@ -10,6 +10,7 @@ All items below are implemented, tested, and verified in completed sprints.
 
 - Added explicit WGPU/cudatile mixed-precision capability records: WGPU transform crates and cudatile now advertise `supports_mixed_precision = false` with `LOW_PRECISION_F32` as the implemented GPU profile unless a crate uses the shared FFT backend capability descriptor.
 - Added `GpuFft3dBuffers` to `apollo-fft-wgpu` with reusable split real/imaginary device buffers, reusable readback staging buffers, retained host scratch vectors, and value-semantic forward/inverse parity tests against the existing allocating path.
+- Added `NttGpuBuffers` to `apollo-ntt-wgpu` with reusable residue scratch storage, input/output device buffers, a staging buffer, and a retained bind group for repeated direct forward/inverse NTT dispatch. Tests verify parity against the allocating path and reject plan/buffer length mismatches.
 - Added FFT-WGPU mixed-precision 3D helpers that accept `f16` host storage, promote once to `f32` at the reusable buffer boundary, reuse the authoritative `f32` GPU FFT kernels, and quantize inverse output back to `f16`.
 - Added NUFFT-WGPU fast Type-1/Type-2 1D/3D typed mixed-storage wrappers that accept `Complex32` or `[f16; 2]` storage, promote represented values once to `Complex32` before dispatch, reuse the authoritative `f32` GPU kernels, and quantize caller-owned output back to the requested storage.
 - Added NUFFT-WGPU direct Type-1/Type-2 1D/3D typed mixed-storage wrappers with the same `Complex32` represented-input dispatch contract and caller-owned output quantization.
@@ -179,6 +180,7 @@ All items below are implemented, tested, and verified in completed sprints.
 - Added `supports_mixed_precision` and `default_precision_profile` fields to all 16 WGPU capability structs; corrected `apollo-cudatile` default precision to `LOW_PRECISION_F32`.
 - Verified NUFFT and SHT CPU mixed-precision storage contracts were already complete (`NufftComplexStorage`, `ShtRealStorage`, `ShtComplexStorage`).
 - Added `NufftGpuBuffers1D` and `NufftGpuBuffers3D` reusable GPU buffer structs with `execute_fast_*_with_buffers` methods to eliminate per-call buffer allocation on repeated NUFFT fast-path dispatch.
+- Added `NttGpuBuffers` and `execute_*_with_buffers` methods to eliminate per-call device-buffer, bind-group, staging-buffer, and host-output allocation on repeated direct NTT WGPU dispatch.
 - Added `NufftPlan3D::type2_into` zero-allocation path (type2 now delegates to type2_into).
 - Added value-semantic typed verification tests for NUFFT 1D and 3D across Complex64, Complex32, and [f16;2] storage profiles with profile mismatch rejection.
 

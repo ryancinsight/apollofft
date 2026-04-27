@@ -40,6 +40,20 @@ pub enum WgpuError {
         /// Input length.
         actual: usize,
     },
+    /// Reusable buffer length is invalid.
+    #[error("invalid NTT WGPU reusable buffer length: len={len}")]
+    InvalidBufferLength {
+        /// Buffer transform length.
+        len: usize,
+    },
+    /// Reusable buffer length does not match the plan.
+    #[error("NTT WGPU reusable buffer length mismatch: expected {expected}, got {actual}")]
+    BufferLengthMismatch {
+        /// Plan length.
+        expected: usize,
+        /// Buffer length.
+        actual: usize,
+    },
     /// Host readback from the staging buffer failed.
     #[error("wgpu buffer map failed: {message}")]
     BufferMapFailed {

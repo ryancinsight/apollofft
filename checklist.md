@@ -114,6 +114,7 @@
 - [x] Add `NufftPlan3D::type2_into` zero-allocation 3D Type-2 path.
 - [x] Add value-semantic typed verification tests for `apollo-nufft` covering Complex64, Complex32, [f16;2], and profile mismatch.
 - [x] Add `apollo-fft-wgpu` reusable GPU buffer structs for repeated 3D FFT dispatch.
+- [x] Add `apollo-ntt-wgpu` reusable GPU buffer structs for repeated direct NTT dispatch.
 - [x] Add debug-gated GPU grid readbacks (after load, after IFFT) behind a `cfg(test)` feature in `apollo-nufft-wgpu` for faster future numerical triage.
 - [x] Set up CI pipeline for lint and test regression prevention.
 - [x] Add real mixed-precision WGPU execution where existing `f32` shader kernels support typed host-storage promotion/quantization: FFT-WGPU 3D, NUFFT-WGPU direct/fast 1D/3D, DHT-WGPU, FWHT-WGPU, CZT-WGPU, DCTDST-WGPU, FrFT-WGPU, GFT-WGPU, Hilbert-WGPU, Mellin-WGPU, QFT-WGPU, Radon-WGPU, SDFT-WGPU, SFT-WGPU, SHT-WGPU, STFT-WGPU, and Wavelet-WGPU now expose verified typed storage paths.

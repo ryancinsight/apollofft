@@ -7,7 +7,7 @@ use apollo_ntt::{DEFAULT_MODULUS, DEFAULT_PRIMITIVE_ROOT};
 use crate::application::plan::NttWgpuPlan;
 use crate::domain::capabilities::WgpuCapabilities;
 use crate::domain::error::{WgpuError, WgpuResult};
-use crate::infrastructure::kernel::{NttGpuKernel, NttMode};
+use crate::infrastructure::kernel::{NttGpuBuffers, NttGpuKernel, NttMode};
 
 /// Return whether a default WGPU adapter/device can be acquired.
 #[must_use]
@@ -92,6 +92,15 @@ impl NttWgpuBackend {
         NttWgpuPlan::new(len, modulus, primitive_root)
     }
 
+    /// Allocate reusable GPU and host buffers for repeated execution of one plan length.
+    pub fn create_buffers(&self, plan: &NttWgpuPlan) -> WgpuResult<NttGpuBuffers> {
+        let len = plan.len();
+        if len == 0 {
+            return Err(WgpuError::InvalidBufferLength { len });
+        }
+        self.kernel.create_buffers(self.device.as_ref(), len)
+    }
+
     /// Execute the direct forward NTT over the configured residue field.
     pub fn execute_forward(&self, plan: &NttWgpuPlan, input: &[u64]) -> WgpuResult<Vec<u64>> {
         let root = Self::validate_plan_and_input(plan, input)?;
@@ -103,6 +112,25 @@ impl NttWgpuBackend {
             plan.modulus(),
             root,
             NttMode::Forward,
+        )
+    }
+
+    /// Execute the direct forward NTT with caller-owned reusable buffers.
+    pub fn execute_forward_with_buffers(
+        &self,
+        plan: &NttWgpuPlan,
+        input: &[u64],
+        buffers: &mut NttGpuBuffers,
+    ) -> WgpuResult<()> {
+        let root = Self::validate_plan_input_and_buffers(plan, input, buffers)?;
+        self.kernel.execute_with_buffers(
+            self.device.as_ref(),
+            self.queue.as_ref(),
+            input,
+            plan.modulus(),
+            root,
+            NttMode::Forward,
+            buffers,
         )
     }
 
@@ -118,6 +146,46 @@ impl NttWgpuBackend {
             root,
             NttMode::Inverse,
         )
+    }
+
+    /// Execute the direct inverse NTT with caller-owned reusable buffers.
+    pub fn execute_inverse_with_buffers(
+        &self,
+        plan: &NttWgpuPlan,
+        input: &[u64],
+        buffers: &mut NttGpuBuffers,
+    ) -> WgpuResult<()> {
+        let root = Self::validate_plan_input_and_buffers(plan, input, buffers)?;
+        self.kernel.execute_with_buffers(
+            self.device.as_ref(),
+            self.queue.as_ref(),
+            input,
+            plan.modulus(),
+            root,
+            NttMode::Inverse,
+            buffers,
+        )
+    }
+
+    /// Return the last readback values written by a reusable-buffer execution.
+    #[must_use]
+    pub fn buffer_output<'a>(&self, buffers: &'a NttGpuBuffers) -> &'a [u64] {
+        self.kernel.buffer_output(buffers)
+    }
+
+    fn validate_plan_input_and_buffers(
+        plan: &NttWgpuPlan,
+        input: &[u64],
+        buffers: &NttGpuBuffers,
+    ) -> WgpuResult<u64> {
+        let root = Self::validate_plan_and_input(plan, input)?;
+        if buffers.len() != plan.len() {
+            return Err(WgpuError::BufferLengthMismatch {
+                expected: plan.len(),
+                actual: buffers.len(),
+            });
+        }
+        Ok(root)
     }
 
     fn validate_plan_and_input(plan: &NttWgpuPlan, input: &[u64]) -> WgpuResult<u64> {

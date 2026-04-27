@@ -267,6 +267,10 @@ by unit and property tests against analytical identities and direct references.
 - `apollo-fft-wgpu` exposes `GpuFft3dBuffers` for repeated 3D dispatch; tests
   verify reusable-buffer forward/inverse execution matches the existing
   allocating path when a WGPU device is available.
+- `apollo-ntt-wgpu` exposes `NttGpuBuffers` for repeated direct modular NTT
+  dispatch; tests verify reusable-buffer forward/inverse execution matches the
+  allocating path and reject mismatched plan/buffer lengths when a WGPU device
+  is available.
 - `apollo-fft-wgpu` exposes mixed-precision 3D helpers for `f16` host storage
   with `f32` GPU compute; tests verify forward parity against the represented
   input path and inverse recovery after quantization back to `f16`.
