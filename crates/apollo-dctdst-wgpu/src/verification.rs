@@ -14,7 +14,7 @@ mod tests {
         assert!(capabilities.supports_inverse);
         assert!(capabilities.supports_dct);
         assert!(capabilities.supports_dst);
-        assert!(!capabilities.supports_mixed_precision);
+        assert!(capabilities.supports_mixed_precision);
         assert_eq!(
             capabilities.default_precision_profile,
             apollo_fft::PrecisionProfile::LOW_PRECISION_F32
@@ -180,6 +180,64 @@ mod tests {
         for (actual, expected) in recovered.iter().zip(input.iter()) {
             assert!((actual - expected).abs() < 1.0e-4);
         }
+    }
+
+    #[test]
+    fn typed_mixed_storage_dct2_matches_represented_f32_when_device_exists() {
+        let Ok(backend) = DctDstWgpuBackend::try_default() else {
+            return;
+        };
+        use apollo_fft::{f16, PrecisionProfile};
+
+        let represented = [
+            0.75_f32, -1.25_f32, 2.0_f32, -0.5_f32, 3.0_f32, 1.5_f32, 0.25_f32, -0.875_f32,
+        ];
+        let input: Vec<f16> = represented.iter().copied().map(f16::from_f32).collect();
+        let represented_input: Vec<f32> = input.iter().map(|v| v.to_f32()).collect();
+        let plan = backend.plan(input.len(), RealTransformKind::DctII);
+        let expected_forward = backend
+            .execute_forward(&plan, &represented_input)
+            .expect("represented f32 forward");
+        let mut typed_output = vec![f16::from_f32(0.0); input.len()];
+        backend
+            .execute_forward_typed_into(
+                &plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &input,
+                &mut typed_output,
+            )
+            .expect("typed mixed forward");
+        for (actual, expected) in typed_output.iter().zip(expected_forward.iter()) {
+            let expected_quantized = f16::from_f32(*expected);
+            assert_eq!(
+                actual.to_bits(),
+                expected_quantized.to_bits(),
+                "f16 forward bit mismatch: actual={}, expected={}",
+                actual.to_f32(),
+                expected_quantized.to_f32()
+            );
+        }
+    }
+
+    #[test]
+    fn typed_path_rejects_profile_storage_mismatch_when_device_exists() {
+        let Ok(backend) = DctDstWgpuBackend::try_default() else {
+            return;
+        };
+        use apollo_fft::PrecisionProfile;
+
+        let plan = backend.plan(4, RealTransformKind::DctII);
+        let input = [1.0_f32, -1.0_f32, 0.5_f32, -0.5_f32];
+        let mut output = [0.0_f32; 4];
+        let error = backend
+            .execute_forward_typed_into(
+                &plan,
+                PrecisionProfile::HIGH_ACCURACY_F64,
+                &input,
+                &mut output,
+            )
+            .expect_err("profile mismatch must fail");
+        assert_eq!(error, WgpuError::InvalidPrecisionProfile);
     }
 
     #[test]

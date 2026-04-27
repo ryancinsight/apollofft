@@ -2,6 +2,7 @@
 
 #[cfg(test)]
 mod tests {
+    use apollo_fft::{f16, PrecisionProfile};
     use num_complex::{Complex32, Complex64};
 
     use crate::{FrftWgpuBackend, FrftWgpuPlan, WgpuCapabilities, WgpuError};
@@ -12,7 +13,7 @@ mod tests {
         assert!(capabilities.device_available);
         assert!(capabilities.supports_forward);
         assert!(capabilities.supports_inverse);
-        assert!(!capabilities.supports_mixed_precision);
+        assert!(capabilities.supports_mixed_precision);
         assert_eq!(
             capabilities.default_precision_profile,
             apollo_fft::PrecisionProfile::LOW_PRECISION_F32
@@ -162,6 +163,85 @@ mod tests {
                 c.im
             );
         }
+    }
+
+    /// Typed mixed [f16; 2] storage forward dispatch must produce output bits
+    /// identical to f16::from_f32 applied to the f32 GPU result.
+    #[test]
+    fn typed_mixed_storage_frft_matches_represented_f32_when_device_exists() {
+        let Ok(backend) = FrftWgpuBackend::try_default() else {
+            return;
+        };
+        let n = 8_usize;
+        let order = 0.5_f32;
+        // Build [f16; 2] input from well-conditioned f32 source values.
+        let source_re = [0.5_f32, -1.0, 2.0, 0.25, -0.5, 1.5, 0.0, -0.75];
+        let source_im = [-0.25_f32, 0.75, -1.5, 0.5, 1.0, -0.25, 0.125, -1.0];
+        let input: Vec<[f16; 2]> = source_re
+            .iter()
+            .zip(source_im.iter())
+            .map(|(&re, &im)| [f16::from_f32(re), f16::from_f32(im)])
+            .collect();
+        // Represented f32 form is the round-trip through f16 quantization.
+        let represented_f32: Vec<Complex32> = input
+            .iter()
+            .map(|[re, im]| Complex32::new(re.to_f32(), im.to_f32()))
+            .collect();
+        let plan = FrftWgpuPlan::new(n, order);
+        let expected = backend
+            .execute_forward(&plan, &represented_f32)
+            .expect("f32 forward reference");
+        let mut typed_output = vec![[f16::from_f32(0.0); 2]; n];
+        backend
+            .execute_forward_typed_into(
+                &plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &input,
+                &mut typed_output,
+            )
+            .expect("typed mixed forward");
+        for (actual, expected) in typed_output.iter().zip(expected.iter()) {
+            let expected_re = f16::from_f32(expected.re);
+            let expected_im = f16::from_f32(expected.im);
+            assert_eq!(
+                actual[0].to_bits(),
+                expected_re.to_bits(),
+                "re bits mismatch: actual={}, expected={}",
+                actual[0].to_f32(),
+                expected_re.to_f32()
+            );
+            assert_eq!(
+                actual[1].to_bits(),
+                expected_im.to_bits(),
+                "im bits mismatch: actual={}, expected={}",
+                actual[1].to_f32(),
+                expected_im.to_f32()
+            );
+        }
+    }
+
+    /// Profile mismatch: [f16; 2] storage requires MIXED_PRECISION_F16_F32;
+    /// supplying LOW_PRECISION_F32 must return InvalidPrecisionProfile.
+    #[test]
+    fn typed_path_rejects_profile_storage_mismatch_when_device_exists() {
+        let Ok(backend) = FrftWgpuBackend::try_default() else {
+            return;
+        };
+        let plan = FrftWgpuPlan::new(2, 0.5_f32);
+        let input = [
+            [f16::from_f32(1.0), f16::from_f32(0.0)],
+            [f16::from_f32(-1.0), f16::from_f32(0.5)],
+        ];
+        let mut output = [[f16::from_f32(0.0); 2]; 2];
+        let error = backend
+            .execute_forward_typed_into(
+                &plan,
+                PrecisionProfile::LOW_PRECISION_F32,
+                &input,
+                &mut output,
+            )
+            .expect_err("profile mismatch must fail");
+        assert_eq!(error, WgpuError::InvalidPrecisionProfile);
     }
 
     /// Roundtrip test using integer order=1: FrFT(1)=centred-DFT (mode=1) and

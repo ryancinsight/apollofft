@@ -2,6 +2,7 @@
 
 #[cfg(test)]
 mod tests {
+    use apollo_fft::{f16, PrecisionProfile};
     use apollo_mellin::MellinPlan;
 
     use crate::{MellinWgpuBackend, MellinWgpuPlan, WgpuCapabilities, WgpuError};
@@ -12,7 +13,7 @@ mod tests {
         assert!(capabilities.device_available);
         assert!(capabilities.supports_forward);
         assert!(!capabilities.supports_inverse);
-        assert!(!capabilities.supports_mixed_precision);
+        assert!(capabilities.supports_mixed_precision);
         assert_eq!(
             capabilities.default_precision_profile,
             apollo_fft::PrecisionProfile::LOW_PRECISION_F32
@@ -81,6 +82,67 @@ mod tests {
             assert!((f64::from(actual.re) - expected.re).abs() < 5.0e-4);
             assert!((f64::from(actual.im) - expected.im).abs() < 5.0e-4);
         }
+    }
+
+    #[test]
+    fn typed_mixed_storage_matches_represented_f32_execution_when_device_exists() {
+        let Ok(backend) = MellinWgpuBackend::try_default() else {
+            return;
+        };
+        let signal_f32 = [1.0_f32, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5];
+        let signal_min = 1.0_f64;
+        let signal_max = 8.0_f64;
+        let plan = backend.plan(8, 1.0, 8.0);
+
+        // Quantize to f16 and recover represented f32 for the reference path.
+        let signal_f16: Vec<f16> = signal_f32.iter().copied().map(f16::from_f32).collect();
+        let represented_f32: Vec<f32> = signal_f16.iter().map(|v| v.to_f32()).collect();
+
+        let expected = backend
+            .execute_forward(&plan, &represented_f32, signal_min, signal_max)
+            .expect("represented f32 forward");
+        let actual = backend
+            .execute_forward_typed(
+                &plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &signal_f16,
+                signal_min,
+                signal_max,
+            )
+            .expect("typed mixed forward");
+
+        assert_eq!(actual.len(), expected.len());
+        for (index, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (f64::from(a.re) - f64::from(e.re)).abs() < 1.0e-2,
+                "re mismatch at index {index}: actual={a:?} expected={e:?}"
+            );
+            assert!(
+                (f64::from(a.im) - f64::from(e.im)).abs() < 1.0e-2,
+                "im mismatch at index {index}: actual={a:?} expected={e:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_path_rejects_profile_mismatch_when_device_exists() {
+        let Ok(backend) = MellinWgpuBackend::try_default() else {
+            return;
+        };
+        let plan = backend.plan(8, 1.0, 8.0);
+        let signal_f16: Vec<f16> = vec![f16::from_f32(1.0); 8];
+
+        // f16 carries MIXED_PRECISION_F16_F32; passing LOW_PRECISION_F32 must fail.
+        let err = backend
+            .execute_forward_typed::<f16>(
+                &plan,
+                PrecisionProfile::LOW_PRECISION_F32,
+                &signal_f16,
+                1.0,
+                8.0,
+            )
+            .expect_err("profile mismatch must fail");
+        assert_eq!(err, WgpuError::InvalidPrecisionProfile);
     }
 
     #[test]

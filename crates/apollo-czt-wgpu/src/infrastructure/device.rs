@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use num_complex::Complex32;
+use apollo_czt::CztStorage;
+use apollo_fft::PrecisionProfile;
+use num_complex::{Complex32, Complex64};
 
 use crate::application::plan::CztWgpuPlan;
 use crate::domain::capabilities::WgpuCapabilities;
@@ -101,6 +103,47 @@ impl CztWgpuBackend {
         Self::validate_plan_input(plan, input)?;
         self.kernel
             .execute(self.device.as_ref(), self.queue.as_ref(), plan, input)
+    }
+
+    /// Execute the forward CZT with typed `Complex64`, `Complex32`, or mixed `[f16; 2]` storage.
+    ///
+    /// Promotes represented input once to `Complex32`, dispatches the GPU kernel,
+    /// and quantizes the output back to the requested storage type.
+    pub fn execute_forward_typed_into<T: CztStorage>(
+        &self,
+        plan: &CztWgpuPlan,
+        precision: PrecisionProfile,
+        input: &[T],
+        output: &mut [T],
+    ) -> WgpuResult<()> {
+        Self::validate_czt_typed_precision::<T>(precision)?;
+        let output_len = plan.output_len();
+        if output.len() != output_len {
+            return Err(WgpuError::LengthMismatch {
+                expected: output_len,
+                actual: output.len(),
+            });
+        }
+        let represented: Vec<Complex32> = input
+            .iter()
+            .map(|v| {
+                let c = v.to_complex64();
+                Complex32::new(c.re as f32, c.im as f32)
+            })
+            .collect();
+        let computed = self.execute_forward(plan, &represented)?;
+        for (slot, value) in output.iter_mut().zip(computed.iter().copied()) {
+            *slot = T::from_complex64(Complex64::new(f64::from(value.re), f64::from(value.im)));
+        }
+        Ok(())
+    }
+
+    fn validate_czt_typed_precision<T: CztStorage>(precision: PrecisionProfile) -> WgpuResult<()> {
+        let expected = T::PROFILE;
+        if precision.storage != expected.storage || precision.compute != expected.compute {
+            return Err(WgpuError::InvalidPrecisionProfile);
+        }
+        Ok(())
     }
 
     /// Inverse or adjoint execution is unsupported until the owning CZT crate defines it.

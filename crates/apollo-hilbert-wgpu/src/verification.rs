@@ -11,7 +11,7 @@ mod tests {
         assert!(capabilities.device_available);
         assert!(capabilities.supports_forward);
         assert!(!capabilities.supports_inverse);
-        assert!(!capabilities.supports_mixed_precision);
+        assert!(capabilities.supports_mixed_precision);
         assert_eq!(
             capabilities.default_precision_profile,
             apollo_fft::PrecisionProfile::LOW_PRECISION_F32
@@ -129,5 +129,54 @@ mod tests {
                 actual: 4,
             }
         );
+    }
+
+    #[test]
+    fn typed_mixed_storage_matches_represented_f32_execution_when_device_exists() {
+        let Ok(backend) = HilbertWgpuBackend::try_default() else {
+            return;
+        };
+        use apollo_fft::{f16, PrecisionProfile};
+        let represented = [1.0_f32, -2.0, 0.5, 2.25, -4.0, 1.5, 0.0, -0.75];
+        let input: Vec<f16> = represented.iter().copied().map(f16::from_f32).collect();
+        let represented_input: Vec<f32> = input.iter().map(|v| v.to_f64() as f32).collect();
+        let plan = backend.plan(input.len());
+        let expected_fwd = backend
+            .execute_forward(&plan, &represented_input)
+            .expect("represented forward");
+        let mut typed_fwd = vec![f16::from_f32(0.0); input.len()];
+        backend
+            .execute_forward_typed_into(
+                &plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &input,
+                &mut typed_fwd,
+            )
+            .expect("typed mixed forward");
+        assert_eq!(typed_fwd.len(), expected_fwd.len());
+        for (actual, expected) in typed_fwd.iter().zip(expected_fwd.iter()) {
+            let expected_f16 = f16::from_f32(*expected);
+            assert_eq!(actual.to_bits(), expected_f16.to_bits());
+        }
+    }
+
+    #[test]
+    fn typed_path_rejects_profile_mismatch_when_device_exists() {
+        let Ok(backend) = HilbertWgpuBackend::try_default() else {
+            return;
+        };
+        use apollo_fft::{f16, PrecisionProfile};
+        let plan = backend.plan(8);
+        let input = vec![f16::from_f32(1.0); 8];
+        let mut output = vec![f16::from_f32(0.0); 8];
+        let err = backend
+            .execute_forward_typed_into(
+                &plan,
+                PrecisionProfile::LOW_PRECISION_F32,
+                &input,
+                &mut output,
+            )
+            .expect_err("profile mismatch must fail");
+        assert_eq!(err, WgpuError::InvalidPrecisionProfile);
     }
 }

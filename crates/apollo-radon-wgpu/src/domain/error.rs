@@ -68,4 +68,7 @@ pub enum WgpuError {
         /// Requested operation name.
         operation: &'static str,
     },
+    /// Requested precision profile does not match the typed storage.
+    #[error("precision profile does not match typed Radon WGPU storage")]
+    InvalidPrecisionProfile,
 }

@@ -3,6 +3,7 @@
 #[cfg(test)]
 mod tests {
     use crate::{StftWgpuBackend, StftWgpuPlan, WgpuCapabilities, WgpuError};
+    use apollo_fft::{f16, PrecisionProfile};
 
     // -----------------------------------------------------------------------
     // Structural / plan tests (no GPU required)
@@ -14,7 +15,7 @@ mod tests {
         assert!(caps.device_available);
         assert!(caps.supports_forward);
         assert!(!caps.supports_inverse);
-        assert!(!caps.supports_mixed_precision);
+        assert!(caps.supports_mixed_precision);
         assert_eq!(
             caps.default_precision_profile,
             apollo_fft::PrecisionProfile::LOW_PRECISION_F32
@@ -23,7 +24,7 @@ mod tests {
         assert!(!caps_off.device_available);
         assert!(!caps_off.supports_forward);
         assert!(!caps_off.supports_inverse);
-        assert!(!caps_off.supports_mixed_precision);
+        assert!(caps_off.supports_mixed_precision);
         assert_eq!(
             caps_off.default_precision_profile,
             apollo_fft::PrecisionProfile::LOW_PRECISION_F32
@@ -159,5 +160,88 @@ mod tests {
                 im_err
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Typed mixed-precision dispatch tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn typed_mixed_storage_matches_represented_f32_execution_when_device_exists() {
+        let Ok(backend) = StftWgpuBackend::try_default() else {
+            return;
+        };
+        // 8-sample signal: f16 quantization of the alternating pattern is exact for these values.
+        let signal_f32: Vec<f32> = vec![0.0, 1.0, 0.0, -1.0, 0.0, 1.0, 0.0, -1.0];
+        let signal_f16: Vec<f16> = signal_f32.iter().map(|&x| f16::from_f32(x)).collect();
+        // Represented input: f16 promoted back to f32 (round-trip defines the reference).
+        let represented: Vec<f32> = signal_f16.iter().map(|v| v.to_f32()).collect();
+        let plan = StftWgpuPlan::new(4, 2);
+        // frame_count = 1 + 8.div_ceil(2) = 5; output_len = 5 * 4 = 20.
+        let f32_result = backend
+            .execute_forward(&plan, &represented)
+            .expect("f32 reference");
+        let mut typed_out: Vec<[f16; 2]> =
+            vec![[f16::from_f32(0.0), f16::from_f32(0.0)]; f32_result.len()];
+        backend
+            .execute_forward_typed_into(
+                &plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &signal_f16,
+                &mut typed_out,
+            )
+            .expect("typed mixed forward");
+        for (actual, expected) in typed_out.iter().zip(f32_result.iter()) {
+            let expected_f16 = [f16::from_f32(expected.re), f16::from_f32(expected.im)];
+            assert_eq!(
+                actual[0].to_bits(),
+                expected_f16[0].to_bits(),
+                "re bits mismatch: actual={:?} expected={:?}",
+                actual[0],
+                expected_f16[0]
+            );
+            assert_eq!(
+                actual[1].to_bits(),
+                expected_f16[1].to_bits(),
+                "im bits mismatch: actual={:?} expected={:?}",
+                actual[1],
+                expected_f16[1]
+            );
+        }
+    }
+
+    #[test]
+    fn typed_path_rejects_profile_mismatch() {
+        let Ok(backend) = StftWgpuBackend::try_default() else {
+            return;
+        };
+        // f16 signal: I::PROFILE == MIXED_PRECISION_F16_F32.
+        // Passing LOW_PRECISION_F32 as input_precision must trigger InvalidPrecisionProfile
+        // before any GPU work is attempted.
+        let signal_f16: Vec<f16> = vec![
+            f16::from_f32(0.0),
+            f16::from_f32(1.0),
+            f16::from_f32(0.0),
+            f16::from_f32(-1.0),
+            f16::from_f32(0.0),
+            f16::from_f32(1.0),
+            f16::from_f32(0.0),
+            f16::from_f32(-1.0),
+        ];
+        let plan = StftWgpuPlan::new(4, 2);
+        let frame_count = 1 + signal_f16.len().div_ceil(plan.hop_len());
+        let output_len = frame_count * plan.frame_len();
+        let mut out: Vec<[f16; 2]> = vec![[f16::from_f32(0.0), f16::from_f32(0.0)]; output_len];
+        let error = backend
+            .execute_forward_typed_into(
+                &plan,
+                PrecisionProfile::LOW_PRECISION_F32,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &signal_f16,
+                &mut out,
+            )
+            .expect_err("profile mismatch must fail");
+        assert_eq!(error, WgpuError::InvalidPrecisionProfile);
     }
 }

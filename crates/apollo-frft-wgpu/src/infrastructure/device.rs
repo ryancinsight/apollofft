@@ -2,7 +2,10 @@
 
 use std::sync::Arc;
 
-use num_complex::Complex32;
+use num_complex::{Complex32, Complex64};
+
+use apollo_fft::PrecisionProfile;
+use apollo_frft::FrftStorage;
 
 use crate::application::plan::FrftWgpuPlan;
 use crate::domain::capabilities::WgpuCapabilities;
@@ -125,6 +128,77 @@ impl FrftWgpuBackend {
             scale_re,
             scale_im,
         )
+    }
+
+    /// Execute the forward FrFT with typed `Complex64`, `Complex32`, or mixed `[f16; 2]` storage.
+    ///
+    /// Promotes represented input once to `Complex32`, dispatches the GPU kernel,
+    /// and quantizes output back to the requested storage type.
+    pub fn execute_forward_typed_into<T: FrftStorage>(
+        &self,
+        plan: &FrftWgpuPlan,
+        precision: PrecisionProfile,
+        input: &[T],
+        output: &mut [T],
+    ) -> WgpuResult<()> {
+        Self::validate_frft_typed_precision::<T>(precision)?;
+        if output.len() != plan.len() {
+            return Err(WgpuError::InputLengthMismatch {
+                expected: plan.len(),
+                actual: output.len(),
+            });
+        }
+        let represented: Vec<Complex32> = input
+            .iter()
+            .map(|v| {
+                let c = v.to_complex64();
+                Complex32::new(c.re as f32, c.im as f32)
+            })
+            .collect();
+        let computed = self.execute_forward(plan, &represented)?;
+        for (slot, value) in output.iter_mut().zip(computed.iter().copied()) {
+            *slot = T::from_complex64(Complex64::new(f64::from(value.re), f64::from(value.im)));
+        }
+        Ok(())
+    }
+
+    /// Execute the inverse FrFT with typed `Complex64`, `Complex32`, or mixed `[f16; 2]` storage.
+    pub fn execute_inverse_typed_into<T: FrftStorage>(
+        &self,
+        plan: &FrftWgpuPlan,
+        precision: PrecisionProfile,
+        input: &[T],
+        output: &mut [T],
+    ) -> WgpuResult<()> {
+        Self::validate_frft_typed_precision::<T>(precision)?;
+        if output.len() != plan.len() {
+            return Err(WgpuError::InputLengthMismatch {
+                expected: plan.len(),
+                actual: output.len(),
+            });
+        }
+        let represented: Vec<Complex32> = input
+            .iter()
+            .map(|v| {
+                let c = v.to_complex64();
+                Complex32::new(c.re as f32, c.im as f32)
+            })
+            .collect();
+        let computed = self.execute_inverse(plan, &represented)?;
+        for (slot, value) in output.iter_mut().zip(computed.iter().copied()) {
+            *slot = T::from_complex64(Complex64::new(f64::from(value.re), f64::from(value.im)));
+        }
+        Ok(())
+    }
+
+    fn validate_frft_typed_precision<T: FrftStorage>(
+        precision: PrecisionProfile,
+    ) -> WgpuResult<()> {
+        let expected = T::PROFILE;
+        if precision.storage != expected.storage || precision.compute != expected.compute {
+            return Err(WgpuError::InvalidPrecisionProfile);
+        }
+        Ok(())
     }
 
     fn validate(plan: &FrftWgpuPlan, input: &[Complex32]) -> WgpuResult<()> {

@@ -15,7 +15,7 @@ pub mod infrastructure;
 /// Value-semantic verification.
 pub mod verification;
 
-pub use application::execution::plan::dctdst::DctDstPlan;
+pub use application::execution::plan::dctdst::{DctDstPlan, RealTransformStorage};
 pub use domain::contracts::error::{DctDstError, DctDstResult};
 pub use domain::metadata::kind::{RealTransformConfig, RealTransformKind};
 pub use infrastructure::kernel::direct::{dct2, dct3, dst2, dst3};

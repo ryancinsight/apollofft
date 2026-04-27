@@ -2,7 +2,10 @@
 
 use std::sync::Arc;
 
-use num_complex::Complex32;
+use num_complex::{Complex32, Complex64};
+
+use apollo_fft::PrecisionProfile;
+use apollo_sdft::{SdftBinStorage, SdftRealStorage};
 
 use crate::application::plan::SdftWgpuPlan;
 use crate::domain::capabilities::WgpuCapabilities;
@@ -97,6 +100,44 @@ impl SdftWgpuBackend {
             plan.window_len(),
             plan.bin_count(),
         )
+    }
+
+    /// Execute the direct SDFT bins computation with typed real input and typed complex output.
+    ///
+    /// `input_precision` must match `I::PROFILE`; `output_precision` must match `O::PROFILE`.
+    /// WGPU arithmetic is `f32`; host storage is promoted/quantized at the dispatch boundary.
+    pub fn execute_forward_typed_into<I: SdftRealStorage, O: SdftBinStorage>(
+        &self,
+        plan: &SdftWgpuPlan,
+        input_precision: PrecisionProfile,
+        output_precision: PrecisionProfile,
+        window: &[I],
+        output: &mut [O],
+    ) -> WgpuResult<()> {
+        let expected_in = I::PROFILE;
+        if input_precision.storage != expected_in.storage
+            || input_precision.compute != expected_in.compute
+        {
+            return Err(WgpuError::InvalidPrecisionProfile);
+        }
+        let expected_out = O::PROFILE;
+        if output_precision.storage != expected_out.storage
+            || output_precision.compute != expected_out.compute
+        {
+            return Err(WgpuError::InvalidPrecisionProfile);
+        }
+        if output.len() != plan.bin_count() {
+            return Err(WgpuError::WindowLengthMismatch {
+                expected: plan.bin_count(),
+                actual: output.len(),
+            });
+        }
+        let represented: Vec<f32> = window.iter().map(|v| v.to_f64() as f32).collect();
+        let computed = self.execute_forward(plan, &represented)?;
+        for (slot, value) in output.iter_mut().zip(computed.iter().copied()) {
+            *slot = O::from_complex64(Complex64::new(f64::from(value.re), f64::from(value.im)));
+        }
+        Ok(())
     }
 
     /// Inverse execution is unsupported: SDFT is a direct DFT snapshot with no GPU inverse.

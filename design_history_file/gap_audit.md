@@ -2,7 +2,7 @@
 
 ## Open Gaps
 
-- Real mixed-precision GPU execution remains future work for transform-specific WGPU crates other than DHT-WGPU and FWHT-WGPU and for cudatile where device features and WGSL support permit `f16` storage or wider host-side precision contracts. FFT-WGPU 3D, NUFFT-WGPU direct/fast Type-1/Type-2 1D/3D, DHT-WGPU forward/inverse, and FWHT-WGPU forward/inverse now own verified `f16` storage / `f32` compute paths.
+- Real mixed-precision GPU execution remains future work only for NTT-WGPU and cudatile. NTT-WGPU is an integer modular transform without a meaningful `f16` storage contract. Cudatile remains an explicit backend boundary until device kernels exist. FFT-WGPU 3D, NUFFT-WGPU direct/fast Type-1/Type-2 1D/3D, DHT-WGPU, FWHT-WGPU, CZT-WGPU, DCTDST-WGPU, FrFT-WGPU, GFT-WGPU, Hilbert-WGPU, Mellin-WGPU, QFT-WGPU, Radon-WGPU, SDFT-WGPU, SFT-WGPU, SHT-WGPU, STFT-WGPU, and Wavelet-WGPU now own verified typed host-storage / `f32` GPU-compute paths.
 
 ## Closed Gaps
 
@@ -15,6 +15,7 @@ All items below are implemented, tested, and verified in completed sprints.
 - Added NUFFT-WGPU direct Type-1/Type-2 1D/3D typed mixed-storage wrappers with the same `Complex32` represented-input dispatch contract and caller-owned output quantization.
 - Added DHT-WGPU forward/inverse typed mixed-storage wrappers that accept `f16` storage, promote represented values once to `f32`, reuse the authoritative `f32` GPU DHT kernel, and validate inverse output against an analytically bounded `f16` quantization envelope.
 - Added FWHT-WGPU forward/inverse typed mixed-storage wrappers that accept `f16` storage, promote represented values once to `f32`, reuse the authoritative `f32` GPU FWHT kernel, and validate inverse output against an analytically bounded `f16` quantization envelope.
+- Added typed mixed-storage WGPU wrappers for CZT, DCT/DST, FrFT, GFT, Hilbert, Mellin, QFT, Radon, SDFT, SFT, SHT, STFT, and Wavelet. Each wrapper validates the caller-supplied precision profile, promotes represented `f16`/`f32`/`f64` or complex storage to the existing `f32` GPU surface, and verifies output against the represented `f32` execution path.
 - Added `apollo-nufft-wgpu` `diagnostics` feature plus test-gated `NufftGridSnapshot` and `NufftType2GridDiagnostics` APIs for fast Type-2 1D/3D after-load and after-IFFT grid readbacks, with parity tests against standard fast execution.
 - Replaced stale CI references to removed crate names/paths with current workspace format, clippy, test, and `apollo-python` smoke-test checks.
 

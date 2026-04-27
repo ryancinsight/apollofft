@@ -2,7 +2,8 @@
 
 #[cfg(test)]
 mod tests {
-    use apollo_sft::SparseFftPlan;
+    use apollo_fft::{f16, PrecisionProfile};
+    use apollo_sft::{SparseFftPlan, SparseSpectrum};
     use num_complex::{Complex32, Complex64};
 
     use crate::{SftWgpuBackend, SftWgpuPlan, WgpuCapabilities, WgpuError};
@@ -13,7 +14,7 @@ mod tests {
         assert!(capabilities.device_available);
         assert!(capabilities.supports_forward);
         assert!(capabilities.supports_inverse);
-        assert!(!capabilities.supports_mixed_precision);
+        assert!(capabilities.supports_mixed_precision);
         assert_eq!(
             capabilities.default_precision_profile,
             apollo_fft::PrecisionProfile::LOW_PRECISION_F32
@@ -126,6 +127,74 @@ mod tests {
                 2.0e-4,
             );
         }
+    }
+
+    #[test]
+    fn typed_mixed_storage_forward_matches_complex32_execution_when_device_exists() {
+        let Some(backend) = backend_or_skip() else {
+            return;
+        };
+        let plan = SftWgpuPlan::new(4, 2);
+        let signal_c64 = two_tone_signal(4, &[(1, 3.0), (2, 1.25)]);
+        let signal_c32: Vec<Complex32> = signal_c64
+            .iter()
+            .map(|v| Complex32::new(v.re as f32, v.im as f32))
+            .collect();
+
+        // Quantize to [f16; 2] and recover represented f32 for the reference path.
+        let input_f16: Vec<[f16; 2]> = signal_c32
+            .iter()
+            .map(|v| [f16::from_f32(v.re), f16::from_f32(v.im)])
+            .collect();
+        let represented_c32: Vec<Complex32> = input_f16
+            .iter()
+            .map(|v| Complex32::new(v[0].to_f32(), v[1].to_f32()))
+            .collect();
+
+        let f32_result = backend
+            .execute_forward(&plan, &represented_c32)
+            .expect("represented f32 forward");
+        let typed_result = backend
+            .execute_forward_typed(&plan, PrecisionProfile::MIXED_PRECISION_F16_F32, &input_f16)
+            .expect("typed mixed forward");
+
+        assert_eq!(typed_result.frequencies, f32_result.frequencies);
+        assert_eq!(typed_result.values.len(), f32_result.values.len());
+        for (actual, expected) in typed_result.values.iter().zip(f32_result.values.iter()) {
+            assert_complex64_close(*actual, *expected, 1.0e-3);
+        }
+    }
+
+    #[test]
+    fn typed_path_rejects_profile_mismatch_when_device_exists() {
+        let Some(backend) = backend_or_skip() else {
+            return;
+        };
+        let plan = SftWgpuPlan::new(4, 2);
+        let input_f16: Vec<[f16; 2]> = vec![[f16::from_f32(0.0); 2]; 4];
+
+        // Forward: [f16; 2] carries MIXED_PRECISION_F16_F32; passing LOW_PRECISION_F32 must fail.
+        let fwd_err = backend
+            .execute_forward_typed::<[f16; 2]>(
+                &plan,
+                PrecisionProfile::LOW_PRECISION_F32,
+                &input_f16,
+            )
+            .expect_err("profile mismatch must fail");
+        assert_eq!(fwd_err, WgpuError::InvalidPrecisionProfile);
+
+        // Inverse: same mismatch on the output typed path.
+        let spectrum = SparseSpectrum::new(4);
+        let mut output_f16: Vec<[f16; 2]> = vec![[f16::from_f32(0.0); 2]; 4];
+        let inv_err = backend
+            .execute_inverse_typed_into::<[f16; 2]>(
+                &plan,
+                PrecisionProfile::LOW_PRECISION_F32,
+                &spectrum,
+                &mut output_f16,
+            )
+            .expect_err("profile mismatch must fail");
+        assert_eq!(inv_err, WgpuError::InvalidPrecisionProfile);
     }
 
     fn backend_or_skip() -> Option<SftWgpuBackend> {

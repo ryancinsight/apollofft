@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use apollo_fft::PrecisionProfile;
+use apollo_mellin::MellinStorage;
 use num_complex::Complex32;
 
 use crate::application::plan::MellinWgpuPlan;
@@ -105,6 +107,26 @@ impl MellinWgpuBackend {
         Err(WgpuError::UnsupportedExecution {
             operation: "inverse",
         })
+    }
+
+    /// Execute the forward Mellin transform with typed `f64`, `f32`, or mixed `f16` input storage.
+    ///
+    /// Promotes represented input once to `f32` before dispatch.
+    /// Returns the log-frequency spectrum as `Vec<Complex32>`.
+    pub fn execute_forward_typed<T: MellinStorage>(
+        &self,
+        plan: &MellinWgpuPlan,
+        precision: PrecisionProfile,
+        signal: &[T],
+        signal_min: f64,
+        signal_max: f64,
+    ) -> WgpuResult<Vec<Complex32>> {
+        let expected = T::PROFILE;
+        if precision.storage != expected.storage || precision.compute != expected.compute {
+            return Err(WgpuError::InvalidPrecisionProfile);
+        }
+        let represented: Vec<f32> = signal.iter().map(|v| v.to_f64() as f32).collect();
+        self.execute_forward(plan, &represented, signal_min, signal_max)
     }
 
     fn validate_inputs(

@@ -3,6 +3,7 @@
 #[cfg(test)]
 mod tests {
     use apollo_czt::CztPlan;
+    use apollo_fft::{f16, PrecisionProfile};
     use ndarray::Array1;
     use num_complex::{Complex32, Complex64};
 
@@ -16,7 +17,7 @@ mod tests {
         assert!(capabilities.device_available);
         assert!(capabilities.supports_forward);
         assert!(!capabilities.supports_inverse);
-        assert!(!capabilities.supports_mixed_precision);
+        assert!(capabilities.supports_mixed_precision);
         assert_eq!(
             capabilities.default_precision_profile,
             apollo_fft::PrecisionProfile::LOW_PRECISION_F32
@@ -99,6 +100,73 @@ mod tests {
             assert!((f64::from(actual.re) - expected.re).abs() < 5.0e-4);
             assert!((f64::from(actual.im) - expected.im).abs() < 5.0e-4);
         }
+    }
+
+    #[test]
+    fn typed_mixed_storage_matches_represented_f32_execution_when_device_exists() {
+        let Ok(backend) = CztWgpuBackend::try_default() else {
+            return;
+        };
+        let a32 = Complex32::new(0.95, 0.1);
+        let w32 = Complex32::from_polar(1.0, -std::f32::consts::TAU / 9.0);
+        let input_f32 = [
+            Complex32::new(1.0, 0.0),
+            Complex32::new(-0.5, 1.0),
+            Complex32::new(0.25, -0.75),
+            Complex32::new(1.25, 0.5),
+        ];
+        let input_f16: Vec<[f16; 2]> = input_f32
+            .iter()
+            .map(|c| [f16::from_f32(c.re), f16::from_f32(c.im)])
+            .collect();
+        let represented: Vec<Complex32> = input_f16
+            .iter()
+            .map(|v| Complex32::new(v[0].to_f32(), v[1].to_f32()))
+            .collect();
+        let gpu_plan = backend.plan(input_f16.len(), 6, a32, w32);
+        let f32_result = backend
+            .execute_forward(&gpu_plan, &represented)
+            .expect("f32 reference");
+        let mut typed_out = vec![[f16::from_f32(0.0), f16::from_f32(0.0)]; 6];
+        backend
+            .execute_forward_typed_into(
+                &gpu_plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &input_f16,
+                &mut typed_out,
+            )
+            .expect("typed mixed forward");
+        for (actual, expected) in typed_out.iter().zip(f32_result.iter()) {
+            let expected_f16 = [f16::from_f32(expected.re), f16::from_f32(expected.im)];
+            assert_eq!(actual[0].to_bits(), expected_f16[0].to_bits());
+            assert_eq!(actual[1].to_bits(), expected_f16[1].to_bits());
+        }
+    }
+
+    #[test]
+    fn typed_path_rejects_profile_mismatch() {
+        let Ok(backend) = CztWgpuBackend::try_default() else {
+            return;
+        };
+        let a32 = Complex32::new(0.95, 0.1);
+        let w32 = Complex32::from_polar(1.0, -std::f32::consts::TAU / 9.0);
+        let input_f16: Vec<[f16; 2]> = vec![
+            [f16::from_f32(1.0), f16::from_f32(0.0)],
+            [f16::from_f32(-0.5), f16::from_f32(1.0)],
+            [f16::from_f32(0.25), f16::from_f32(-0.75)],
+            [f16::from_f32(1.25), f16::from_f32(0.5)],
+        ];
+        let mut out = vec![[f16::from_f32(0.0), f16::from_f32(0.0)]; 6];
+        let gpu_plan = backend.plan(input_f16.len(), 6, a32, w32);
+        let error = backend
+            .execute_forward_typed_into(
+                &gpu_plan,
+                PrecisionProfile::LOW_PRECISION_F32,
+                &input_f16,
+                &mut out,
+            )
+            .expect_err("profile mismatch must fail");
+        assert_eq!(error, WgpuError::InvalidPrecisionProfile);
     }
 
     #[test]

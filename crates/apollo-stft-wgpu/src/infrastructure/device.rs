@@ -2,7 +2,10 @@
 
 use std::sync::Arc;
 
-use num_complex::Complex32;
+use num_complex::{Complex32, Complex64};
+
+use apollo_fft::PrecisionProfile;
+use apollo_stft::{StftRealStorage, StftSpectrumStorage};
 
 use crate::application::plan::StftWgpuPlan;
 use crate::domain::capabilities::WgpuCapabilities;
@@ -136,5 +139,45 @@ impl StftWgpuBackend {
         Err(WgpuError::UnsupportedExecution {
             operation: "inverse",
         })
+    }
+
+    /// Execute the forward STFT with typed real input and typed complex spectrum output.
+    ///
+    /// `input_precision` must match `I::PROFILE`; `output_precision` must match `O::PROFILE`.
+    /// WGPU arithmetic is `f32`; host storage is promoted/quantized at the dispatch boundary.
+    /// Output length must equal `(1 + signal.len().div_ceil(hop_len)) * frame_len`.
+    pub fn execute_forward_typed_into<I: StftRealStorage, O: StftSpectrumStorage>(
+        &self,
+        plan: &StftWgpuPlan,
+        input_precision: PrecisionProfile,
+        output_precision: PrecisionProfile,
+        signal: &[I],
+        output: &mut [O],
+    ) -> WgpuResult<()> {
+        let expected_in = I::PROFILE;
+        if input_precision.storage != expected_in.storage
+            || input_precision.compute != expected_in.compute
+        {
+            return Err(WgpuError::InvalidPrecisionProfile);
+        }
+        let expected_out = O::PROFILE;
+        if output_precision.storage != expected_out.storage
+            || output_precision.compute != expected_out.compute
+        {
+            return Err(WgpuError::InvalidPrecisionProfile);
+        }
+        let represented: Vec<f32> = signal.iter().map(|v| v.to_f64() as f32).collect();
+        let computed = self.execute_forward(plan, &represented)?;
+        if output.len() != computed.len() {
+            return Err(WgpuError::InvalidPlan {
+                frame_len: plan.frame_len(),
+                hop_len: plan.hop_len(),
+                message: "output length does not match computed frame count * frame_len",
+            });
+        }
+        for (slot, value) in output.iter_mut().zip(computed.iter().copied()) {
+            *slot = O::from_complex64(Complex64::new(f64::from(value.re), f64::from(value.im)));
+        }
+        Ok(())
     }
 }

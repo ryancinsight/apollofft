@@ -14,7 +14,7 @@ mod tests {
         assert!(capabilities.device_available);
         assert!(capabilities.supports_forward);
         assert!(capabilities.supports_inverse);
-        assert!(!capabilities.supports_mixed_precision);
+        assert!(capabilities.supports_mixed_precision);
         assert_eq!(
             capabilities.default_precision_profile,
             apollo_fft::PrecisionProfile::LOW_PRECISION_F32
@@ -169,6 +169,76 @@ mod tests {
                 imag_error
             );
         }
+    }
+
+    #[test]
+    fn typed_mixed_storage_qft_matches_represented_f32_when_device_exists() {
+        let Ok(backend) = QftWgpuBackend::try_default() else {
+            return;
+        };
+        use apollo_fft::{f16, PrecisionProfile};
+
+        let input: Vec<[f16; 2]> = vec![
+            [f16::from_f32(1.0), f16::from_f32(0.0)],
+            [f16::from_f32(-0.5), f16::from_f32(0.75)],
+            [f16::from_f32(0.25), f16::from_f32(-1.25)],
+            [f16::from_f32(2.0), f16::from_f32(0.5)],
+        ];
+        let represented_f32: Vec<Complex32> = input
+            .iter()
+            .map(|[re, im]| Complex32::new(re.to_f32(), im.to_f32()))
+            .collect();
+        let plan = backend.plan(input.len());
+        let expected = backend
+            .execute_forward(&plan, &represented_f32)
+            .expect("f32 forward");
+        let mut typed_output = vec![[f16::from_f32(0.0); 2]; input.len()];
+        backend
+            .execute_forward_typed_into(
+                &plan,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+                &input,
+                &mut typed_output,
+            )
+            .expect("typed mixed forward");
+        for (actual, expected_val) in typed_output.iter().zip(expected.iter()) {
+            let expected_re = f16::from_f32(expected_val.re);
+            let expected_im = f16::from_f32(expected_val.im);
+            assert_eq!(
+                actual[0].to_bits(),
+                expected_re.to_bits(),
+                "re bits mismatch"
+            );
+            assert_eq!(
+                actual[1].to_bits(),
+                expected_im.to_bits(),
+                "im bits mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_path_rejects_profile_storage_mismatch_when_device_exists() {
+        let Ok(backend) = QftWgpuBackend::try_default() else {
+            return;
+        };
+        use apollo_fft::{f16, PrecisionProfile};
+
+        let plan = backend.plan(2);
+        let input = [
+            [f16::from_f32(1.0), f16::from_f32(0.0)],
+            [f16::from_f32(-1.0), f16::from_f32(0.5)],
+        ];
+        let mut output = [[f16::from_f32(0.0); 2]; 2];
+        let error = backend
+            .execute_forward_typed_into(
+                &plan,
+                PrecisionProfile::LOW_PRECISION_F32,
+                &input,
+                &mut output,
+            )
+            .expect_err("profile mismatch must fail");
+        assert_eq!(error, WgpuError::InvalidPrecisionProfile);
     }
 
     #[test]

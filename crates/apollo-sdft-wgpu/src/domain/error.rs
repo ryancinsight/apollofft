@@ -46,6 +46,9 @@ pub enum WgpuError {
         /// Mapping failure context.
         message: String,
     },
+    /// Requested precision profile does not match the typed storage.
+    #[error("precision profile does not match typed SDFT WGPU storage")]
+    InvalidPrecisionProfile,
     /// Numerical execution is unsupported for the requested operation.
     #[error("{operation} is unsupported by the current WGPU capability set")]
     UnsupportedExecution {

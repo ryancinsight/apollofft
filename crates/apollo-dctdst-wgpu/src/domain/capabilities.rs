@@ -45,7 +45,7 @@ impl WgpuCapabilities {
             supports_inverse: device_available,
             supports_dct: device_available,
             supports_dst: device_available,
-            supports_mixed_precision: false,
+            supports_mixed_precision: true,
             default_precision_profile: PrecisionProfile::LOW_PRECISION_F32,
         }
     }

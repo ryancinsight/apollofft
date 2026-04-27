@@ -38,6 +38,9 @@ pub enum WgpuError {
         /// Input length.
         actual: usize,
     },
+    /// Requested precision profile does not match the typed storage.
+    #[error("precision profile does not match typed CZT WGPU storage")]
+    InvalidPrecisionProfile,
     /// Spiral parameters are not valid for the transform.
     #[error("invalid CZT WGPU parameters: {message}")]
     InvalidParameters {

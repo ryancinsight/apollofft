@@ -2,7 +2,8 @@
 
 use std::sync::Arc;
 
-use apollo_dctdst::RealTransformKind;
+use apollo_dctdst::{RealTransformKind, RealTransformStorage};
+use apollo_fft::PrecisionProfile;
 
 use crate::application::plan::DctDstWgpuPlan;
 use crate::domain::capabilities::WgpuCapabilities;
@@ -110,6 +111,91 @@ impl DctDstWgpuBackend {
             mode,
             scale,
         )
+    }
+
+    /// Execute the forward real-to-real transform with typed storage.
+    ///
+    /// WGPU arithmetic is `f32`; mixed `f16` storage is promoted once to `f32` at
+    /// the dispatch boundary and quantized at the output boundary.
+    pub fn execute_forward_typed_into<T: RealTransformStorage>(
+        &self,
+        plan: &DctDstWgpuPlan,
+        precision: PrecisionProfile,
+        input: &[T],
+        output: &mut [T],
+    ) -> WgpuResult<()> {
+        Self::validate_dct_typed_precision::<T>(precision)?;
+        let len = plan.len();
+        if len == 0 {
+            return Err(WgpuError::InvalidLength {
+                len,
+                message: "length must be greater than zero",
+            });
+        }
+        if input.len() != len {
+            return Err(WgpuError::LengthMismatch {
+                expected: len,
+                actual: input.len(),
+            });
+        }
+        if output.len() != len {
+            return Err(WgpuError::LengthMismatch {
+                expected: len,
+                actual: output.len(),
+            });
+        }
+        let represented: Vec<f32> = input.iter().map(|v| v.to_f64() as f32).collect();
+        let computed = self.execute_forward(plan, &represented)?;
+        for (slot, value) in output.iter_mut().zip(computed.iter().copied()) {
+            *slot = T::from_f64(f64::from(value));
+        }
+        Ok(())
+    }
+
+    /// Execute the normalized inverse real-to-real transform with typed storage.
+    pub fn execute_inverse_typed_into<T: RealTransformStorage>(
+        &self,
+        plan: &DctDstWgpuPlan,
+        precision: PrecisionProfile,
+        input: &[T],
+        output: &mut [T],
+    ) -> WgpuResult<()> {
+        Self::validate_dct_typed_precision::<T>(precision)?;
+        let len = plan.len();
+        if len == 0 {
+            return Err(WgpuError::InvalidLength {
+                len,
+                message: "length must be greater than zero",
+            });
+        }
+        if input.len() != len {
+            return Err(WgpuError::LengthMismatch {
+                expected: len,
+                actual: input.len(),
+            });
+        }
+        if output.len() != len {
+            return Err(WgpuError::LengthMismatch {
+                expected: len,
+                actual: output.len(),
+            });
+        }
+        let represented: Vec<f32> = input.iter().map(|v| v.to_f64() as f32).collect();
+        let computed = self.execute_inverse(plan, &represented)?;
+        for (slot, value) in output.iter_mut().zip(computed.iter().copied()) {
+            *slot = T::from_f64(f64::from(value));
+        }
+        Ok(())
+    }
+
+    fn validate_dct_typed_precision<T: RealTransformStorage>(
+        precision: PrecisionProfile,
+    ) -> WgpuResult<()> {
+        let expected = T::PROFILE;
+        if precision.storage != expected.storage || precision.compute != expected.compute {
+            return Err(WgpuError::InvalidPrecisionProfile);
+        }
+        Ok(())
     }
 
     fn validate_plan_input(plan: &DctDstWgpuPlan, input: &[f32]) -> WgpuResult<()> {
