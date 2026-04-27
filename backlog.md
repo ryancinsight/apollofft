@@ -8,6 +8,7 @@
 - [x] Add `execute_fast_type1_1d_with_buffers`, `execute_fast_type2_1d_with_buffers`, `execute_fast_type1_3d_with_buffers`, `execute_fast_type2_3d_with_buffers` methods to `NufftGpuKernel`
 - [x] Add `GpuFft3dBuffers` reusable GPU/host buffer struct and value-semantic parity tests to `apollo-fft-wgpu` for repeated 3D FFT dispatch
 - [x] Add `NttGpuBuffers` reusable GPU/host buffer struct and value-semantic parity tests to `apollo-ntt-wgpu` for repeated direct NTT dispatch
+- [x] Add quantized `u32` reusable-buffer NTT-WGPU dispatch to avoid per-call GPU allocation on repeated exact residue-storage workloads
 - [x] Add FFT-WGPU 3D mixed-precision `f16` host-storage / `f32` GPU-compute helpers with represented-input parity tests
 - [x] Add NUFFT-WGPU fast Type-1/Type-2 1D/3D typed mixed-storage wrappers using `f16` host storage and `f32` GPU kernels
 - [x] Add NUFFT-WGPU direct Type-1/Type-2 1D/3D typed mixed-storage wrappers using `f16` host storage and `f32` GPU kernels
@@ -120,6 +121,7 @@
 - [x] Complete mixed-precision rollout across eligible CPU transform crates.
 - [x] Define explicit mixed-precision support/unsupported capability records for each GPU backend crate.
 - [x] Add exact quantized `u32` residue storage APIs to NTT-WGPU instead of floating mixed precision.
+- [x] Add reusable-buffer exact quantized `u32` residue dispatch to NTT-WGPU.
 - [x] Add `apollo-fft-wgpu` reusable GPU buffer structs for repeated 3D FFT dispatch
 - [x] Add debug-gated GPU grid readbacks (after load, after IFFT) behind a `cfg(test)` feature for faster future numerical triage in `apollo-nufft-wgpu`
 - [x] Run `cargo clippy --workspace --all-targets` and `cargo test --workspace` in CI to prevent regressions of the lint priority or normalization conventions

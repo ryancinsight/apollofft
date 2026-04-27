@@ -121,6 +121,44 @@ mod tests {
     }
 
     #[test]
+    fn quantized_u32_reusable_buffers_match_allocating_quantized_path_when_device_exists() {
+        let Ok(backend) = NttWgpuBackend::try_default() else {
+            return;
+        };
+        let input = vec![3_u32, 1, 4, 1, 5, 9, 2, 6];
+        let plan = backend.plan(input.len());
+        let mut buffers = backend.create_buffers(&plan).expect("reusable buffers");
+
+        let mut allocating_forward = vec![0_u32; input.len()];
+        backend
+            .execute_forward_quantized_into(&plan, &input, &mut allocating_forward)
+            .expect("allocating quantized forward");
+        backend
+            .execute_forward_quantized_with_buffers(&plan, &input, &mut buffers)
+            .expect("buffered quantized forward");
+        let expected_forward: Vec<u64> = allocating_forward
+            .iter()
+            .map(|&value| u64::from(value))
+            .collect();
+        assert_eq!(backend.buffer_output(&buffers), expected_forward.as_slice());
+
+        let spectrum = allocating_forward;
+        let mut allocating_inverse = vec![0_u32; input.len()];
+        backend
+            .execute_inverse_quantized_into(&plan, &spectrum, &mut allocating_inverse)
+            .expect("allocating quantized inverse");
+        backend
+            .execute_inverse_quantized_with_buffers(&plan, &spectrum, &mut buffers)
+            .expect("buffered quantized inverse");
+        let expected_inverse: Vec<u64> = allocating_inverse
+            .iter()
+            .map(|&value| u64::from(value))
+            .collect();
+        assert_eq!(backend.buffer_output(&buffers), expected_inverse.as_slice());
+        assert_eq!(allocating_inverse, input);
+    }
+
+    #[test]
     fn quantized_u32_storage_rejects_output_length_mismatch_when_device_exists() {
         let Ok(backend) = NttWgpuBackend::try_default() else {
             return;

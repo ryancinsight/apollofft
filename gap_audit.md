@@ -12,6 +12,7 @@ All items below are implemented, tested, and verified in completed sprints.
 - Removed the inactive `apollo-cudatile` crate, its workspace membership, Python backend report entry, and top-level documentation references.
 - Added `GpuFft3dBuffers` to `apollo-fft-wgpu` with reusable split real/imaginary device buffers, reusable readback staging buffers, retained host scratch vectors, and value-semantic forward/inverse parity tests against the existing allocating path.
 - Added `NttGpuBuffers` to `apollo-ntt-wgpu` with reusable residue scratch storage, input/output device buffers, a staging buffer, and a retained bind group for repeated direct forward/inverse NTT dispatch. Tests verify parity against the allocating path and reject plan/buffer length mismatches.
+- Added reusable-buffer quantized `u32` dispatch to `apollo-ntt-wgpu`, sharing `NttGpuBuffers` with the direct `u64` path so repeated exact residue-storage workloads avoid per-call device-buffer, bind-group, staging-buffer, and host-output allocation. Tests verify parity against the allocating quantized path.
 - Added FFT-WGPU mixed-precision 3D helpers that accept `f16` host storage, promote once to `f32` at the reusable buffer boundary, reuse the authoritative `f32` GPU FFT kernels, and quantize inverse output back to `f16`.
 - Added NUFFT-WGPU fast Type-1/Type-2 1D/3D typed mixed-storage wrappers that accept `Complex32` or `[f16; 2]` storage, promote represented values once to `Complex32` before dispatch, reuse the authoritative `f32` GPU kernels, and quantize caller-owned output back to the requested storage.
 - Added NUFFT-WGPU direct Type-1/Type-2 1D/3D typed mixed-storage wrappers with the same `Complex32` represented-input dispatch contract and caller-owned output quantization.
@@ -180,9 +181,11 @@ All items below are implemented, tested, and verified in completed sprints.
 
 - Added `supports_mixed_precision` and `default_precision_profile` fields to all WGPU capability structs.
 - Added NTT-WGPU exact quantized `u32` residue storage APIs that preserve modular values losslessly under the existing `u32::MAX` modulus bound and reject output shape mismatches.
+- Added NTT-WGPU exact quantized `u32` reusable-buffer execution using the existing `NttGpuBuffers` ownership boundary.
 - Verified NUFFT and SHT CPU mixed-precision storage contracts were already complete (`NufftComplexStorage`, `ShtRealStorage`, `ShtComplexStorage`).
 - Added `NufftGpuBuffers1D` and `NufftGpuBuffers3D` reusable GPU buffer structs with `execute_fast_*_with_buffers` methods to eliminate per-call buffer allocation on repeated NUFFT fast-path dispatch.
 - Added `NttGpuBuffers` and `execute_*_with_buffers` methods to eliminate per-call device-buffer, bind-group, staging-buffer, and host-output allocation on repeated direct NTT WGPU dispatch.
+- Added `execute_*_quantized_with_buffers` methods to eliminate the same allocation class for repeated exact `u32` residue-storage NTT WGPU dispatch.
 - Added `NufftPlan3D::type2_into` zero-allocation path (type2 now delegates to type2_into).
 - Added value-semantic typed verification tests for NUFFT 1D and 3D across Complex64, Complex32, and [f16;2] storage profiles with profile mismatch rejection.
 
