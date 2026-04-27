@@ -22,6 +22,7 @@ The current implementation provides:
 - forward modular NTT execution on WGPU
 - inverse modular NTT execution on WGPU
 - reusable `NttGpuBuffers` for repeated forward/inverse dispatch at one length
+- exact quantized `u32` residue storage forward/inverse APIs
 - truthful capability reporting that marks both forward and inverse support present
 - metadata-preserving plan descriptors carrying length, modulus, and primitive root
 
@@ -36,9 +37,16 @@ input/output device buffers, a staging buffer, and the bind group for one plan
 length. The caller supplies the buffer object to avoid reallocating GPU buffers
 and host readback vectors across repeated transforms.
 
+The quantized storage API is integer narrowing, not floating mixed precision.
+For the current WGPU surface, plans already reject moduli larger than
+`u32::MAX`; therefore `u32` host residues represent every field element
+losslessly. Values are canonicalized modulo `q` before dispatch and written back
+as exact `u32` residues.
+
 ## Verification
 
 Tests cover capability reporting, plan metadata preservation, invalid-plan rejection,
 CPU parity for forward and inverse execution, reusable-buffer parity against the
-allocating path, and reusable-buffer length mismatch rejection when a WGPU
-adapter/device is available.
+allocating path, quantized `u32` parity against the `u64` allocating path, and
+reusable-buffer length mismatch rejection when a WGPU adapter/device is
+available.

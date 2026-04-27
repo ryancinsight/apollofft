@@ -2,13 +2,14 @@
 
 ## Open Gaps
 
-- Real mixed-precision GPU execution remains future work only for NTT-WGPU and cudatile. NTT-WGPU is an integer modular transform without a meaningful `f16` storage contract. Cudatile remains an explicit backend boundary until device kernels exist. FFT-WGPU 3D, NUFFT-WGPU direct/fast Type-1/Type-2 1D/3D, DHT-WGPU, FWHT-WGPU, CZT-WGPU, DCTDST-WGPU, FrFT-WGPU, GFT-WGPU, Hilbert-WGPU, Mellin-WGPU, QFT-WGPU, Radon-WGPU, SDFT-WGPU, SFT-WGPU, SHT-WGPU, STFT-WGPU, and Wavelet-WGPU now own verified typed host-storage / `f32` GPU-compute paths.
+- NTT-WGPU floating mixed precision remains unsupported because residue-field arithmetic requires exact modular integers. The replacement contract is exact quantized `u32` residue storage for the current 32-bit WGPU modulus surface. The inactive cudatile backend boundary has been removed from the workspace.
 
 ## Closed Gaps
 
 All items below are implemented, tested, and verified in completed sprints.
 
-- Added explicit WGPU/cudatile mixed-precision capability records: WGPU transform crates and cudatile now advertise `supports_mixed_precision = false` with `LOW_PRECISION_F32` as the implemented GPU profile unless a crate uses the shared FFT backend capability descriptor.
+- Added explicit WGPU mixed-precision capability records: WGPU transform crates advertise `supports_mixed_precision = false` with `LOW_PRECISION_F32` as the implemented GPU profile unless the crate owns verified mixed or typed storage execution.
+- Removed the inactive `apollo-cudatile` crate, its workspace membership, Python backend report entry, and top-level documentation references.
 - Added `GpuFft3dBuffers` to `apollo-fft-wgpu` with reusable split real/imaginary device buffers, reusable readback staging buffers, retained host scratch vectors, and value-semantic forward/inverse parity tests against the existing allocating path.
 - Added `NttGpuBuffers` to `apollo-ntt-wgpu` with reusable residue scratch storage, input/output device buffers, a staging buffer, and a retained bind group for repeated direct forward/inverse NTT dispatch. Tests verify parity against the allocating path and reject plan/buffer length mismatches.
 - Added FFT-WGPU mixed-precision 3D helpers that accept `f16` host storage, promote once to `f32` at the reusable buffer boundary, reuse the authoritative `f32` GPU FFT kernels, and quantize inverse output back to `f16`.
@@ -177,7 +178,8 @@ All items below are implemented, tested, and verified in completed sprints.
 
 ### Extension Phase
 
-- Added `supports_mixed_precision` and `default_precision_profile` fields to all 16 WGPU capability structs; corrected `apollo-cudatile` default precision to `LOW_PRECISION_F32`.
+- Added `supports_mixed_precision` and `default_precision_profile` fields to all WGPU capability structs.
+- Added NTT-WGPU exact quantized `u32` residue storage APIs that preserve modular values losslessly under the existing `u32::MAX` modulus bound and reject output shape mismatches.
 - Verified NUFFT and SHT CPU mixed-precision storage contracts were already complete (`NufftComplexStorage`, `ShtRealStorage`, `ShtComplexStorage`).
 - Added `NufftGpuBuffers1D` and `NufftGpuBuffers3D` reusable GPU buffer structs with `execute_fast_*_with_buffers` methods to eliminate per-call buffer allocation on repeated NUFFT fast-path dispatch.
 - Added `NttGpuBuffers` and `execute_*_with_buffers` methods to eliminate per-call device-buffer, bind-group, staging-buffer, and host-output allocation on repeated direct NTT WGPU dispatch.

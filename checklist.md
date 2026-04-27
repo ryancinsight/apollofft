@@ -109,7 +109,7 @@
 - [x] Add value-semantic FWHT typed storage coverage for `f64`, `f32`, mixed `f16`, and profile mismatch rejection.
 - [x] Verify all 39 workspace crates have manifests, READMEs, and library roots; repair the missing `apollo-python` architecture and verification README sections.
 - [x] Add mixed-precision CPU storage contracts to remaining eligible transform crates: NUFFT and SHT.
-- [x] Add mixed-precision capability contracts or explicit unsupported records to WGPU/cudatile crates: FFT-WGPU, CZT-WGPU, DCTDST-WGPU, DHT-WGPU, FrFT-WGPU, FWHT-WGPU, GFT-WGPU, Hilbert-WGPU, Mellin-WGPU, NTT-WGPU, NUFFT-WGPU, QFT-WGPU, Radon-WGPU, SDFT-WGPU, SFT-WGPU, SHT-WGPU, STFT-WGPU, Wavelet-WGPU, and cudatile.
+- [x] Add mixed-precision capability contracts or explicit unsupported records to WGPU crates: FFT-WGPU, CZT-WGPU, DCTDST-WGPU, DHT-WGPU, FrFT-WGPU, FWHT-WGPU, GFT-WGPU, Hilbert-WGPU, Mellin-WGPU, NTT-WGPU, NUFFT-WGPU, QFT-WGPU, Radon-WGPU, SDFT-WGPU, SFT-WGPU, SHT-WGPU, STFT-WGPU, and Wavelet-WGPU.
 - [x] Add `NufftGpuBuffers1D`/`NufftGpuBuffers3D` reusable GPU buffer structs and `execute_fast_*_with_buffers` methods.
 - [x] Add `NufftPlan3D::type2_into` zero-allocation 3D Type-2 path.
 - [x] Add value-semantic typed verification tests for `apollo-nufft` covering Complex64, Complex32, [f16;2], and profile mismatch.
@@ -118,7 +118,8 @@
 - [x] Add debug-gated GPU grid readbacks (after load, after IFFT) behind a `cfg(test)` feature in `apollo-nufft-wgpu` for faster future numerical triage.
 - [x] Set up CI pipeline for lint and test regression prevention.
 - [x] Add real mixed-precision WGPU execution where existing `f32` shader kernels support typed host-storage promotion/quantization: FFT-WGPU 3D, NUFFT-WGPU direct/fast 1D/3D, DHT-WGPU, FWHT-WGPU, CZT-WGPU, DCTDST-WGPU, FrFT-WGPU, GFT-WGPU, Hilbert-WGPU, Mellin-WGPU, QFT-WGPU, Radon-WGPU, SDFT-WGPU, SFT-WGPU, SHT-WGPU, STFT-WGPU, and Wavelet-WGPU now expose verified typed storage paths.
-- [ ] Keep NTT-WGPU and cudatile mixed precision explicit-unsupported until their integer/device contracts have a mathematically meaningful lower-precision storage model.
+- [x] Remove inactive cudatile crate and Python backend report surface.
+- [x] Keep NTT-WGPU floating mixed precision explicit-unsupported and add exact quantized `u32` residue storage instead.
 - [x] Add typed CZT caller-owned storage coverage for `Complex64`, `Complex32`, mixed `[f16; 2]`, and profile mismatch rejection.
 - [x] Add typed FrFT caller-owned storage coverage for `Complex64`, `Complex32`, mixed `[f16; 2]`, and profile mismatch rejection.
 - [x] Add typed GFT caller-owned storage coverage for `f64`, `f32`, mixed `f16`, inverse roundtrip, and profile mismatch rejection.

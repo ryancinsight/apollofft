@@ -54,6 +54,14 @@ pub enum WgpuError {
         /// Buffer length.
         actual: usize,
     },
+    /// Output length does not match the plan.
+    #[error("output length mismatch: expected {expected}, got {actual}")]
+    OutputLengthMismatch {
+        /// Plan length.
+        expected: usize,
+        /// Output length.
+        actual: usize,
+    },
     /// Host readback from the staging buffer failed.
     #[error("wgpu buffer map failed: {message}")]
     BufferMapFailed {

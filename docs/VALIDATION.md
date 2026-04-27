@@ -83,8 +83,9 @@ Apollo stores mixed-precision validation thresholds centrally in the validation 
   Hilbert-WGPU, Mellin-WGPU, QFT-WGPU, Radon-WGPU, SDFT-WGPU, SFT-WGPU,
   SHT-WGPU, STFT-WGPU, and Wavelet-WGPU use typed host storage with `f32`
   device compute and validate against the represented `f32` input path.
-  NTT-WGPU and cudatile report unsupported mixed precision until their integer
-  or device contracts define a mathematically meaningful typed storage model.
+  NTT-WGPU reports unsupported floating mixed precision because its arithmetic
+  is exact modular integer arithmetic. It instead exposes exact quantized `u32`
+  residue storage for the current 32-bit WGPU modulus surface.
 
 The current CPU and FFT-WGPU `mixed_precision` FFT path means `half::f16` storage with `f32`
 compute. Shader-level `f16` remains a separate hardware-feature-gated extension.
@@ -402,5 +403,5 @@ by unit and property tests against analytical identities and direct references.
   paths. CZT-WGPU, DCTDST-WGPU, DHT-WGPU, FrFT-WGPU, FWHT-WGPU, GFT-WGPU,
   Hilbert-WGPU, Mellin-WGPU, QFT-WGPU, Radon-WGPU, SDFT-WGPU, SFT-WGPU,
   SHT-WGPU, STFT-WGPU, and Wavelet-WGPU expose mixed precision for verified
-  typed storage paths. NTT-WGPU and cudatile continue to report
-  `LOW_PRECISION_F32` only.
+  typed storage paths. NTT-WGPU continues to report `LOW_PRECISION_F32` for the
+  shader profile and separately reports exact quantized `u32` residue storage.

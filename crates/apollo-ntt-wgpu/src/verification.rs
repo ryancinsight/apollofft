@@ -14,6 +14,7 @@ mod tests {
         assert!(capabilities.supports_forward);
         assert!(capabilities.supports_inverse);
         assert!(!capabilities.supports_mixed_precision);
+        assert!(capabilities.supports_quantized_storage);
         assert_eq!(
             capabilities.default_precision_profile,
             apollo_fft::PrecisionProfile::LOW_PRECISION_F32
@@ -86,6 +87,56 @@ mod tests {
             .expect("wgpu inverse execution");
 
         assert_eq!(recovered, input);
+    }
+
+    #[test]
+    fn quantized_u32_storage_matches_allocating_u64_execution_when_device_exists() {
+        let Ok(backend) = NttWgpuBackend::try_default() else {
+            return;
+        };
+        let input = vec![1_u32, 1, 2, 3, 5, 8, 13, 21];
+        let input64: Vec<u64> = input.iter().map(|&value| u64::from(value)).collect();
+        let plan = backend.plan(input.len());
+
+        let expected_forward = backend
+            .execute_forward(&plan, &input64)
+            .expect("allocating forward");
+        let mut quantized_forward = vec![0_u32; input.len()];
+        backend
+            .execute_forward_quantized_into(&plan, &input, &mut quantized_forward)
+            .expect("quantized forward");
+        assert_eq!(
+            quantized_forward,
+            expected_forward
+                .iter()
+                .map(|&value| value as u32)
+                .collect::<Vec<_>>()
+        );
+
+        let mut quantized_inverse = vec![0_u32; input.len()];
+        backend
+            .execute_inverse_quantized_into(&plan, &quantized_forward, &mut quantized_inverse)
+            .expect("quantized inverse");
+        assert_eq!(quantized_inverse, input);
+    }
+
+    #[test]
+    fn quantized_u32_storage_rejects_output_length_mismatch_when_device_exists() {
+        let Ok(backend) = NttWgpuBackend::try_default() else {
+            return;
+        };
+        let plan = backend.plan(8);
+        let mut output = vec![0_u32; 4];
+        let err = backend
+            .execute_forward_quantized_into(&plan, &[0; 8], &mut output)
+            .expect_err("output length mismatch must fail");
+        assert_eq!(
+            err,
+            WgpuError::OutputLengthMismatch {
+                expected: 8,
+                actual: 4,
+            }
+        );
     }
 
     #[test]

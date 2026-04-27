@@ -998,17 +998,6 @@ fn backend_capabilities(py: Python<'_>) -> PyResult<PyObject> {
     }
     backends.set_item("wgpu", wgpu)?;
 
-    let cudatile = PyDict::new(py);
-    cudatile.set_item("available", false)?;
-    cudatile.set_item("supports_1d", false)?;
-    cudatile.set_item("supports_2d", false)?;
-    cudatile.set_item("supports_3d", false)?;
-    cudatile.set_item("supports_real_to_complex", false)?;
-    cudatile.set_item("supports_mixed_precision", false)?;
-    cudatile.set_item("default_precision_profile", "high_accuracy")?;
-    cudatile.set_item("supported_precision_profiles", Vec::<&str>::new())?;
-    backends.set_item("cudatile", cudatile)?;
-
     Ok(backends.into_any().unbind())
 }
 

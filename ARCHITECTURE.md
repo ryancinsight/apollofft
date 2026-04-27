@@ -4,7 +4,7 @@
 
 - `domain` defines the single source of truth for shapes, normalization, capabilities, device descriptors, and error contracts.
 - `application` owns orchestration, cache policy, reusable plans, and zero-allocation execution paths.
-- `infrastructure` owns concrete adapters such as CPU, WGPU, and cudatile.
+- `infrastructure` owns concrete adapters such as CPU and WGPU.
 - Public APIs are exposed from `lib.rs` and narrow facade modules only.
 
 Allowed dependency direction:

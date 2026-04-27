@@ -79,7 +79,6 @@ Mixed precision is now a first-class Apollo concept:
 - `apollo-stft-wgpu`: forward Hann-windowed STFT WGPU execution with CPU parity tests; inverse remains unsupported.
 - `apollo-wavelet-wgpu`: forward and inverse Haar DWT WGPU execution with CPU parity tests on the implemented `f32` surface.
 - `apollo-wavelet`: DWT/CWT multiresolution transforms with Haar, Daubechies-4, Ricker, and DC-corrected real Morlet support.
-- `apollo-cudatile`: trait-compatible cudatile adapter surface.
 - `apollo-validation`: parity, adversarial, benchmark, and external-reference runners.
 - `apollo-python`: PyO3 bindings, NumPy interop, and backend introspection.
 

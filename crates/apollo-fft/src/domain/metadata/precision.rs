@@ -9,8 +9,6 @@ pub enum BackendKind {
     Cpu,
     /// WGPU backend.
     Wgpu,
-    /// cudatile adapter backend.
-    Cudatile,
 }
 
 /// Apollo's normalization convention.

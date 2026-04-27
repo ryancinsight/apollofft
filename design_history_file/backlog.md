@@ -2,7 +2,8 @@
 
 ## Closed in this sprint (Extension phase)
 - [x] Add mixed-precision CPU storage contracts to remaining eligible transform crates: NUFFT and SHT
-- [x] Add mixed-precision capability contracts or explicit unsupported records to WGPU/cudatile crates
+- [x] Add mixed-precision capability contracts or explicit unsupported records to WGPU crates
+- [x] Remove inactive `apollo-cudatile` backend boundary from the workspace
 - [x] Add `NufftGpuBuffers1D` and `NufftGpuBuffers3D` reusable GPU buffer structs to `apollo-nufft-wgpu` for repeated fast-path execution
 - [x] Add `execute_fast_type1_1d_with_buffers`, `execute_fast_type2_1d_with_buffers`, `execute_fast_type1_3d_with_buffers`, `execute_fast_type2_3d_with_buffers` methods to `NufftGpuKernel`
 - [x] Add `GpuFft3dBuffers` reusable GPU/host buffer struct and value-semantic parity tests to `apollo-fft-wgpu` for repeated 3D FFT dispatch
@@ -117,7 +118,8 @@
 - [x] Add typed caller-owned SHT real/complex forward and inverse paths for `f64`/`Complex64`, `f32`/`Complex32`, and mixed `f16`/`[f16; 2]` storage profiles with profile mismatch rejection.
 - [x] Add typed caller-owned NUFFT 1D/3D Type-1/Type-2 paths for `Complex64`, `Complex32`, and mixed `[f16; 2]` storage profiles with profile mismatch rejection.
 - [x] Complete mixed-precision rollout across eligible CPU transform crates.
-- [x] Define explicit mixed-precision support/unsupported capability records for each GPU and cudatile backend crate.
+- [x] Define explicit mixed-precision support/unsupported capability records for each GPU backend crate.
+- [x] Add exact quantized `u32` residue storage APIs to NTT-WGPU instead of floating mixed precision.
 - [x] Add `apollo-fft-wgpu` reusable GPU buffer structs for repeated 3D FFT dispatch
 - [x] Add debug-gated GPU grid readbacks (after load, after IFFT) behind a `cfg(test)` feature for faster future numerical triage in `apollo-nufft-wgpu`
 - [x] Run `cargo clippy --workspace --all-targets` and `cargo test --workspace` in CI to prevent regressions of the lint priority or normalization conventions

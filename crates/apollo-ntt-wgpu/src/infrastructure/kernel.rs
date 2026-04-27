@@ -217,6 +217,36 @@ impl NttGpuKernel {
         Ok(())
     }
 
+    /// Execute with caller-owned reusable buffers from exact `u32` residue storage.
+    pub fn execute_quantized_with_buffers(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        input: &[u32],
+        modulus: u64,
+        root: u64,
+        mode: NttMode,
+        buffers: &mut NttGpuBuffers,
+    ) -> WgpuResult<()> {
+        let len = buffers.len;
+        if input.len() != len {
+            return Err(WgpuError::LengthMismatch {
+                expected: len,
+                actual: input.len(),
+            });
+        }
+        for (slot, &value) in buffers.input_residues.iter_mut().zip(input.iter()) {
+            *slot = (u64::from(value) % modulus) as u32;
+        }
+        queue.write_buffer(
+            &buffers.input_buffer,
+            0,
+            bytemuck::cast_slice(&buffers.input_residues),
+        );
+        self.dispatch_with_bound_buffers(device, queue, len, modulus, root, mode, buffers)?;
+        Ok(())
+    }
+
     fn dispatch_with_bound_buffers(
         &self,
         device: &wgpu::Device,
