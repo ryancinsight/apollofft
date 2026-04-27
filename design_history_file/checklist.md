@@ -116,7 +116,7 @@
 - [x] Add `apollo-fft-wgpu` reusable GPU buffer structs for repeated 3D FFT dispatch.
 - [x] Add debug-gated GPU grid readbacks (after load, after IFFT) behind a `cfg(test)` feature in `apollo-nufft-wgpu` for faster future numerical triage.
 - [x] Set up CI pipeline for lint and test regression prevention.
-- [ ] Add real mixed-precision WGPU execution where device features and shader kernels support it; FFT-WGPU 3D, NUFFT-WGPU direct/fast 1D/3D, and DHT-WGPU forward/inverse `f16` storage / `f32` compute paths are complete, remaining transform-specific WGPU crates remain.
+- [ ] Add real mixed-precision WGPU execution where device features and shader kernels support it; FFT-WGPU 3D, NUFFT-WGPU direct/fast 1D/3D, DHT-WGPU forward/inverse, and FWHT-WGPU forward/inverse `f16` storage / `f32` compute paths are complete, remaining transform-specific WGPU crates remain.
 - [x] Add typed CZT caller-owned storage coverage for `Complex64`, `Complex32`, mixed `[f16; 2]`, and profile mismatch rejection.
 - [x] Add typed FrFT caller-owned storage coverage for `Complex64`, `Complex32`, mixed `[f16; 2]`, and profile mismatch rejection.
 - [x] Add typed GFT caller-owned storage coverage for `f64`, `f32`, mixed `f16`, inverse roundtrip, and profile mismatch rejection.

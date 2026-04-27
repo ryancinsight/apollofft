@@ -2,6 +2,9 @@
 
 use std::sync::Arc;
 
+use apollo_fft::PrecisionProfile;
+use apollo_fwht::FwhtStorage;
+
 use crate::application::plan::FwhtWgpuPlan;
 use crate::domain::capabilities::WgpuCapabilities;
 use crate::domain::error::{WgpuError, WgpuResult};
@@ -87,11 +90,44 @@ impl FwhtWgpuBackend {
             .execute(self.device.as_ref(), self.queue.as_ref(), input, false)
     }
 
+    /// Execute the unnormalized forward 1D FWHT with caller-owned typed storage.
+    ///
+    /// WGPU arithmetic remains `f32`; mixed `f16` storage is promoted once to
+    /// represented `f32` before dispatch and quantized at the output boundary.
+    pub fn execute_forward_typed_into<T: FwhtStorage>(
+        &self,
+        plan: &FwhtWgpuPlan,
+        precision: PrecisionProfile,
+        input: &[T],
+        output: &mut [T],
+    ) -> WgpuResult<()> {
+        Self::validate_typed_plan_input::<T>(plan, precision, input, output)?;
+        let represented = typed_to_f32(input);
+        let computed = self.execute_forward(plan, &represented)?;
+        write_typed_output(&computed, output);
+        Ok(())
+    }
+
     /// Execute the normalized inverse 1D FWHT for a real-valued `f32` spectrum.
     pub fn execute_inverse(&self, plan: &FwhtWgpuPlan, input: &[f32]) -> WgpuResult<Vec<f32>> {
         Self::validate_plan_input(plan, input)?;
         self.kernel
             .execute(self.device.as_ref(), self.queue.as_ref(), input, true)
+    }
+
+    /// Execute the normalized inverse 1D FWHT with caller-owned typed storage.
+    pub fn execute_inverse_typed_into<T: FwhtStorage>(
+        &self,
+        plan: &FwhtWgpuPlan,
+        precision: PrecisionProfile,
+        input: &[T],
+        output: &mut [T],
+    ) -> WgpuResult<()> {
+        Self::validate_typed_plan_input::<T>(plan, precision, input, output)?;
+        let represented = typed_to_f32(input);
+        let computed = self.execute_inverse(plan, &represented)?;
+        write_typed_output(&computed, output);
+        Ok(())
     }
 
     fn validate_plan_input(plan: &FwhtWgpuPlan, input: &[f32]) -> WgpuResult<()> {
@@ -115,5 +151,53 @@ impl FwhtWgpuBackend {
             });
         }
         Ok(())
+    }
+
+    fn validate_typed_plan_input<T: FwhtStorage>(
+        plan: &FwhtWgpuPlan,
+        precision: PrecisionProfile,
+        input: &[T],
+        output: &[T],
+    ) -> WgpuResult<()> {
+        let expected = T::PROFILE;
+        if precision.storage != expected.storage || precision.compute != expected.compute {
+            return Err(WgpuError::InvalidPrecisionProfile);
+        }
+        let len = plan.len();
+        if len == 0 {
+            return Err(WgpuError::InvalidLength {
+                len,
+                message: "length must be greater than zero",
+            });
+        }
+        if !len.is_power_of_two() {
+            return Err(WgpuError::InvalidLength {
+                len,
+                message: "length must be a power of two",
+            });
+        }
+        if input.len() != len {
+            return Err(WgpuError::LengthMismatch {
+                expected: len,
+                actual: input.len(),
+            });
+        }
+        if output.len() != len {
+            return Err(WgpuError::LengthMismatch {
+                expected: len,
+                actual: output.len(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn typed_to_f32<T: FwhtStorage>(input: &[T]) -> Vec<f32> {
+    input.iter().map(|value| value.to_f64() as f32).collect()
+}
+
+fn write_typed_output<T: FwhtStorage>(source: &[f32], output: &mut [T]) {
+    for (slot, value) in output.iter_mut().zip(source.iter().copied()) {
+        *slot = T::from_f64(f64::from(value));
     }
 }

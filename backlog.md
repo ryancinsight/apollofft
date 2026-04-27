@@ -10,6 +10,7 @@
 - [x] Add NUFFT-WGPU fast Type-1/Type-2 1D/3D typed mixed-storage wrappers using `f16` host storage and `f32` GPU kernels
 - [x] Add NUFFT-WGPU direct Type-1/Type-2 1D/3D typed mixed-storage wrappers using `f16` host storage and `f32` GPU kernels
 - [x] Add DHT-WGPU forward/inverse typed mixed-storage wrappers using `f16` host storage and the existing `f32` GPU kernel
+- [x] Add FWHT-WGPU forward/inverse typed mixed-storage wrappers using `f16` host storage and the existing `f32` GPU kernel
 - [x] Add debug-gated NUFFT-WGPU fast Type-2 1D/3D grid diagnostics for after-load and after-IFFT checkpoints
 - [x] Replace stale CI crate/path references with workspace `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-targets`, and current `apollo-python` smoke tests
 - [x] Add `type2_into` zero-allocation 3D Type-2 NUFFT path on `NufftPlan3D`

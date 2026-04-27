@@ -79,9 +79,10 @@ Apollo stores mixed-precision validation thresholds centrally in the validation 
 - CPU `mixed_precision`: relative error target below `1e-2`.
 - WGPU `low_precision`: current forward/inverse parity envelope against the Apollo CPU reference.
 - WGPU `mixed_precision`: FFT-WGPU 3D, NUFFT-WGPU direct/fast Type-1/Type-2 1D/3D,
-  and DHT-WGPU forward/inverse use `f16` host storage with `f32` device compute and
-  validate against the represented `f32` input path; remaining GPU surfaces report
-  unsupported mixed precision until they have value-semantic parity tests.
+  DHT-WGPU forward/inverse, and FWHT-WGPU forward/inverse use `f16` host storage
+  with `f32` device compute and validate against the represented `f32` input path;
+  remaining GPU surfaces report unsupported mixed precision until they have
+  value-semantic parity tests.
 
 The current CPU and FFT-WGPU `mixed_precision` FFT path means `half::f16` storage with `f32`
 compute. Shader-level `f16` remains a separate hardware-feature-gated extension.
@@ -273,6 +274,9 @@ by unit and property tests against analytical identities and direct references.
 - `apollo-dht-wgpu` exposes typed mixed-storage forward/inverse wrappers. Tests
   validate `f16` caller-owned storage against represented `f32` GPU execution and
   use an analytical `f16` quantization bound for inverse roundtrip values.
+- `apollo-fwht-wgpu` exposes typed mixed-storage forward/inverse wrappers. Tests
+  validate `f16` caller-owned storage against represented `f32` GPU execution and
+  use an analytical `f16` quantization bound for inverse roundtrip values.
 - `apollo-nufft-wgpu` exposes debug-gated fast Type-2 grid diagnostics through
   `NufftGridSnapshot` and `NufftType2GridDiagnostics`; tests verify 1D and 3D
   after-load and after-IFFT snapshots are finite, nonzero, shape-correct, and
@@ -384,6 +388,7 @@ by unit and property tests against analytical identities and direct references.
 - FFT-WGPU now exposes `LOW_PRECISION_F32` and `MIXED_PRECISION_F16_F32`
   capability records for 3D dense FFT execution. NUFFT-WGPU exposes mixed
   precision for the verified direct and fast Type-1/Type-2 1D/3D typed storage paths.
-  DHT-WGPU exposes mixed precision for verified forward/inverse typed storage paths.
-  Other WGPU transform crates and cudatile continue to report `LOW_PRECISION_F32`
-  only until actual f16/wider precision GPU paths exist with CPU parity validation.
+  DHT-WGPU and FWHT-WGPU expose mixed precision for verified forward/inverse typed
+  storage paths. Other WGPU transform crates and cudatile continue to report
+  `LOW_PRECISION_F32` only until actual f16/wider precision GPU paths exist with
+  CPU parity validation.

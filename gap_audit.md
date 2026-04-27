@@ -2,7 +2,7 @@
 
 ## Open Gaps
 
-- Real mixed-precision GPU execution remains future work for transform-specific WGPU crates other than DHT-WGPU and for cudatile where device features and WGSL support permit `f16` storage or wider host-side precision contracts. FFT-WGPU 3D, NUFFT-WGPU direct/fast Type-1/Type-2 1D/3D, and DHT-WGPU forward/inverse now own verified `f16` storage / `f32` compute paths.
+- Real mixed-precision GPU execution remains future work for transform-specific WGPU crates other than DHT-WGPU and FWHT-WGPU and for cudatile where device features and WGSL support permit `f16` storage or wider host-side precision contracts. FFT-WGPU 3D, NUFFT-WGPU direct/fast Type-1/Type-2 1D/3D, DHT-WGPU forward/inverse, and FWHT-WGPU forward/inverse now own verified `f16` storage / `f32` compute paths.
 
 ## Closed Gaps
 
@@ -14,6 +14,7 @@ All items below are implemented, tested, and verified in completed sprints.
 - Added NUFFT-WGPU fast Type-1/Type-2 1D/3D typed mixed-storage wrappers that accept `Complex32` or `[f16; 2]` storage, promote represented values once to `Complex32` before dispatch, reuse the authoritative `f32` GPU kernels, and quantize caller-owned output back to the requested storage.
 - Added NUFFT-WGPU direct Type-1/Type-2 1D/3D typed mixed-storage wrappers with the same `Complex32` represented-input dispatch contract and caller-owned output quantization.
 - Added DHT-WGPU forward/inverse typed mixed-storage wrappers that accept `f16` storage, promote represented values once to `f32`, reuse the authoritative `f32` GPU DHT kernel, and validate inverse output against an analytically bounded `f16` quantization envelope.
+- Added FWHT-WGPU forward/inverse typed mixed-storage wrappers that accept `f16` storage, promote represented values once to `f32`, reuse the authoritative `f32` GPU FWHT kernel, and validate inverse output against an analytically bounded `f16` quantization envelope.
 - Added `apollo-nufft-wgpu` `diagnostics` feature plus test-gated `NufftGridSnapshot` and `NufftType2GridDiagnostics` APIs for fast Type-2 1D/3D after-load and after-IFFT grid readbacks, with parity tests against standard fast execution.
 - Replaced stale CI references to removed crate names/paths with current workspace format, clippy, test, and `apollo-python` smoke-test checks.
 
