@@ -3,10 +3,23 @@
 ## Open Gaps
 
 - NTT-WGPU floating mixed precision remains unsupported because residue-field arithmetic requires exact modular integers. The replacement contract is exact quantized `u32` residue storage for the current 32-bit WGPU modulus surface. The inactive cudatile backend boundary has been removed from the workspace.
+- `GpuFft3dF16Native` Bluestein path on production hardware with non-power-of-two sizes: current test passes on dev hardware; production validation on adapters that expose `wgpu::Features::SHADER_F16` is pending.
+- Criterion buffer-reuse bench results on representative GPU hardware: allocation-vs-reuse speedup ratios for 1D and 3D NUFFT fast paths are not yet recorded; requires a GPU runner.
 
 ## Closed Gaps
 
 All items below are implemented, tested, and verified in completed sprints.
+
+### Closure II Phase
+
+- Expanded NTT published-reference fixtures in `apollo-validation` beyond N=4 to cover N=8 and the convolution theorem with the default 998244353 modulus and non-trivial polynomial product values:
+  - `ntt_n8_impulse_fixture`: NTT8([1,0,0,0,0,0,0,0])=[1,1,1,1,1,1,1,1] (Pollard 1971 impulse theorem, N=8 case; every term except n=0 vanishes giving F[k]=ω^0=1 for all k).
+  - `ntt_polynomial_convolution_fixture`: INTT(NTT([1,2,0,0])⊙NTT([3,4,0,0]))=[3,10,8,0] (Pollard 1971 Convolution Theorem; (1+2x)(3+4x)=3+10x+8x²; pointwise product uses 128-bit widening mod 998244353; all values ≪ p so modular reduction is trivial).
+  - `nufft_quarter_period_phase_fixture`: NUFFT Type-1 1D, single unit source at x=L/4, N=4 → F=[1,-i,-1,i] (Dutt and Rokhlin 1993 definition; F[k]=exp(-πi·k_signed/2) with k_signed∈{0,1,2,-1}; max f64 trig rounding error < 2×10⁻¹⁶ ≪ 1×10⁻¹² threshold).
+  - Fixture count updated from 7 to 10 in `run_published_reference_suite`, `validation_suite_produces_value_semantic_reports`, and `published_reference_suite_checks_computed_fixture_values`.
+- Added Mixed-Precision Capability Table to `ARCHITECTURE.md` as the authoritative per-crate precision surface record. Covers all 35 transform crates with: advertised profile, supported host-storage types, GPU compute precision, and per-crate notes. Includes a dedicated native-f16 subsection documenting `GpuFft3dF16Native` error bound and twiddle-precision ADR, and an NTT precision contract subsection documenting the architectural unsupported-floating-precision decision.
+- Updated `README.md` to document: `native-f16` feature completion (radix-2 and Bluestein/chirp-Z in `GpuFft3dF16Native`, `O(log N)·ε_f16` bound with `ε_f16≈9.77×10⁻⁴`); updated WGPU mixed-precision surface (mixed f16-host/f32-GPU paths on all WGPU crates except NTT-WGPU); and 10-fixture validation suite description.
+- Verified: `cargo test --workspace --all-targets` zero failures; `cargo clippy --workspace --all-targets -- -D warnings` zero warnings/errors.
 
 - Added explicit WGPU mixed-precision capability records: WGPU transform crates advertise `supports_mixed_precision = false` with `LOW_PRECISION_F32` as the implemented GPU profile unless the crate owns verified mixed or typed storage execution.
 - Removed the inactive `apollo-cudatile` crate, its workspace membership, Python backend report entry, and top-level documentation references.
@@ -193,4 +206,16 @@ All items below are implemented, tested, and verified in completed sprints.
 
 ## Remaining Gaps
 
-Open gaps are listed at the top of this audit. Future increments should implement real mixed-precision GPU execution where hardware support is available, and then expand published-reference fixture breadth where a transform has a compact stable table or a documented external reference implementation that can be vendored or feature-gated without affecting production crates.
+Open gaps are listed at the top of this audit. Future increments should:
+- Run the Criterion buffer-reuse benches on representative GPU hardware and record measured allocation-vs-reuse speedup ratios for 1D and 3D NUFFT fast paths.
+- Verify `GpuFft3dF16Native` Bluestein path on production hardware with non-power-of-two sizes (current test passes on dev hardware; production validation is pending).
+- Expand NTT published-reference fixtures beyond N=4 to cover larger moduli and the default 998244353 modulus with non-trivial transform results.
+
+### Closed in this sprint (Performance & Native GPU Precision phase)
+
+- Performance-quantification gap: added Criterion bench targets `buffer_reuse` to both `apollo-nufft-wgpu` (fast Type-1/Type-2 1D, per-call vs `with_buffers`, N=64/128/256) and `apollo-fft-wgpu` (3D forward/inverse, per-call vs `with_buffers`, nx=ny=nz=4/8/16).
+- `NufftWgpuBackend` façade gap: added public `execute_fast_type1_1d_with_buffers`, `execute_fast_type2_1d_with_buffers`, `execute_fast_type1_3d_with_buffers`, `execute_fast_type2_3d_with_buffers` methods delegating to `NufftGpuKernel`.
+- Native f16 GPU compute gap: added `GpuFft3dF16Native` behind `apollo-fft-wgpu/native-f16` feature; WGSL shaders `fft_native_f16.wgsl` and `pack_native_f16.wgsl` use `enable f16;` and `array<f16>` storage; host boundary performs f32↔f16 conversion; parity test verifies |error| < 5×10⁻³ against f32 GPU reference (O(log N)·ε_f16 bound with N=4).
+- Bluestein f16 gap: implemented `chirp_native_f16.wgsl` with `enable f16;`, `array<f16>` bindings, and f32-precision twiddles narrowed to f16; lifted power-of-two-only constraint on `GpuFft3dF16Native` by adding `strategy_x/y/z`, `chirp_x/y/z` fields, `build_chirp_data_f16`, and `dispatch_chirp_f16` (flat 1D dispatch, no data races); roundtrip test on 3×3×3 (all-Bluestein) passes with error < 0.05.
+- 3D NUFFT buffer-reuse bench gap: added `bench_fast_type1_3d` and `bench_fast_type2_3d` Criterion functions to `apollo-nufft-wgpu/benches/buffer_reuse.rs`; covers per-call vs `with_buffers` for N=4,6,8.
+- Published-reference fixture breadth gap: added NTT impulse ([1,0,0,0]→[1,1,1,1], Pollard 1971), NTT constant ([1,1,1,1]→[4,0,0,0], geometric-series theorem), and NUFFT Type-1 at origin (single source x=0 → F[k]=1 ∀k, Dutt and Rokhlin 1993) to `apollo-validation`; all three verified at PUBLISHED_FIXTURE_LIMIT=1×10⁻¹².

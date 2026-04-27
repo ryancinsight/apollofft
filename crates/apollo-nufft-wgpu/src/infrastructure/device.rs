@@ -11,7 +11,7 @@ use num_complex::{Complex32, Complex64};
 use crate::application::plan::{NufftWgpuPlan1D, NufftWgpuPlan3D};
 use crate::domain::capabilities::NufftWgpuCapabilities;
 use crate::domain::error::{NufftWgpuError, NufftWgpuResult};
-use crate::infrastructure::kernel::NufftGpuKernel;
+use crate::infrastructure::kernel::{NufftGpuBuffers1D, NufftGpuBuffers3D, NufftGpuKernel};
 
 /// Return whether a default WGPU adapter/device can be acquired.
 #[must_use]
@@ -668,6 +668,162 @@ impl NufftWgpuBackend {
         let computed = self.execute_type2_3d(plan, &modes32, positions)?;
         write_typed_output(&computed, output);
         Ok(())
+    }
+
+    /// Execute fast gridded Type-1 1D NUFFT with pre-allocated GPU buffers.
+    ///
+    /// Semantically identical to [`execute_fast_type1_1d`](Self::execute_fast_type1_1d)
+    /// but reuses GPU buffers to eliminate per-dispatch allocation.
+    /// Allocate `buffers` with `NufftGpuBuffers1D::new(backend.device(), n, m, max_samples)`.
+    pub fn execute_fast_type1_1d_with_buffers(
+        &self,
+        plan: &NufftWgpuPlan1D,
+        buffers: &NufftGpuBuffers1D,
+        positions: &[f32],
+        values: &[Complex32],
+    ) -> NufftWgpuResult<Vec<Complex64>> {
+        validate_pair_lengths(positions.len(), values.len())?;
+        validate_fast_1d_plan(plan)?;
+        validate_usize_to_u32(positions.len())?;
+        let fast = fast_1d_metadata(plan)?;
+        let output = self.kernel.execute_fast_type1_1d_with_buffers(
+            &self.device,
+            &self.queue,
+            buffers,
+            plan.kernel_width(),
+            plan.domain().length() as f32,
+            fast.beta as f32,
+            fast.i0_beta as f32,
+            &fast.deconv,
+            positions,
+            values,
+        )?;
+        Ok(output
+            .into_iter()
+            .map(|v| Complex64::new(v.re as f64, v.im as f64))
+            .collect())
+    }
+
+    /// Execute fast gridded Type-2 1D NUFFT with pre-allocated GPU buffers.
+    ///
+    /// Semantically identical to [`execute_fast_type2_1d`](Self::execute_fast_type2_1d)
+    /// but reuses GPU buffers to eliminate per-dispatch allocation.
+    pub fn execute_fast_type2_1d_with_buffers(
+        &self,
+        plan: &NufftWgpuPlan1D,
+        buffers: &NufftGpuBuffers1D,
+        fourier_coeffs: &[Complex32],
+        positions: &[f32],
+    ) -> NufftWgpuResult<Vec<Complex64>> {
+        if fourier_coeffs.len() != plan.domain().n {
+            return Err(NufftWgpuError::InputLengthMismatch {
+                expected: plan.domain().n,
+                actual: fourier_coeffs.len(),
+            });
+        }
+        validate_fast_1d_plan(plan)?;
+        validate_usize_to_u32(positions.len())?;
+        let fast = fast_1d_metadata(plan)?;
+        let output = self.kernel.execute_fast_type2_1d_with_buffers(
+            &self.device,
+            &self.queue,
+            buffers,
+            plan.kernel_width(),
+            plan.domain().length() as f32,
+            fast.beta as f32,
+            fast.i0_beta as f32,
+            &fast.deconv,
+            fourier_coeffs,
+            positions,
+        )?;
+        Ok(output
+            .into_iter()
+            .map(|v| Complex64::new(v.re as f64, v.im as f64))
+            .collect())
+    }
+
+    /// Execute fast gridded Type-1 3D NUFFT with pre-allocated GPU buffers.
+    ///
+    /// Semantically identical to [`execute_fast_type1_3d`](Self::execute_fast_type1_3d)
+    /// but reuses GPU buffers to eliminate per-dispatch allocation.
+    pub fn execute_fast_type1_3d_with_buffers(
+        &self,
+        plan: &NufftWgpuPlan3D,
+        buffers: &NufftGpuBuffers3D,
+        positions: &[(f32, f32, f32)],
+        values: &[Complex32],
+    ) -> NufftWgpuResult<Array3<Complex64>> {
+        validate_pair_lengths(positions.len(), values.len())?;
+        let grid = plan.grid();
+        validate_usize_to_u32(grid.nx)?;
+        validate_usize_to_u32(grid.ny)?;
+        validate_usize_to_u32(grid.nz)?;
+        validate_usize_to_u32(positions.len())?;
+        let fast = fast_3d_metadata(plan)?;
+        let (lx, ly, lz) = grid.lengths();
+        let output = self.kernel.execute_fast_type1_3d_with_buffers(
+            &self.device,
+            &self.queue,
+            buffers,
+            plan.kernel_width(),
+            (lx as f32, ly as f32, lz as f32),
+            fast.beta as f32,
+            fast.i0_beta as f32,
+            &fast.deconv_xyz,
+            positions,
+            values,
+        )?;
+        let converted: Vec<Complex64> = output
+            .into_iter()
+            .map(|v| Complex64::new(v.re as f64, v.im as f64))
+            .collect();
+        Array3::from_shape_vec((grid.nx, grid.ny, grid.nz), converted).map_err(|_| {
+            NufftWgpuError::InvalidPlan {
+                message: "fast 3D type1 with_buffers output shape does not match grid",
+            }
+        })
+    }
+
+    /// Execute fast gridded Type-2 3D NUFFT with pre-allocated GPU buffers.
+    ///
+    /// Semantically identical to [`execute_fast_type2_3d`](Self::execute_fast_type2_3d)
+    /// but reuses GPU buffers to eliminate per-dispatch allocation.
+    pub fn execute_fast_type2_3d_with_buffers(
+        &self,
+        plan: &NufftWgpuPlan3D,
+        buffers: &NufftGpuBuffers3D,
+        modes: &Array3<Complex32>,
+        positions: &[(f32, f32, f32)],
+    ) -> NufftWgpuResult<Vec<Complex64>> {
+        let grid = plan.grid();
+        if modes.dim() != (grid.nx, grid.ny, grid.nz) {
+            return Err(NufftWgpuError::InvalidPlan {
+                message: "mode shape must match 3D plan grid dimensions",
+            });
+        }
+        validate_usize_to_u32(grid.nx)?;
+        validate_usize_to_u32(grid.ny)?;
+        validate_usize_to_u32(grid.nz)?;
+        validate_usize_to_u32(positions.len())?;
+        let fast = fast_3d_metadata(plan)?;
+        let (lx, ly, lz) = grid.lengths();
+        let flat_modes: Vec<Complex32> = modes.iter().copied().collect();
+        let output = self.kernel.execute_fast_type2_3d_with_buffers(
+            &self.device,
+            &self.queue,
+            buffers,
+            plan.kernel_width(),
+            (lx as f32, ly as f32, lz as f32),
+            fast.beta as f32,
+            fast.i0_beta as f32,
+            &fast.deconv_xyz,
+            &flat_modes,
+            positions,
+        )?;
+        Ok(output
+            .into_iter()
+            .map(|v| Complex64::new(v.re as f64, v.im as f64))
+            .collect())
     }
 }
 

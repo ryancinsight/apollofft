@@ -1,5 +1,64 @@
 # Apollo Checklist
 
+## Performance & Native GPU Precision phase
+- [x] Add `NufftWgpuBackend::execute_fast_type1_1d_with_buffers`, `execute_fast_type2_1d_with_buffers`, `execute_fast_type1_3d_with_buffers`, `execute_fast_type2_3d_with_buffers` façade methods to `apollo-nufft-wgpu/src/infrastructure/device.rs`.
+- [x] Add Criterion bench target `buffer_reuse` and `benches/buffer_reuse.rs` to `apollo-nufft-wgpu`; covers fast Type-1/Type-2 1D per-call vs with-buffers across N=64,128,256.
+- [x] Add Criterion bench target `buffer_reuse` and `benches/buffer_reuse.rs` to `apollo-fft-wgpu`; covers 3D FFT forward/inverse per-call vs with-buffers across nx=ny=nz=4,8,16.
+- [x] Add `native-f16` feature flag to `apollo-fft-wgpu/Cargo.toml`.
+- [x] Create `src/infrastructure/shaders/fft_native_f16.wgsl` and `pack_native_f16.wgsl` with `enable f16;`, `array<f16>` buffers, f16 twiddle factors, and f16 butterfly passes.
+- [x] Create `src/infrastructure/gpu_fft/f16_plan.rs` with `GpuFft3dF16Native`, `try_new`, `try_from_device`, `forward_native_f16`, `inverse_native_f16`, `device_supports_f16`, and `validate_dimensions_f16`.
+- [x] Expose `GpuFft3dF16Native` from `src/infrastructure/gpu_fft/mod.rs` and `src/lib.rs` under `#[cfg(feature = "native-f16")]`.
+- [x] Add `native_f16_forward_matches_f32_within_f16_tolerance_when_device_exists` test: |error| < 5×10⁻³ bound derived from O(log N)·ε_f16 with N=4.
+- [x] Document radix-2-only constraint for `GpuFft3dF16Native` (Bluestein chirp f16 shader deferred); ADR: twiddles computed in f32 then narrowed to f16 to bound two-source accumulation error.
+- [x] Verify `cargo check --workspace --all-targets` clean (default features).
+- [x] Verify `cargo check --package apollo-fft-wgpu --all-targets --features native-f16` clean.
+- [x] Verify `cargo test --workspace --all-targets` passes 465 tests, 0 failures.
+- [x] Verify `cargo clippy --workspace --all-targets` zero errors and zero warnings.
+- [x] Verify `cargo test --package apollo-fft-wgpu --features native-f16` passes 9 tests including new native-f16 parity test.
+
+## Closure II phase (fixture expansion, capability table, documentation sync)
+- [x] Add `ntt_n8_impulse_fixture` to `apollo-validation` published-reference suite: NTT8([1,0,0,0,0,0,0,0])=[1,1,1,1,1,1,1,1] (Pollard 1971 impulse theorem, N=8 generalization); verified at PUBLISHED_FIXTURE_LIMIT=1×10⁻¹².
+- [x] Add `ntt_polynomial_convolution_fixture` to `apollo-validation` published-reference suite: INTT(NTT([1,2,0,0])⊙NTT([3,4,0,0]))=[3,10,8,0] from (1+2x)(3+4x)=3+10x+8x² (Pollard 1971 Convolution Theorem); pointwise product computed via 128-bit widening mod 998244353; verified at PUBLISHED_FIXTURE_LIMIT=1×10⁻¹².
+- [x] Add `nufft_quarter_period_phase_fixture` to `apollo-validation` published-reference suite: Type-1, single unit source at x=L/4, N=4 → F=[1,-i,-1,i]; derived from exp(-πi·k_signed/2) with k_signed ∈ {0,1,2,-1}; max f64 trig error < 2×10⁻¹⁶ ≪ 1×10⁻¹² threshold (Dutt and Rokhlin 1993).
+- [x] Update `run_published_reference_suite` vec to include `ntt_n8_impulse_fixture`, `ntt_polynomial_convolution_fixture`, and `nufft_quarter_period_phase_fixture` (total 10 fixtures).
+- [x] Update fixture-count assertions from 7 to 10 in `validation_suite_produces_value_semantic_reports` and `published_reference_suite_checks_computed_fixture_values`.
+- [x] Add `use apollo_ntt::{intt, NttPlan, DEFAULT_MODULUS};` to `apollo-validation/src/application/suite.rs` imports.
+- [x] Add Mixed-Precision Capability Table section to `ARCHITECTURE.md` covering all 35 crates with advertised profile, supported storage, GPU compute precision, and notes; includes native-f16 and NTT precision contract subsections.
+- [x] Update `README.md`: document `native-f16` feature completion (radix-2 and Bluestein, `GpuFft3dF16Native`, `O(log N)·ε_f16` bound), updated WGPU mixed-precision surface, and 10-fixture validation suite reference.
+- [x] Verify `cargo test --package apollo-validation --lib -- tests` passes 3 tests with `attempted = 10`.
+- [x] Verify `cargo test --workspace --all-targets` zero failures after Closure II changes.
+- [x] Verify `cargo clippy --workspace --all-targets -- -D warnings` zero errors and zero warnings after Closure II changes.
+
+## Gap-Closure & Extension phase (Bluestein f16, 3D NUFFT bench, published fixtures)
+- [x] Create `chirp_native_f16.wgsl` with `enable f16;`, `array<f16>` for all four storage bindings (data_re, data_im, chirp_re, chirp_im), f32-precision twiddle narrowed to f16, and no-op `chirp_scale` matching the f32 contract.
+- [x] Remove power-of-two-only restriction from `validate_dimensions_f16`: keep N ≥ 2 requirement only.
+- [x] Add `f16_next_pow2`, `f16_axis_strategy`, `f16_axis_workspace_elems` free functions to `f16_plan.rs`.
+- [x] Add `use crate::infrastructure::gpu_fft::strategy::{AxisStrategy, ChirpData};` to `f16_plan.rs` imports.
+- [x] Add `strategy_x/y/z: AxisStrategy` and `chirp_x/y/z: Option<ChirpData>` fields to `GpuFft3dF16Native`.
+- [x] Update `try_from_device` workspace buffer sizing to `max(f16_axis_workspace_elems per axis) × 2 bytes` to accommodate Bluestein padded lengths.
+- [x] Update `build_axis_pack` calls in `try_from_device` to pass `m` as `fft_len` for ChirpZ axes and `n` for Radix2 axes.
+- [x] Update `RadixStages` construction in `try_from_device`: `RadixStages::empty()` for ChirpZ axes, `precompute` for Radix2 axes.
+- [x] Add Bluestein chirp data construction for each axis in `try_from_device` using `build_chirp_data_f16`.
+- [x] Add `strategy_x/y/z` and `chirp_x/y/z` to the `Ok(Self { … })` return in `try_from_device`.
+- [x] Add `build_chirp_data_f16` private method: computes h in f32, narrows to f16 u16 bits, creates f16 chirp buffers, builds `data_chirp_layout`/`data_chirp_bg`, compiles `chirp_native_f16.wgsl` pipelines, returns `ChirpData` with embedded `radix2_fwd`/`radix2_inv`.
+- [x] Add `dispatch_chirp_f16` private method using flat 1D dispatch `(total).div_ceil(256), 1, 1` throughout, eliminating the data-race risk present in the original f32 `dispatch_chirp` (which uses 2D workgroup dispatch with a flat-index shader).
+- [x] Update `run_f16_axis_fft` to match-dispatch on `strategy_x/y/z`: `dispatch_radix2` for Radix2, `dispatch_chirp_f16` for ChirpZ.
+- [x] Add `non_pow2_f16_forward_inverse_roundtrip_when_device_exists` test: 3×3×3 Bluestein path, roundtrip error < 0.05 (analytically bounded by O(log₂4)·ε_f16·2·3 ≈ 1.2×10⁻²).
+- [x] Add `bench_fast_type1_3d` and `bench_fast_type2_3d` Criterion functions to `apollo-nufft-wgpu/benches/buffer_reuse.rs`; covers per-call vs `with_buffers` for 3D fast NUFFT across N=4,6,8 using `NufftGpuBuffers3D` and `NufftWgpuPlan3D`.
+- [x] Fix approximate-TAU clippy warnings in `apollo-nufft-wgpu/benches/buffer_reuse.rs`: replace `6.283` literals with `std::f32::consts::TAU` and `std::f32::consts::PI`.
+- [x] Add `use apollo_ntt::ntt;` import and `apollo-ntt` path dep to `apollo-validation`.
+- [x] Add `ntt_impulse_fixture` (NTT([1,0,0,0])→[1,1,1,1], Pollard 1971 impulse theorem) to `apollo-validation` published-reference suite.
+- [x] Add `ntt_constant_fixture` (NTT([1,1,1,1])→[4,0,0,0], DFT-of-constant geometric-series theorem) to `apollo-validation` published-reference suite.
+- [x] Add `nufft_impulse_at_origin_fixture` (Type-1 single source x=0, value=1 → F[k]=1 ∀k, Dutt and Rokhlin 1993) to `apollo-validation` published-reference suite.
+- [x] Update `run_published_reference_suite` to include the three new fixtures (total 7).
+- [x] Update fixture-count assertions from 4 to 7 in `validation_suite_produces_value_semantic_reports` and `published_reference_suite_checks_computed_fixture_values`.
+- [x] Verify `cargo check --workspace --all-targets` clean (default features).
+- [x] Verify `cargo check --package apollo-fft-wgpu --features native-f16 --all-targets` clean.
+- [x] Verify `cargo clippy --workspace --all-targets` zero errors, zero warnings.
+- [x] Verify `cargo test --workspace --all-targets` zero failures.
+- [x] Verify `cargo test --package apollo-fft-wgpu --features native-f16` passes 10 tests including `non_pow2_f16_forward_inverse_roundtrip_when_device_exists`.
+
+
 ## Closure phase
 - [x] Fix `[workspace.lints.clippy]` priority: assign `all`/`pedantic` groups `priority = -1` so individual overrides take precedence.
 - [x] Propagate workspace lints to all 39 crates via `[lints] workspace = true`.

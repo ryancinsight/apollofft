@@ -1,5 +1,31 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure II phase)
+- [x] Add NTT N=8 impulse published-reference fixture to `apollo-validation`: NTT8([1,0,0,0,0,0,0,0])=[1,1,1,1,1,1,1,1] (Pollard 1971 impulse theorem, N=8 generalization); verified at PUBLISHED_FIXTURE_LIMIT=1×10⁻¹².
+- [x] Add NTT polynomial convolution published-reference fixture to `apollo-validation`: INTT(NTT([1,2,0,0])⊙NTT([3,4,0,0]))=[3,10,8,0] from (1+2x)(3+4x)=3+10x+8x² (Pollard 1971 Convolution Theorem); verified at PUBLISHED_FIXTURE_LIMIT=1×10⁻¹².
+- [x] Add NUFFT quarter-period phase published-reference fixture to `apollo-validation`: Type-1 with single source at x=L/4, value=1+0i, N=4 → F=[1,-i,-1,i] (Dutt and Rokhlin 1993 definition, exp(-πi·k_signed/2) sequence); verified at PUBLISHED_FIXTURE_LIMIT=1×10⁻¹².
+- [x] Update `apollo-validation` fixture-count assertions from 7 to 10 to reflect the three new published-reference entries.
+- [x] Add Mixed-Precision Capability Table to `ARCHITECTURE.md` as authoritative per-crate precision surface record covering all 35 crates with advertised profile, supported storage types, GPU compute precision, and notes.
+- [x] Update `README.md` to document the `native-f16` feature completion in `apollo-fft-wgpu` (radix-2 and Bluestein/chirp-Z, `GpuFft3dF16Native`, `O(log N)·ε_f16` error bound), the updated WGPU mixed-precision surface, and the 10-fixture validation suite.
+
+## Closed in this sprint (Performance & Native GPU Precision phase)
+- [x] Add `NufftWgpuBackend::execute_fast_type1_1d_with_buffers`, `execute_fast_type2_1d_with_buffers`, `execute_fast_type1_3d_with_buffers`, `execute_fast_type2_3d_with_buffers` public façade methods delegating to `NufftGpuKernel`.
+- [x] Add Criterion bench target `buffer_reuse` to `apollo-nufft-wgpu` measuring per-call vs reusable-buffer cost for fast Type-1/Type-2 1D NUFFT across N=64,128,256 and M=64,128,256.
+- [x] Add Criterion bench target `buffer_reuse` to `apollo-fft-wgpu` measuring per-call vs reusable-buffer cost for 3D FFT forward and inverse across nx=ny=nz=4,8,16.
+- [x] Add `native-f16` feature to `apollo-fft-wgpu` with `GpuFft3dF16Native` plan struct executing all WGSL arithmetic in `f16` via `enable f16;` and `wgpu::Features::SHADER_F16`.
+- [x] Add `fft_native_f16.wgsl` and `pack_native_f16.wgsl` WGSL shaders with `enable f16;`, `array<f16>` storage buffers, f16 twiddle factors, and f16 butterfly accumulation.
+- [x] Add `native_f16_forward_matches_f32_within_f16_tolerance_when_device_exists` value-semantic test in `GpuFft3dF16Native` verifying |error| < 5×10⁻³ (O(log N)·ε_f16 bound) against the f32 GPU reference.
+- [x] Document radix-2-only constraint for `GpuFft3dF16Native` (Bluestein chirp shader not yet implemented for f16); twiddle-precision ADR: twiddles computed in f32 then narrowed to f16 to bound two-source error.
+- [x] Implement `chirp_native_f16.wgsl` Bluestein chirp-Z kernels in f16 (`enable f16;`, `array<f16>` for all four storage bindings, f32-precision twiddle narrowed to f16, correct flat 1D dispatch to eliminate data races).
+- [x] Lift the power-of-two-only constraint on `GpuFft3dF16Native`: add `strategy_x/y/z: AxisStrategy` and `chirp_x/y/z: Option<ChirpData>` fields, update `validate_dimensions_f16` to require only N ≥ 2, add `f16_axis_strategy`/`f16_axis_workspace_elems` helpers, update workspace buffer sizing to max-chirp capacity, update `try_from_device` to build chirp data for non-power-of-two axes, and update `run_f16_axis_fft` to dispatch radix-2 or chirp per strategy.
+- [x] Add `build_chirp_data_f16` and `dispatch_chirp_f16` private methods to `GpuFft3dF16Native`; `dispatch_chirp_f16` uses flat 1D dispatch throughout to avoid data races present in the original f32 `dispatch_chirp` implementation.
+- [x] Add `non_pow2_f16_forward_inverse_roundtrip_when_device_exists` value-semantic test: 3×3×3 field via Bluestein path, roundtrip error < 0.05 (analytically bounded at O(log₂4)·ε_f16·2 passes·3 axes ≈ 1.2×10⁻²).
+- [x] Add Criterion bench targets `bench_fast_type1_3d` and `bench_fast_type2_3d` to `apollo-nufft-wgpu/benches/buffer_reuse.rs` measuring per-call vs reusable-buffer 3D fast NUFFT cost across N=4,6,8.
+- [x] Add NTT published-reference fixtures to `apollo-validation`: NTT([1,0,0,0])=[1,1,1,1] (Pollard 1971 impulse theorem) and NTT([1,1,1,1])=[4,0,0,0] (DFT-of-constant theorem), both verified at PUBLISHED_FIXTURE_LIMIT=1×10⁻¹².
+- [x] Add NUFFT published-reference fixture to `apollo-validation`: Type-1 with single source at x=0, value=1 → F[k]=1 for all k (exp(0)=1 is IEEE 754 exact, Dutt and Rokhlin 1993 definition); verified at PUBLISHED_FIXTURE_LIMIT=1×10⁻¹².
+- [x] Update `apollo-validation` fixture-count assertions from 4 to 7 to reflect the three new published-reference entries.
+
+
 ## Closed in this sprint (Extension phase)
 - [x] Add mixed-precision CPU storage contracts to remaining eligible transform crates: NUFFT and SHT
 - [x] Add mixed-precision capability contracts or explicit unsupported records to WGPU crates

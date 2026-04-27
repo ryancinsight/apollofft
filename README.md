@@ -15,7 +15,7 @@ Stage 2 moves Apollo beyond the initial compatibility cut:
 - `apollo-sdft` owns sliding DFT streaming-window metadata, O(bin_count) update recurrence kernels, and streaming state.
 - `apollo-mellin` owns Mellin scale-domain metadata and validation.
 - `apollo-sft` owns the sparse Fourier transform single source of truth.
-- `apollo-fft-wgpu` owns the real shader-backed 3D WGPU FFT path with radix-2 and Bluestein/Chirp-Z axis strategies.
+- `apollo-fft-wgpu` owns the real shader-backed 3D WGPU FFT path with radix-2 and Bluestein/Chirp-Z axis strategies. The optional `native-f16` feature adds `GpuFft3dF16Native`, which executes all butterfly arithmetic directly in `f16` inside the shader when the adapter exposes `wgpu::Features::SHADER_F16`, covering both power-of-two (radix-2) and non-power-of-two (Bluestein chirp-Z) sizes.
 - `apollo-nufft-wgpu` owns NUFFT GPU execution and ships exact direct Type-1 and Type-2 WGPU kernels for 1D and 3D, plus fast Kaiser-Bessel gridding paths for both 1D and 3D. The fast paths perform GPU spreading or interpolation, dispatch oversampled FFTs through `apollo-fft-wgpu`, and apply GPU deconvolution against the same Kaiser-Bessel metadata used by `apollo-nufft`.
 - Per-transform WGPU crates own GPU backend boundaries for their respective mathematical domains. `apollo-fwht-wgpu` and `apollo-dht-wgpu` ship real 1D `f32` kernels, `apollo-dctdst-wgpu` ships the full real 1D `f32` DCT-II/DCT-III/DST-II/DST-III family, `apollo-czt-wgpu` ships a direct complex forward CZT kernel, `apollo-gft-wgpu` ships forward and inverse graph-basis execution, `apollo-hilbert-wgpu` ships forward analytic/quadrature Hilbert execution, `apollo-mellin-wgpu` ships a forward Mellin log-frequency spectrum kernel, `apollo-ntt-wgpu` ships forward and inverse NTT execution on its supported modulus surface, `apollo-qft-wgpu` ships forward and inverse dense unitary QFT execution, `apollo-radon-wgpu` ships forward parallel-beam projection execution, `apollo-sdft-wgpu` ships forward direct-bin sliding DFT execution, `apollo-sft-wgpu` ships direct dense DFT sparse top-k execution and inverse reconstruction, `apollo-sht-wgpu` ships direct complex SHT forward/inverse execution using owner-derived basis and quadrature buffers, `apollo-stft-wgpu` ships forward Hann-windowed STFT execution, and `apollo-wavelet-wgpu` ships forward and inverse Haar DWT execution.
 - `apollo-wavelet` owns discrete and continuous wavelet transform plans for multiresolution analysis.
@@ -27,7 +27,9 @@ Mixed precision is now a first-class Apollo concept:
 - CPU defaults to `high_accuracy` (`f64` storage and `f64` compute).
 - CPU also supports opt-in `low_precision` (`f32` storage and `f32` compute).
 - CPU also supports opt-in `mixed_precision` (`half::f16` storage with `f32` compute in the current FFT path).
-- WGPU currently exposes only the truthful `low_precision` profile because the shipped shaders execute in `f32`; Apollo does not advertise mixed precision there until a real mixed arithmetic path exists.
+- WGPU exposes `low_precision` (`f32` shaders) as the default GPU profile. Mixed `f16`-host / `f32`-GPU typed storage paths are available on all WGPU crates except `apollo-ntt-wgpu`, which uses exact `u32` modular residues instead.
+- `apollo-fft-wgpu` additionally supports native `f16` GPU arithmetic via the `native-f16` feature (`GpuFft3dF16Native`). Twiddle factors are computed in `f32` then narrowed to `f16`; accumulation error is bounded by `O(log N)·ε_f16` where `ε_f16 ≈ 9.77×10⁻⁴`.
+- The authoritative per-crate precision surface is documented in `ARCHITECTURE.md` under the Mixed-Precision Capability Table.
 
 ## Crates
 
@@ -79,7 +81,7 @@ Mixed precision is now a first-class Apollo concept:
 - `apollo-stft-wgpu`: forward Hann-windowed STFT WGPU execution with CPU parity tests; inverse remains unsupported.
 - `apollo-wavelet-wgpu`: forward and inverse Haar DWT WGPU execution with CPU parity tests on the implemented `f32` surface.
 - `apollo-wavelet`: DWT/CWT multiresolution transforms with Haar, Daubechies-4, Ricker, and DC-corrected real Morlet support.
-- `apollo-validation`: parity, adversarial, benchmark, and external-reference runners.
+- `apollo-validation`: parity, adversarial, benchmark, and external-reference runners. Includes 10 published-reference fixtures: FFT (Cooley-Tukey 1965), DHT (Bracewell 1983), DCT-II and DST-II (FFTW REDFT10/RODFT10), NTT impulse N=4, NTT constant N=4, NTT impulse N=8, NTT polynomial convolution, NUFFT impulse at origin, and NUFFT quarter-period phase (Dutt and Rokhlin 1993).
 - `apollo-python`: PyO3 bindings, NumPy interop, and backend introspection.
 
 ## Architecture

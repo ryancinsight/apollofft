@@ -15,6 +15,9 @@ use apollo_fft::error::{ApolloError, ApolloResult};
 use apollo_fft::types::{BackendKind, Normalization, PrecisionProfile, Shape1D, Shape2D, Shape3D};
 pub use infrastructure::gpu_fft::{gpu_fft_available, GpuFft3d, GpuFft3dBuffers};
 
+#[cfg(feature = "native-f16")]
+pub use infrastructure::gpu_fft::GpuFft3dF16Native;
+
 /// WGPU backend descriptor.
 #[derive(Debug, Clone)]
 pub struct WgpuBackend {
