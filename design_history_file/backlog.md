@@ -1,5 +1,20 @@
 # Apollo Backlog
 
+## Closed in this sprint (Extension phase)
+- [x] Add mixed-precision CPU storage contracts to remaining eligible transform crates: NUFFT and SHT
+- [x] Add mixed-precision capability contracts or explicit unsupported records to WGPU/cudatile crates
+- [x] Add `NufftGpuBuffers1D` and `NufftGpuBuffers3D` reusable GPU buffer structs to `apollo-nufft-wgpu` for repeated fast-path execution
+- [x] Add `execute_fast_type1_1d_with_buffers`, `execute_fast_type2_1d_with_buffers`, `execute_fast_type1_3d_with_buffers`, `execute_fast_type2_3d_with_buffers` methods to `NufftGpuKernel`
+- [x] Add `GpuFft3dBuffers` reusable GPU/host buffer struct and value-semantic parity tests to `apollo-fft-wgpu` for repeated 3D FFT dispatch
+- [x] Add FFT-WGPU 3D mixed-precision `f16` host-storage / `f32` GPU-compute helpers with represented-input parity tests
+- [x] Add NUFFT-WGPU fast Type-1/Type-2 1D/3D typed mixed-storage wrappers using `f16` host storage and `f32` GPU kernels
+- [x] Add NUFFT-WGPU direct Type-1/Type-2 1D/3D typed mixed-storage wrappers using `f16` host storage and `f32` GPU kernels
+- [x] Add DHT-WGPU forward/inverse typed mixed-storage wrappers using `f16` host storage and the existing `f32` GPU kernel
+- [x] Add debug-gated NUFFT-WGPU fast Type-2 1D/3D grid diagnostics for after-load and after-IFFT checkpoints
+- [x] Replace stale CI crate/path references with workspace `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-targets`, and current `apollo-python` smoke tests
+- [x] Add `type2_into` zero-allocation 3D Type-2 NUFFT path on `NufftPlan3D`
+- [x] Add value-semantic typed verification tests for `apollo-nufft` (1D and 3D, Complex64/Complex32/[f16;2], profile mismatch rejection)
+
 ## Closed in this sprint (Closure phase)
 - [x] Fix `[workspace.lints.clippy]` priority: assign `all` and `pedantic` groups `priority = -1` so individual overrides at default priority 0 take precedence; eliminates 22 clippy compilation failures across all transform crates.
 - [x] Propagate workspace lints to all 39 crates via `[lints] workspace = true` in every `Cargo.toml`; add comprehensive pedantic suppressions for DSP-appropriate patterns (cast truncation/precision/loss, needless_range_loop, too_many_arguments, manual_is_multiple_of, manual_div_ceil, etc.).
@@ -99,4 +114,7 @@
 - [x] Add typed caller-owned SHT real/complex forward and inverse paths for `f64`/`Complex64`, `f32`/`Complex32`, and mixed `f16`/`[f16; 2]` storage profiles with profile mismatch rejection.
 - [x] Add typed caller-owned NUFFT 1D/3D Type-1/Type-2 paths for `Complex64`, `Complex32`, and mixed `[f16; 2]` storage profiles with profile mismatch rejection.
 - [x] Complete mixed-precision rollout across eligible CPU transform crates.
-- [ ] Define explicit mixed-precision support/unsupported capability records for each GPU and cudatile backend crate.
+- [x] Define explicit mixed-precision support/unsupported capability records for each GPU and cudatile backend crate.
+- [x] Add `apollo-fft-wgpu` reusable GPU buffer structs for repeated 3D FFT dispatch
+- [x] Add debug-gated GPU grid readbacks (after load, after IFFT) behind a `cfg(test)` feature for faster future numerical triage in `apollo-nufft-wgpu`
+- [x] Run `cargo clippy --workspace --all-targets` and `cargo test --workspace` in CI to prevent regressions of the lint priority or normalization conventions

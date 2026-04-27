@@ -2,11 +2,20 @@
 
 ## Open Gaps
 
-- Mixed-precision GPU/cudatile capability contracts remain incomplete for FFT-WGPU, CZT-WGPU, DCTDST-WGPU, DHT-WGPU, FrFT-WGPU, FWHT-WGPU, GFT-WGPU, Hilbert-WGPU, Mellin-WGPU, NTT-WGPU, NUFFT-WGPU, QFT-WGPU, Radon-WGPU, SDFT-WGPU, SFT-WGPU, SHT-WGPU, STFT-WGPU, Wavelet-WGPU, and cudatile.
+- Real mixed-precision GPU execution remains future work for transform-specific WGPU crates other than DHT-WGPU and for cudatile where device features and WGSL support permit `f16` storage or wider host-side precision contracts. FFT-WGPU 3D, NUFFT-WGPU direct/fast Type-1/Type-2 1D/3D, and DHT-WGPU forward/inverse now own verified `f16` storage / `f32` compute paths.
 
 ## Closed Gaps
 
 All items below are implemented, tested, and verified in completed sprints.
+
+- Added explicit WGPU/cudatile mixed-precision capability records: WGPU transform crates and cudatile now advertise `supports_mixed_precision = false` with `LOW_PRECISION_F32` as the implemented GPU profile unless a crate uses the shared FFT backend capability descriptor.
+- Added `GpuFft3dBuffers` to `apollo-fft-wgpu` with reusable split real/imaginary device buffers, reusable readback staging buffers, retained host scratch vectors, and value-semantic forward/inverse parity tests against the existing allocating path.
+- Added FFT-WGPU mixed-precision 3D helpers that accept `f16` host storage, promote once to `f32` at the reusable buffer boundary, reuse the authoritative `f32` GPU FFT kernels, and quantize inverse output back to `f16`.
+- Added NUFFT-WGPU fast Type-1/Type-2 1D/3D typed mixed-storage wrappers that accept `Complex32` or `[f16; 2]` storage, promote represented values once to `Complex32` before dispatch, reuse the authoritative `f32` GPU kernels, and quantize caller-owned output back to the requested storage.
+- Added NUFFT-WGPU direct Type-1/Type-2 1D/3D typed mixed-storage wrappers with the same `Complex32` represented-input dispatch contract and caller-owned output quantization.
+- Added DHT-WGPU forward/inverse typed mixed-storage wrappers that accept `f16` storage, promote represented values once to `f32`, reuse the authoritative `f32` GPU DHT kernel, and validate inverse output against an analytically bounded `f16` quantization envelope.
+- Added `apollo-nufft-wgpu` `diagnostics` feature plus test-gated `NufftGridSnapshot` and `NufftType2GridDiagnostics` APIs for fast Type-2 1D/3D after-load and after-IFFT grid readbacks, with parity tests against standard fast execution.
+- Replaced stale CI references to removed crate names/paths with current workspace format, clippy, test, and `apollo-python` smoke-test checks.
 
 ### Closure Phase
 
@@ -163,9 +172,16 @@ All items below are implemented, tested, and verified in completed sprints.
 
 - **NUFFT WGPU Fast Type-2 1D Normalization Bug (fixed)**: `execute_fast_type2_1d` in `kernel.rs` was producing results a factor of `oversampled_len` (= m) too small. Root cause: the CPU `type2_into` path calls a normalized IFFT (divides by m) and then explicitly multiplies by m to recover the unnormalized IDFT required by the KB interpolation kernel; the GPU path called `encode_inverse_split` (which also divides by m) but omitted the compensating ×m scale. Fix: in `execute_fast_type2_1d`, deconv values are packed into `ComplexPod` with `oversampled_len as f32` scaling before the GPU grid-load pass, so the normalized IFFT output equals the unnormalized IDFT without adding a second host-side deconv vector. The 3D path is unaffected: both CPU and GPU 3D type-2 paths use the normalized IDFT directly without rescaling, so they agree.
 
+### Extension Phase
+
+- Added `supports_mixed_precision` and `default_precision_profile` fields to all 16 WGPU capability structs; corrected `apollo-cudatile` default precision to `LOW_PRECISION_F32`.
+- Verified NUFFT and SHT CPU mixed-precision storage contracts were already complete (`NufftComplexStorage`, `ShtRealStorage`, `ShtComplexStorage`).
+- Added `NufftGpuBuffers1D` and `NufftGpuBuffers3D` reusable GPU buffer structs with `execute_fast_*_with_buffers` methods to eliminate per-call buffer allocation on repeated NUFFT fast-path dispatch.
+- Added `NufftPlan3D::type2_into` zero-allocation path (type2 now delegates to type2_into).
+- Added value-semantic typed verification tests for NUFFT 1D and 3D across Complex64, Complex32, and [f16;2] storage profiles with profile mismatch rejection.
+
 ---
 
 ## Remaining Gaps
 
-- Continue mixed-precision CPU storage rollout for NUFFT, SFT, SHT, and Wavelet.
-- Define explicit mixed-precision support or unsupported records for WGPU/cudatile backend crates.
+Open gaps are listed at the top of this audit. Future increments should implement real mixed-precision GPU execution where hardware support is available, and then expand published-reference fixture breadth where a transform has a compact stable table or a documented external reference implementation that can be vendored or feature-gated without affecting production crates.

@@ -108,8 +108,15 @@
 - [x] Add value-semantic DHT and DCT/DST typed storage coverage for `f64`, `f32`, mixed `f16`, and profile mismatch rejection.
 - [x] Add value-semantic FWHT typed storage coverage for `f64`, `f32`, mixed `f16`, and profile mismatch rejection.
 - [x] Verify all 39 workspace crates have manifests, READMEs, and library roots; repair the missing `apollo-python` architecture and verification README sections.
-- [x] Add mixed-precision CPU storage contracts to remaining eligible transform crates: NUFFT.
-- [ ] Add mixed-precision capability contracts or explicit unsupported records to WGPU/cudatile crates: FFT-WGPU, CZT-WGPU, DCTDST-WGPU, DHT-WGPU, FrFT-WGPU, FWHT-WGPU, GFT-WGPU, Hilbert-WGPU, Mellin-WGPU, NTT-WGPU, NUFFT-WGPU, QFT-WGPU, Radon-WGPU, SDFT-WGPU, SFT-WGPU, SHT-WGPU, STFT-WGPU, Wavelet-WGPU, and cudatile.
+- [x] Add mixed-precision CPU storage contracts to remaining eligible transform crates: NUFFT and SHT.
+- [x] Add mixed-precision capability contracts or explicit unsupported records to WGPU/cudatile crates: FFT-WGPU, CZT-WGPU, DCTDST-WGPU, DHT-WGPU, FrFT-WGPU, FWHT-WGPU, GFT-WGPU, Hilbert-WGPU, Mellin-WGPU, NTT-WGPU, NUFFT-WGPU, QFT-WGPU, Radon-WGPU, SDFT-WGPU, SFT-WGPU, SHT-WGPU, STFT-WGPU, Wavelet-WGPU, and cudatile.
+- [x] Add `NufftGpuBuffers1D`/`NufftGpuBuffers3D` reusable GPU buffer structs and `execute_fast_*_with_buffers` methods.
+- [x] Add `NufftPlan3D::type2_into` zero-allocation 3D Type-2 path.
+- [x] Add value-semantic typed verification tests for `apollo-nufft` covering Complex64, Complex32, [f16;2], and profile mismatch.
+- [x] Add `apollo-fft-wgpu` reusable GPU buffer structs for repeated 3D FFT dispatch.
+- [x] Add debug-gated GPU grid readbacks (after load, after IFFT) behind a `cfg(test)` feature in `apollo-nufft-wgpu` for faster future numerical triage.
+- [x] Set up CI pipeline for lint and test regression prevention.
+- [ ] Add real mixed-precision WGPU execution where device features and shader kernels support it; FFT-WGPU 3D, NUFFT-WGPU direct/fast 1D/3D, and DHT-WGPU forward/inverse `f16` storage / `f32` compute paths are complete, remaining transform-specific WGPU crates remain.
 - [x] Add typed CZT caller-owned storage coverage for `Complex64`, `Complex32`, mixed `[f16; 2]`, and profile mismatch rejection.
 - [x] Add typed FrFT caller-owned storage coverage for `Complex64`, `Complex32`, mixed `[f16; 2]`, and profile mismatch rejection.
 - [x] Add typed GFT caller-owned storage coverage for `f64`, `f32`, mixed `f16`, inverse roundtrip, and profile mismatch rejection.

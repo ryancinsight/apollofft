@@ -1,5 +1,7 @@
 //! NUFFT WGPU capability contracts.
 
+use apollo_fft::PrecisionProfile;
+
 /// Truthful WGPU NUFFT capability descriptor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NufftWgpuCapabilities {
@@ -21,6 +23,10 @@ pub struct NufftWgpuCapabilities {
     pub supports_fast_type1_3d: bool,
     /// Whether fast gridded Type-2 3D NUFFT execution is implemented.
     pub supports_fast_type2_3d: bool,
+    /// Whether mixed-precision (f16/f32/f64) typed storage dispatch is supported.
+    pub supports_mixed_precision: bool,
+    /// Default precision profile for GPU execution.
+    pub default_precision_profile: PrecisionProfile,
 }
 
 impl NufftWgpuCapabilities {
@@ -37,6 +43,8 @@ impl NufftWgpuCapabilities {
             supports_fast_type2_1d: false,
             supports_fast_type1_3d: false,
             supports_fast_type2_3d: false,
+            supports_mixed_precision: false,
+            default_precision_profile: PrecisionProfile::LOW_PRECISION_F32,
         }
     }
 
@@ -53,6 +61,8 @@ impl NufftWgpuCapabilities {
             supports_fast_type2_1d: false,
             supports_fast_type1_3d: false,
             supports_fast_type2_3d: false,
+            supports_mixed_precision: false,
+            default_precision_profile: PrecisionProfile::LOW_PRECISION_F32,
         }
     }
 
@@ -69,6 +79,8 @@ impl NufftWgpuCapabilities {
             supports_fast_type2_1d: false,
             supports_fast_type1_3d: false,
             supports_fast_type2_3d: false,
+            supports_mixed_precision: false,
+            default_precision_profile: PrecisionProfile::LOW_PRECISION_F32,
         }
     }
 
@@ -85,6 +97,8 @@ impl NufftWgpuCapabilities {
             supports_fast_type2_1d: false,
             supports_fast_type1_3d: false,
             supports_fast_type2_3d: false,
+            supports_mixed_precision: false,
+            default_precision_profile: PrecisionProfile::LOW_PRECISION_F32,
         }
     }
 
@@ -101,6 +115,8 @@ impl NufftWgpuCapabilities {
             supports_fast_type2_1d: device_available,
             supports_fast_type1_3d: false,
             supports_fast_type2_3d: false,
+            supports_mixed_precision: false,
+            default_precision_profile: PrecisionProfile::LOW_PRECISION_F32,
         }
     }
 
@@ -117,6 +133,8 @@ impl NufftWgpuCapabilities {
             supports_fast_type2_1d: device_available,
             supports_fast_type1_3d: device_available,
             supports_fast_type2_3d: device_available,
+            supports_mixed_precision: true,
+            default_precision_profile: PrecisionProfile::LOW_PRECISION_F32,
         }
     }
 }

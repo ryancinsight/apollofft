@@ -14,11 +14,20 @@ mod tests {
         assert!(caps.device_available);
         assert!(caps.supports_forward);
         assert!(!caps.supports_inverse);
-
+        assert!(!caps.supports_mixed_precision);
+        assert_eq!(
+            caps.default_precision_profile,
+            apollo_fft::PrecisionProfile::LOW_PRECISION_F32
+        );
         let caps_off = WgpuCapabilities::forward_only(false);
         assert!(!caps_off.device_available);
         assert!(!caps_off.supports_forward);
         assert!(!caps_off.supports_inverse);
+        assert!(!caps_off.supports_mixed_precision);
+        assert_eq!(
+            caps_off.default_precision_profile,
+            apollo_fft::PrecisionProfile::LOW_PRECISION_F32
+        );
     }
 
     #[test]

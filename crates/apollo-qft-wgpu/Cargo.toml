@@ -8,6 +8,7 @@ repository = "https://github.com/ryancinsight/kwavers"
 description = "WGPU backend boundary for Apollo QFT"
 
 [dependencies]
+apollo-fft = { path = "../apollo-fft" }
 apollo-qft = { path = "../apollo-qft" }
 bytemuck = { version = "1.19", features = ["derive"] }
 num-complex = "0.4"

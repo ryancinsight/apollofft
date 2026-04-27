@@ -13,7 +13,7 @@ use apollo_fft::backend::FftBackend;
 use apollo_fft::domain::backend::BackendCapabilities;
 use apollo_fft::error::{ApolloError, ApolloResult};
 use apollo_fft::types::{BackendKind, Normalization, PrecisionProfile, Shape1D, Shape2D, Shape3D};
-pub use infrastructure::gpu_fft::{gpu_fft_available, GpuFft3d};
+pub use infrastructure::gpu_fft::{gpu_fft_available, GpuFft3d, GpuFft3dBuffers};
 
 /// WGPU backend descriptor.
 #[derive(Debug, Clone)]
@@ -74,9 +74,12 @@ impl FftBackend for WgpuBackend {
             supports_2d: false,
             supports_3d: true,
             supports_real_to_complex: false,
-            supports_mixed_precision: false,
+            supports_mixed_precision: true,
             default_precision_profile: PrecisionProfile::LOW_PRECISION_F32,
-            supported_precision_profiles: vec![PrecisionProfile::LOW_PRECISION_F32],
+            supported_precision_profiles: vec![
+                PrecisionProfile::LOW_PRECISION_F32,
+                PrecisionProfile::MIXED_PRECISION_F16_F32,
+            ],
         }
     }
 

@@ -8,6 +8,7 @@ repository = "https://github.com/ryancinsight/kwavers"
 description = "WGPU backend boundary for Apollo GFT"
 
 [dependencies]
+apollo-fft = { path = "../apollo-fft" }
 apollo-gft = { path = "../apollo-gft" }
 bytemuck = { version = "1.19", features = ["derive"] }
 pollster = "0.4"

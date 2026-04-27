@@ -480,14 +480,63 @@ impl NufftPlan3D {
         positions: &[(f64, f64, f64)],
         modes: &Array3<Complex64>,
     ) -> Vec<Complex64> {
+        let mut scratch_grid = Array3::<Complex64>::zeros((self.mx, self.my, self.mz));
+        let mut wx = vec![0.0_f64; 2 * self.w + 1];
+        let mut wy = vec![0.0_f64; 2 * self.w + 1];
+        let mut wz = vec![0.0_f64; 2 * self.w + 1];
+        let mut output = vec![Complex64::default(); positions.len()];
+        self.type2_into(
+            positions,
+            modes,
+            &mut scratch_grid,
+            &mut wx,
+            &mut wy,
+            &mut wz,
+            &mut output,
+        );
+        output
+    }
+
+    /// Run type-2 3D NUFFT into caller-owned work buffers and output storage.
+    pub fn type2_into(
+        &self,
+        positions: &[(f64, f64, f64)],
+        modes: &Array3<Complex64>,
+        scratch_grid: &mut Array3<Complex64>,
+        scratch_wx: &mut [f64],
+        scratch_wy: &mut [f64],
+        scratch_wz: &mut [f64],
+        output: &mut [Complex64],
+    ) {
         assert_eq!(
             modes.dim(),
             (self.grid.nx, self.grid.ny, self.grid.nz),
             "modes shape must match plan grid dimensions"
         );
+        assert_eq!(
+            scratch_grid.dim(),
+            (self.mx, self.my, self.mz),
+            "scratch_grid shape must match oversampled grid dimensions"
+        );
+        assert_eq!(
+            scratch_wx.len(),
+            2 * self.w + 1,
+            "scratch_wx length mismatch"
+        );
+        assert_eq!(
+            scratch_wy.len(),
+            2 * self.w + 1,
+            "scratch_wy length mismatch"
+        );
+        assert_eq!(
+            scratch_wz.len(),
+            2 * self.w + 1,
+            "scratch_wz length mismatch"
+        );
+        assert_eq!(output.len(), positions.len(), "output length mismatch");
 
         // 1. Place deconvolved modes on oversampled grid (zero-padded)
-        let mut grid = Array3::<Complex64>::zeros((self.mx, self.my, self.mz));
+        scratch_grid.fill(Complex64::new(0.0, 0.0));
         for kx in 0..self.grid.nx {
             let kx_idx = fft_signed_index(kx, self.grid.nx).rem_euclid(self.mx as i64) as usize;
             for ky in 0..self.grid.ny {
@@ -495,69 +544,66 @@ impl NufftPlan3D {
                 for kz in 0..self.grid.nz {
                     let kz_idx =
                         fft_signed_index(kz, self.grid.nz).rem_euclid(self.mz as i64) as usize;
-                    grid[[kx_idx, ky_idx, kz_idx]] = modes[[kx, ky, kz]]
+                    scratch_grid[[kx_idx, ky_idx, kz_idx]] = modes[[kx, ky, kz]]
                         * (self.deconv_x[kx] * self.deconv_y[ky] * self.deconv_z[kz]);
                 }
             }
         }
 
         // 2. Separable inverse FFT on oversampled grid
-        self.ifft_x_pass(&mut grid);
-        self.ifft_y_pass(&mut grid);
-        self.ifft_z_pass(&mut grid);
+        self.ifft_x_pass(scratch_grid);
+        self.ifft_y_pass(scratch_grid);
+        self.ifft_z_pass(scratch_grid);
 
         // 3. Interpolate at each non-uniform point using KB kernel
         let (lx, ly, lz) = self.grid.lengths();
         let w = self.w as i64;
         let w_f = self.w as f64;
-        let sorted = sort_positions_3d(positions, self.grid, (self.mx, self.my, self.mz), self.w);
-        let mut output = vec![Complex64::default(); positions.len()];
 
-        let mut wx = vec![0.0_f64; 2 * self.w + 1];
-        let mut wy = vec![0.0_f64; 2 * self.w + 1];
-        let mut wz = vec![0.0_f64; 2 * self.w + 1];
+        let sorted = sort_positions_3d(positions, self.grid, (self.mx, self.my, self.mz), self.w);
 
         for point in sorted {
             let tx = self.mx as f64 * point.x / lx;
             let ty = self.my as f64 * point.y / ly;
             let tz = self.mz as f64 * point.z / lz;
+
             let m0x = tx.round() as i64;
             let m0y = ty.round() as i64;
             let m0z = tz.round() as i64;
+
             let dx = tx - m0x as f64;
             let dy = ty - m0y as f64;
             let dz = tz - m0z as f64;
 
             for (off, p) in (-w..=w).enumerate() {
-                wx[off] = kb_kernel(p as f64 - dx, w_f, self.beta, self.i0_beta);
-                wy[off] = kb_kernel(p as f64 - dy, w_f, self.beta, self.i0_beta);
-                wz[off] = kb_kernel(p as f64 - dz, w_f, self.beta, self.i0_beta);
+                scratch_wx[off] = kb_kernel(p as f64 - dx, w_f, self.beta, self.i0_beta);
+                scratch_wy[off] = kb_kernel(p as f64 - dy, w_f, self.beta, self.i0_beta);
+                scratch_wz[off] = kb_kernel(p as f64 - dz, w_f, self.beta, self.i0_beta);
             }
 
             let mut value = Complex64::new(0.0, 0.0);
-            for (px, &wxv) in wx.iter().enumerate() {
+            for (px, &wxv) in scratch_wx.iter().enumerate() {
                 if wxv == 0.0 {
                     continue;
                 }
                 let ix = (m0x + px as i64 - w).rem_euclid(self.mx as i64) as usize;
-                for (py, &wyv) in wy.iter().enumerate() {
+                for (py, &wyv) in scratch_wy.iter().enumerate() {
                     if wyv == 0.0 {
                         continue;
                     }
                     let iy = (m0y + py as i64 - w).rem_euclid(self.my as i64) as usize;
                     let wxy = wxv * wyv;
-                    for (pz, &wzv) in wz.iter().enumerate() {
+                    for (pz, &wzv) in scratch_wz.iter().enumerate() {
                         if wzv == 0.0 {
                             continue;
                         }
                         let iz = (m0z + pz as i64 - w).rem_euclid(self.mz as i64) as usize;
-                        value += grid[[ix, iy, iz]] * (wxy * wzv);
+                        value += scratch_grid[[ix, iy, iz]] * (wxy * wzv);
                     }
                 }
             }
             output[point.index] = value;
         }
-        output
     }
 
     /// Run type-2 3D NUFFT for `Complex64`, `Complex32`, or mixed `[f16; 2]` storage.
@@ -728,6 +774,7 @@ pub fn nufft_type2_3d_fast(
 mod tests {
     use super::*;
     use crate::DEFAULT_NUFFT_KERNEL_WIDTH;
+    use crate::DEFAULT_NUFFT_OVERSAMPLING;
 
     /// DC mode invariant: f_{0,0,0} = sum(c_j) because exp(0) = 1 for all points.
     ///
@@ -884,5 +931,43 @@ mod tests {
             err,
             ApolloError::Validation { field, .. } if field == "precision_profile"
         ));
+    }
+
+    #[test]
+    fn plan_3d_type2_into_matches_type2_allocating() {
+        let grid = UniformGrid3D::new(4, 4, 4, 0.1, 0.1, 0.1).unwrap();
+        let plan = NufftPlan3D::new(grid, DEFAULT_NUFFT_OVERSAMPLING, DEFAULT_NUFFT_KERNEL_WIDTH);
+        let modes = Array3::from_shape_fn((4, 4, 4), |(kx, ky, kz)| {
+            Complex64::new(
+                0.25 + 0.1 * kx as f64 - 0.05 * ky as f64 + 0.03 * kz as f64,
+                -0.4 + 0.07 * kx as f64 + 0.11 * ky as f64 - 0.02 * kz as f64,
+            )
+        });
+        let positions = vec![
+            (0.01, 0.02, 0.03),
+            (0.05, 0.06, 0.07),
+            (0.025, 0.015, 0.005),
+        ];
+        let expected = plan.type2(&positions, &modes);
+        let mut scratch_grid = Array3::<Complex64>::zeros((plan.mx, plan.my, plan.mz));
+        let mut wx = vec![0.0; 2 * plan.w + 1];
+        let mut wy = vec![0.0; 2 * plan.w + 1];
+        let mut wz = vec![0.0; 2 * plan.w + 1];
+        let mut output = vec![Complex64::new(0.0, 0.0); positions.len()];
+        plan.type2_into(
+            &positions,
+            &modes,
+            &mut scratch_grid,
+            &mut wx,
+            &mut wy,
+            &mut wz,
+            &mut output,
+        );
+        for (actual, expected) in output.iter().zip(expected.iter()) {
+            assert!(
+                (actual - expected).norm() < 1e-14,
+                "type2_into mismatch: got {actual:?}, expected {expected:?}"
+            );
+        }
     }
 }

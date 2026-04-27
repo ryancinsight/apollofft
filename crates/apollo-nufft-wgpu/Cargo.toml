@@ -8,6 +8,7 @@ repository = "https://github.com/ryancinsight/kwavers"
 description = "WGPU NUFFT backend surface for Apollo"
 
 [dependencies]
+apollo-fft = { path = "../apollo-fft" }
 apollo-fft-wgpu = { path = "../apollo-fft-wgpu" }
 apollo-nufft = { path = "../apollo-nufft" }
 bytemuck = { version = "1.19", features = ["derive"] }
@@ -16,6 +17,14 @@ num-complex = "0.4"
 pollster = "0.4"
 thiserror = "1.0"
 wgpu = { version = "26.0", features = ["wgsl"] }
+
+[features]
+default = []
+diagnostics = []
+## Enable intermediate GPU grid readbacks after load and IFFT stages for numerical triage.
+## This feature is intended for testing and debugging only; it adds GPU→CPU synchronization
+## points that would be unacceptable in production pipelines.
+debug-readbacks = []
 
 [dev-dependencies]
 approx = "0.5"

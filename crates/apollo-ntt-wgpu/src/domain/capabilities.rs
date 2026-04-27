@@ -1,5 +1,7 @@
 //! WGPU capability contracts.
 
+use apollo_fft::PrecisionProfile;
+
 /// Truthful WGPU transform capability descriptor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WgpuCapabilities {
@@ -9,6 +11,10 @@ pub struct WgpuCapabilities {
     pub supports_forward: bool,
     /// Whether inverse or adjoint transform execution is implemented.
     pub supports_inverse: bool,
+    /// Whether mixed-precision (f16/f32/f64) typed storage dispatch is supported.
+    pub supports_mixed_precision: bool,
+    /// Default precision profile for GPU execution.
+    pub default_precision_profile: PrecisionProfile,
 }
 
 impl WgpuCapabilities {
@@ -19,16 +25,20 @@ impl WgpuCapabilities {
             device_available,
             supports_forward: false,
             supports_inverse: false,
+            supports_mixed_precision: false,
+            default_precision_profile: PrecisionProfile::LOW_PRECISION_F32,
         }
     }
 
-    /// Construct capabilities for an implemented forward and inverse path.
+    /// Construct capabilities for full forward and inverse execution support.
     #[must_use]
     pub const fn full(device_available: bool) -> Self {
         Self {
             device_available,
             supports_forward: device_available,
             supports_inverse: device_available,
+            supports_mixed_precision: false,
+            default_precision_profile: PrecisionProfile::LOW_PRECISION_F32,
         }
     }
 }

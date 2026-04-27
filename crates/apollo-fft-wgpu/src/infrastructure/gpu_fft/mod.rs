@@ -6,3 +6,4 @@ pub mod strategy;
 pub mod workspace;
 
 pub use pipeline::{gpu_fft_available, GpuFft3d};
+pub use workspace::GpuFft3dBuffers;

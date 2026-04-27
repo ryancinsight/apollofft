@@ -8,6 +8,7 @@ repository = "https://github.com/ryancinsight/kwavers"
 description = "WGPU backend boundary for Apollo NTT"
 
 [dependencies]
+apollo-fft = { path = "../apollo-fft" }
 apollo-ntt = { path = "../apollo-ntt" }
 bytemuck = { version = "1.19", features = ["derive"] }
 pollster = "0.4"

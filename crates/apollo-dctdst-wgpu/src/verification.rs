@@ -14,6 +14,11 @@ mod tests {
         assert!(capabilities.supports_inverse);
         assert!(capabilities.supports_dct);
         assert!(capabilities.supports_dst);
+        assert!(!capabilities.supports_mixed_precision);
+        assert_eq!(
+            capabilities.default_precision_profile,
+            apollo_fft::PrecisionProfile::LOW_PRECISION_F32
+        );
     }
 
     #[test]

@@ -9,6 +9,7 @@ use apollo_fft::backend::FftBackend;
 use apollo_fft::domain::backend::BackendCapabilities;
 use apollo_fft::error::{ApolloError, ApolloResult};
 use apollo_fft::types::{BackendKind, Normalization, PrecisionProfile, Shape1D, Shape2D, Shape3D};
+
 pub use domain::config::CudatileDeviceConfig;
 
 /// cudatile backend descriptor.
@@ -58,7 +59,7 @@ impl FftBackend for CudatileBackend {
             supports_3d: false,
             supports_real_to_complex: false,
             supports_mixed_precision: false,
-            default_precision_profile: PrecisionProfile::HIGH_ACCURACY_F64,
+            default_precision_profile: PrecisionProfile::LOW_PRECISION_F32,
             supported_precision_profiles: vec![],
         }
     }
