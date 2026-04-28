@@ -267,4 +267,194 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn dct1_forward_matches_cpu_reference_when_device_exists() {
+        let Ok(backend) = DctDstWgpuBackend::try_default() else {
+            return;
+        };
+        let input = vec![1.0_f32, -0.5, 2.0, 0.75];
+        let gpu_plan = backend.plan(input.len(), RealTransformKind::DctI);
+        let gpu = backend
+            .execute_forward(&gpu_plan, &input)
+            .expect("wgpu dct1 forward execution");
+
+        let cpu_plan =
+            DctDstPlan::new(input.len(), RealTransformKind::DctI).expect("cpu dct1 plan");
+        let cpu = cpu_plan
+            .forward(&input.iter().map(|&v| v as f64).collect::<Vec<_>>())
+            .expect("cpu dct1 forward");
+
+        assert_eq!(gpu.len(), cpu.len());
+        for (actual, expected) in gpu.iter().zip(cpu.iter()) {
+            assert!((f64::from(*actual) - *expected).abs() < 1.0e-4);
+        }
+    }
+
+    #[test]
+    fn dct4_forward_matches_cpu_reference_when_device_exists() {
+        let Ok(backend) = DctDstWgpuBackend::try_default() else {
+            return;
+        };
+        let input = vec![0.5_f32, -1.0, 2.5, -0.25, 1.5, 0.75];
+        let gpu_plan = backend.plan(input.len(), RealTransformKind::DctIV);
+        let gpu = backend
+            .execute_forward(&gpu_plan, &input)
+            .expect("wgpu dct4 forward execution");
+
+        let cpu_plan =
+            DctDstPlan::new(input.len(), RealTransformKind::DctIV).expect("cpu dct4 plan");
+        let cpu = cpu_plan
+            .forward(&input.iter().map(|&v| v as f64).collect::<Vec<_>>())
+            .expect("cpu dct4 forward");
+
+        assert_eq!(gpu.len(), cpu.len());
+        for (actual, expected) in gpu.iter().zip(cpu.iter()) {
+            assert!((f64::from(*actual) - *expected).abs() < 1.0e-4);
+        }
+    }
+
+    #[test]
+    fn dst1_forward_matches_cpu_reference_when_device_exists() {
+        let Ok(backend) = DctDstWgpuBackend::try_default() else {
+            return;
+        };
+        let input = vec![1.0_f32, -2.0, 0.5, 3.0, -1.5];
+        let gpu_plan = backend.plan(input.len(), RealTransformKind::DstI);
+        let gpu = backend
+            .execute_forward(&gpu_plan, &input)
+            .expect("wgpu dst1 forward execution");
+
+        let cpu_plan =
+            DctDstPlan::new(input.len(), RealTransformKind::DstI).expect("cpu dst1 plan");
+        let cpu = cpu_plan
+            .forward(&input.iter().map(|&v| v as f64).collect::<Vec<_>>())
+            .expect("cpu dst1 forward");
+
+        assert_eq!(gpu.len(), cpu.len());
+        for (actual, expected) in gpu.iter().zip(cpu.iter()) {
+            assert!((f64::from(*actual) - *expected).abs() < 1.0e-4);
+        }
+    }
+
+    #[test]
+    fn dst4_forward_matches_cpu_reference_when_device_exists() {
+        let Ok(backend) = DctDstWgpuBackend::try_default() else {
+            return;
+        };
+        let input = vec![0.75_f32, -1.25, 2.0, -0.5, 1.0];
+        let gpu_plan = backend.plan(input.len(), RealTransformKind::DstIV);
+        let gpu = backend
+            .execute_forward(&gpu_plan, &input)
+            .expect("wgpu dst4 forward execution");
+
+        let cpu_plan =
+            DctDstPlan::new(input.len(), RealTransformKind::DstIV).expect("cpu dst4 plan");
+        let cpu = cpu_plan
+            .forward(&input.iter().map(|&v| v as f64).collect::<Vec<_>>())
+            .expect("cpu dst4 forward");
+
+        assert_eq!(gpu.len(), cpu.len());
+        for (actual, expected) in gpu.iter().zip(cpu.iter()) {
+            assert!((f64::from(*actual) - *expected).abs() < 1.0e-4);
+        }
+    }
+
+    #[test]
+    fn dct1_inverse_recovers_input_when_device_exists() {
+        let Ok(backend) = DctDstWgpuBackend::try_default() else {
+            return;
+        };
+        let input = vec![1.0_f32, -0.5, 2.0, 0.75];
+        let plan = backend.plan(input.len(), RealTransformKind::DctI);
+        let spectrum = backend
+            .execute_forward(&plan, &input)
+            .expect("wgpu dct1 forward");
+        let recovered = backend
+            .execute_inverse(&plan, &spectrum)
+            .expect("wgpu dct1 inverse");
+
+        assert_eq!(recovered.len(), input.len());
+        for (actual, expected) in recovered.iter().zip(input.iter()) {
+            assert!((actual - expected).abs() < 1.0e-4);
+        }
+    }
+
+    #[test]
+    fn dct4_inverse_recovers_input_when_device_exists() {
+        let Ok(backend) = DctDstWgpuBackend::try_default() else {
+            return;
+        };
+        let input = vec![0.5_f32, -1.0, 2.5, -0.25, 1.5, 0.75];
+        let plan = backend.plan(input.len(), RealTransformKind::DctIV);
+        let spectrum = backend
+            .execute_forward(&plan, &input)
+            .expect("wgpu dct4 forward");
+        let recovered = backend
+            .execute_inverse(&plan, &spectrum)
+            .expect("wgpu dct4 inverse");
+
+        assert_eq!(recovered.len(), input.len());
+        for (actual, expected) in recovered.iter().zip(input.iter()) {
+            assert!((actual - expected).abs() < 1.0e-4);
+        }
+    }
+
+    #[test]
+    fn dst1_inverse_recovers_input_when_device_exists() {
+        let Ok(backend) = DctDstWgpuBackend::try_default() else {
+            return;
+        };
+        let input = vec![1.0_f32, -2.0, 0.5, 3.0, -1.5];
+        let plan = backend.plan(input.len(), RealTransformKind::DstI);
+        let spectrum = backend
+            .execute_forward(&plan, &input)
+            .expect("wgpu dst1 forward");
+        let recovered = backend
+            .execute_inverse(&plan, &spectrum)
+            .expect("wgpu dst1 inverse");
+
+        assert_eq!(recovered.len(), input.len());
+        for (actual, expected) in recovered.iter().zip(input.iter()) {
+            assert!((actual - expected).abs() < 1.0e-4);
+        }
+    }
+
+    #[test]
+    fn dst4_inverse_recovers_input_when_device_exists() {
+        let Ok(backend) = DctDstWgpuBackend::try_default() else {
+            return;
+        };
+        let input = vec![0.75_f32, -1.25, 2.0, -0.5, 1.0];
+        let plan = backend.plan(input.len(), RealTransformKind::DstIV);
+        let spectrum = backend
+            .execute_forward(&plan, &input)
+            .expect("wgpu dst4 forward");
+        let recovered = backend
+            .execute_inverse(&plan, &spectrum)
+            .expect("wgpu dst4 inverse");
+
+        assert_eq!(recovered.len(), input.len());
+        for (actual, expected) in recovered.iter().zip(input.iter()) {
+            assert!((actual - expected).abs() < 1.0e-4);
+        }
+    }
+
+    #[test]
+    fn dct1_rejects_length_less_than_two() {
+        let Ok(backend) = DctDstWgpuBackend::try_default() else {
+            return;
+        };
+        let plan = DctDstWgpuPlan::new(1, RealTransformKind::DctI);
+        let err = backend
+            .execute_forward(&plan, &[0.5_f32])
+            .expect_err("DCT-I length 1 must fail");
+        assert_eq!(
+            err,
+            WgpuError::InvalidLength {
+                len: 1,
+                message: "DCT-I requires length >= 2",
+            }
+        );
+    }
 }

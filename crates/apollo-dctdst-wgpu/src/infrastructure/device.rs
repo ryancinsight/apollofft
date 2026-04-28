@@ -83,6 +83,9 @@ impl DctDstWgpuBackend {
     }
 
     /// Execute the unnormalized configured real-to-real transform for a real-valued `f32` signal.
+    ///
+    /// Supported kinds: DCT-I, DCT-II, DCT-III, DCT-IV, DST-I, DST-II, DST-III, and DST-IV.
+    /// DCT-I requires length >= 2 and returns [`WgpuError::InvalidLength`] otherwise.
     pub fn execute_forward(&self, plan: &DctDstWgpuPlan, input: &[f32]) -> WgpuResult<Vec<f32>> {
         Self::validate_plan_input(plan, input)?;
         let mode = match plan.kind() {
@@ -91,23 +94,27 @@ impl DctDstWgpuBackend {
             RealTransformKind::DstII => DctMode::Dst2,
             RealTransformKind::DstIII => DctMode::Dst3,
             RealTransformKind::DctI => {
-                return Err(WgpuError::UnsupportedKind { kind: "DCT-I" });
+                if plan.len() < 2 {
+                    return Err(WgpuError::InvalidLength {
+                        len: plan.len(),
+                        message: "DCT-I requires length >= 2",
+                    });
+                }
+                DctMode::Dct1
             }
-            RealTransformKind::DctIV => {
-                return Err(WgpuError::UnsupportedKind { kind: "DCT-IV" });
-            }
-            RealTransformKind::DstI => {
-                return Err(WgpuError::UnsupportedKind { kind: "DST-I" });
-            }
-            RealTransformKind::DstIV => {
-                return Err(WgpuError::UnsupportedKind { kind: "DST-IV" });
-            }
+            RealTransformKind::DctIV => DctMode::Dct4,
+            RealTransformKind::DstI => DctMode::Dst1,
+            RealTransformKind::DstIV => DctMode::Dst4,
         };
         self.kernel
             .execute(self.device.as_ref(), self.queue.as_ref(), input, mode, 1.0)
     }
 
     /// Execute the normalized inverse of the configured real-to-real transform for a real-valued `f32` signal.
+    ///
+    /// Supported kinds: DCT-I, DCT-II, DCT-III, DCT-IV, DST-I, DST-II, DST-III, and DST-IV.
+    /// DCT-I requires length >= 2 and returns [`WgpuError::InvalidLength`] otherwise.
+    /// Inverse scales: DCT-I = 1/(2*(N-1)), DCT-IV = 2/N, DST-I = 1/(2*(N+1)), DST-IV = 2/N.
     pub fn execute_inverse(&self, plan: &DctDstWgpuPlan, input: &[f32]) -> WgpuResult<Vec<f32>> {
         Self::validate_plan_input(plan, input)?;
         let (mode, scale) = match plan.kind() {
@@ -116,17 +123,17 @@ impl DctDstWgpuBackend {
             RealTransformKind::DstII => (DctMode::Dst3, 2.0 / plan.len() as f32),
             RealTransformKind::DstIII => (DctMode::Dst2, 2.0 / plan.len() as f32),
             RealTransformKind::DctI => {
-                return Err(WgpuError::UnsupportedKind { kind: "DCT-I" });
+                if plan.len() < 2 {
+                    return Err(WgpuError::InvalidLength {
+                        len: plan.len(),
+                        message: "DCT-I requires length >= 2",
+                    });
+                }
+                (DctMode::Dct1, 1.0 / (2.0 * (plan.len() - 1) as f32))
             }
-            RealTransformKind::DctIV => {
-                return Err(WgpuError::UnsupportedKind { kind: "DCT-IV" });
-            }
-            RealTransformKind::DstI => {
-                return Err(WgpuError::UnsupportedKind { kind: "DST-I" });
-            }
-            RealTransformKind::DstIV => {
-                return Err(WgpuError::UnsupportedKind { kind: "DST-IV" });
-            }
+            RealTransformKind::DctIV => (DctMode::Dct4, 2.0 / plan.len() as f32),
+            RealTransformKind::DstI => (DctMode::Dst1, 1.0 / (2.0 * (plan.len() + 1) as f32)),
+            RealTransformKind::DstIV => (DctMode::Dst4, 2.0 / plan.len() as f32),
         };
         self.kernel.execute(
             self.device.as_ref(),

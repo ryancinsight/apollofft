@@ -5,7 +5,7 @@ mod tests {
     use apollo_fft::{f16, PrecisionProfile};
     use num_complex::{Complex32, Complex64};
 
-    use crate::{FrftWgpuBackend, FrftWgpuPlan, WgpuCapabilities, WgpuError};
+    use crate::{FrftWgpuBackend, FrftWgpuPlan, UnitaryFrftWgpuPlan, WgpuCapabilities, WgpuError};
 
     #[test]
     fn capabilities_reflect_implemented_kernel_surface() {
@@ -279,6 +279,195 @@ mod tests {
                 k,
                 actual.im,
                 expected.im
+            );
+        }
+    }
+
+    /// Order 0: DFrFT_0 = V · I · V^T = identity (V orthogonal ⇒ V·V^T = I).
+    /// Tolerance 1e-5 accounts for f32 GPU arithmetic and two N=8 matrix multiplications.
+    #[test]
+    fn unitary_forward_order_zero_is_identity_when_device_exists() {
+        let Ok(backend) = FrftWgpuBackend::try_default() else {
+            return;
+        };
+        let n = 8_usize;
+        let input: Vec<Complex32> = (0..n)
+            .map(|i| {
+                Complex32::new(
+                    i as f32 * 0.1_f32 + 0.5_f32,
+                    -(i as f32 * 0.07_f32) + 0.2_f32,
+                )
+            })
+            .collect();
+        let plan = UnitaryFrftWgpuPlan::new(n, 0.0_f32);
+        let output = backend
+            .execute_unitary_forward(&plan, &input)
+            .expect("unitary forward order 0");
+        assert_eq!(output.len(), n);
+        for (k, (actual, expected)) in output.iter().zip(input.iter()).enumerate() {
+            assert!(
+                (actual.re - expected.re).abs() < 1.0e-5_f32,
+                "k={} identity re: got={:.8} want={:.8}",
+                k,
+                actual.re,
+                expected.re
+            );
+            assert!(
+                (actual.im - expected.im).abs() < 1.0e-5_f32,
+                "k={} identity im: got={:.8} want={:.8}",
+                k,
+                actual.im,
+                expected.im
+            );
+        }
+    }
+
+    /// Order 2: DFrFT_2(x)[k] = x[N−1−k] (reversal). Derived from the palindrome
+    /// structure of the Grünbaum matrix whose eigenvectors are symmetric/antisymmetric,
+    /// causing exp(−i·2·k·π/2) = exp(−i·k·π) = (−1)^k to produce the reversal map.
+    #[test]
+    fn unitary_forward_order_two_is_reversal_when_device_exists() {
+        let Ok(backend) = FrftWgpuBackend::try_default() else {
+            return;
+        };
+        let n = 8_usize;
+        let input: Vec<Complex32> = (0..n)
+            .map(|i| Complex32::new((i as f32 * 0.31_f32).sin(), (i as f32 * 0.17_f32).cos()))
+            .collect();
+        let plan = UnitaryFrftWgpuPlan::new(n, 2.0_f32);
+        let output = backend
+            .execute_unitary_forward(&plan, &input)
+            .expect("unitary forward order 2");
+        assert_eq!(output.len(), n);
+        for k in 0..n {
+            let expected = input[n - 1 - k];
+            assert!(
+                (output[k].re - expected.re).abs() < 1.0e-5_f32,
+                "k={} reversal re: got={:.8} want={:.8}",
+                k,
+                output[k].re,
+                expected.re
+            );
+            assert!(
+                (output[k].im - expected.im).abs() < 1.0e-5_f32,
+                "k={} reversal im: got={:.8} want={:.8}",
+                k,
+                output[k].im,
+                expected.im
+            );
+        }
+    }
+
+    /// Roundtrip: DFrFT_{−a}(DFrFT_a(x)) = x for all real a (unitarity ⇒ inverse = adjoint =
+    /// order negation). Tolerance 1e-4 bounds two full three-pass GPU executions in f32.
+    #[test]
+    fn unitary_forward_inverse_roundtrip_when_device_exists() {
+        let Ok(backend) = FrftWgpuBackend::try_default() else {
+            return;
+        };
+        let n = 16_usize;
+        let input: Vec<Complex32> = (0..n)
+            .map(|i| Complex32::new((i as f32 * 0.23_f32).sin(), (i as f32 * 0.31_f32).cos()))
+            .collect();
+        for order in [0.3_f32, 0.5, 0.7, 1.3, 2.5, 3.1] {
+            let plan = UnitaryFrftWgpuPlan::new(n, order);
+            let spectrum = backend
+                .execute_unitary_forward(&plan, &input)
+                .expect("unitary forward for roundtrip");
+            let recovered = backend
+                .execute_unitary_inverse(&plan, &spectrum)
+                .expect("unitary inverse for roundtrip");
+            assert_eq!(recovered.len(), n);
+            let max_err = recovered
+                .iter()
+                .zip(input.iter())
+                .map(|(a, e)| (a - e).norm())
+                .fold(0.0_f32, f32::max);
+            assert!(
+                max_err < 1.0e-4_f32,
+                "roundtrip failed at order={}: max_element_error={:.2e}",
+                order,
+                max_err
+            );
+        }
+    }
+
+    /// Norm preservation: ‖DFrFT_a(x)‖² = ‖x‖² (unitarity invariant).
+    /// Relative tolerance 5e-5 is within f32 accumulation error for N=16
+    /// with two matrix-vector products of 16 terms each.
+    #[test]
+    fn unitary_forward_preserves_l2_norm_when_device_exists() {
+        let Ok(backend) = FrftWgpuBackend::try_default() else {
+            return;
+        };
+        let n = 16_usize;
+        let input: Vec<Complex32> = (0..n)
+            .map(|i| Complex32::new((i as f32 * 0.37_f32).cos(), (i as f32 * 0.41_f32).sin()))
+            .collect();
+        let input_norm_sq: f32 = input.iter().map(|c| c.norm_sqr()).sum();
+        for order in [0.3_f32, 0.7, 1.2, 1.8, 2.7] {
+            let plan = UnitaryFrftWgpuPlan::new(n, order);
+            let output = backend
+                .execute_unitary_forward(&plan, &input)
+                .expect("unitary forward for norm test");
+            assert_eq!(output.len(), n);
+            let output_norm_sq: f32 = output.iter().map(|c| c.norm_sqr()).sum();
+            let rel_err = (output_norm_sq - input_norm_sq).abs() / input_norm_sq;
+            assert!(
+                rel_err < 5.0e-5_f32,
+                "norm not preserved at order={}: ||output||²={:.8}, ||input||²={:.8}, rel_err={:.2e}",
+                order,
+                output_norm_sq,
+                input_norm_sq,
+                rel_err
+            );
+        }
+    }
+
+    /// GPU unitary FrFT at order=0.5 must match the CPU `UnitaryFrftPlan` reference
+    /// within 1e-3 per element. Discrepancy budget: f64→f32 precision reduction only;
+    /// both paths use the identical Grünbaum eigenbasis algorithm.
+    #[test]
+    fn unitary_gpu_matches_cpu_reference_when_device_exists() {
+        let Ok(backend) = FrftWgpuBackend::try_default() else {
+            return;
+        };
+        let n = 8_usize;
+        let order = 0.5_f32;
+        let input: Vec<Complex32> = (0..n)
+            .map(|i| Complex32::new((i as f32 * 0.4_f32).cos(), (i as f32 * 0.3_f32).sin()))
+            .collect();
+        let gpu_plan = UnitaryFrftWgpuPlan::new(n, order);
+        let gpu_out = backend
+            .execute_unitary_forward(&gpu_plan, &input)
+            .expect("gpu unitary forward");
+        assert_eq!(gpu_out.len(), n);
+
+        // CPU reference: apollo_frft::UnitaryFrftPlan with f64 precision.
+        let cpu_input = ndarray::Array1::from_vec(
+            input
+                .iter()
+                .map(|c| Complex64::new(c.re as f64, c.im as f64))
+                .collect(),
+        );
+        let cpu_plan =
+            apollo_frft::UnitaryFrftPlan::new(n, order as f64).expect("cpu unitary plan");
+        let cpu_out = cpu_plan.forward(&cpu_input).expect("cpu unitary forward");
+
+        for (k, (g, c)) in gpu_out.iter().zip(cpu_out.iter()).enumerate() {
+            assert!(
+                (g.re as f64 - c.re).abs() < 1.0e-3_f64,
+                "k={} re: gpu={:.6} cpu={:.6}",
+                k,
+                g.re,
+                c.re
+            );
+            assert!(
+                (g.im as f64 - c.im).abs() < 1.0e-3_f64,
+                "k={} im: gpu={:.6} cpu={:.6}",
+                k,
+                g.im,
+                c.im
             );
         }
     }

@@ -14,6 +14,7 @@ pub mod infrastructure;
 pub mod verification;
 
 pub use application::plan::FrftWgpuPlan;
+pub use application::plan::UnitaryFrftWgpuPlan;
 pub use domain::capabilities::WgpuCapabilities;
 pub use domain::error::{WgpuError, WgpuResult};
 pub use infrastructure::device::{wgpu_available, FrftWgpuBackend};

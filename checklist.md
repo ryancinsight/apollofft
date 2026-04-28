@@ -1,5 +1,38 @@
 # Apollo Checklist
 
+## Closure V phase (GPU Unitary FrFT, validation fixtures, docs)
+- [x] Create `apollo-frft-wgpu/src/infrastructure/shaders/frft_unitary.wgsl` with single-entry-point 3-pass WGSL shader (step=0: V^T·x, step=1: phase, step=2: V·c; column-major V; `@workgroup_size(64)`).
+- [x] Create `apollo-frft-wgpu/src/infrastructure/unitary_kernel.rs` with `UnitaryFrftGpuKernel` (BGL 5 entries, compiled pipeline, `execute` method with 3 sequential submissions + polls).
+- [x] Add `pub mod unitary_kernel;` to `apollo-frft-wgpu/src/infrastructure/mod.rs`.
+- [x] Add `UnitaryFrftWgpuPlan` to `apollo-frft-wgpu/src/application/plan.rs`.
+- [x] Add `unitary_kernel: Arc<UnitaryFrftGpuKernel>` field and `plan_unitary`/`execute_unitary_forward`/`execute_unitary_inverse` methods to `FrftWgpuBackend`.
+- [x] Re-export `UnitaryFrftWgpuPlan` from `apollo-frft-wgpu/src/lib.rs`.
+- [x] Add 5 value-semantic tests to `apollo-frft-wgpu/src/verification.rs` (identity, reversal, roundtrip, norm, CPU parity).
+- [x] Add `apollo-frft`, `apollo-wavelet`, `apollo-sdft` (or subset) to `apollo-validation/Cargo.toml`.
+- [x] Add `frft_unitary_order2_reversal_fixture`, `wavelet_haar_one_level_detail_fixture`, third fixture to `apollo-validation/src/application/suite.rs`.
+- [x] Update fixture-count assertions from 17 to 20 in `apollo-validation/src/application/suite.rs`.
+- [x] Create `design_history_file/adr_unitary_frft.md`.
+- [x] Update `ARCHITECTURE.md` with "Key: Unitary FrFT" subsection and capability table row.
+- [x] Update `gap_audit.md`: reclassify NTT gap; add Closure V closed-gaps section.
+- [x] Update `backlog.md`: add Closure V sprint section.
+- [x] Update `checklist.md`: add Closure V phase section (this document).
+- [x] Verify `cargo check --workspace --all-targets` clean.
+- [x] Verify `cargo clippy --workspace --all-targets -- -D warnings` zero warnings.
+- [x] Verify `cargo test --workspace --all-targets` zero failures.
+
+## Closure IV phase (FrFT unitarity, DCT-I/IV/DST-I/IV WGPU kernels)
+- [x] Add `nalgebra = { workspace = true }` to `apollo-frft/Cargo.toml`.
+- [x] Create `apollo-frft/src/application/execution/plan/frft/unitary.rs` with `GrunbaumBasis` (palindrome Grünbaum matrix, `nalgebra::SymmetricEigen`, eigenvectors sorted by decreasing eigenvalue) and `UnitaryFrftPlan` (DFrFT_a(x)=V·diag(exp(−iakπ/2))·V^T·x, O(N³) construction, O(N²) per call, provably unitary for all real orders).
+- [x] Add `pub mod unitary;` to `apollo-frft/src/application/execution/plan/frft/mod.rs`.
+- [x] Re-export `GrunbaumBasis` and `UnitaryFrftPlan` from `apollo-frft/src/lib.rs`; update crate-level doc to document both plan variants.
+- [x] Add 9 tests to `unitary.rs`: `unitary_order_zero_is_identity`, `unitary_order_4_is_identity`, `unitary_order_1_squared_equals_reversal`, `unitary_order_2_is_reversal`, `unitary_forward_inverse_roundtrip` (7 orders), `unitary_frft_preserves_l2_norm_for_non_integer_orders` (10 orders, rel_err < 1e-10), `unitary_frft_additive_order_property` (a=0.4, b=0.6), `rejects_invalid_plan_parameters`, `length_mismatch_is_rejected`.
+- [x] Extend `apollo-dctdst-wgpu/src/infrastructure/shaders/dct.wgsl`: change mode-3 `else` to `else if params.mode == 3u`; add modes 4 (DCT-I), 5 (DCT-IV), 6 (DST-I), 7 (DST-IV) matching CPU direct-kernel formulas exactly.
+- [x] Add `DctMode` variants `Dct1 = 4`, `Dct4 = 5`, `Dst1 = 6`, `Dst4 = 7` to `apollo-dctdst-wgpu/src/infrastructure/kernel.rs`; update enum doc comment.
+- [x] Update `apollo-dctdst-wgpu/src/infrastructure/device.rs` `execute_forward`: route DCT-I → `Dct1` (with N<2 `InvalidLength` guard), DCT-IV → `Dct4`, DST-I → `Dst1`, DST-IV → `Dst4`; remove all four `UnsupportedKind` returns.
+- [x] Update `apollo-dctdst-wgpu/src/infrastructure/device.rs` `execute_inverse`: route DCT-I → `(Dct1, 1/(2(N−1)))` (with N<2 guard), DCT-IV → `(Dct4, 2/N)`, DST-I → `(Dst1, 1/(2(N+1)))`, DST-IV → `(Dst4, 2/N)`; remove all four `UnsupportedKind` returns.
+- [x] Add 9 tests to `apollo-dctdst-wgpu/src/verification.rs`: forward parity vs CPU f64 reference for DCT-I/IV/DST-I/IV; self-inverse roundtrip for DCT-I/IV/DST-I/IV; `dct1_rejects_length_less_than_two`.
+- [x] Verify `cargo test --workspace --all-targets` 0 failures; `cargo clippy --workspace --all-targets -- -D warnings` 0 warnings.
+
 ## Closure III phase (validation mock removal, SSOT DFT fix, DCT-I/IV/DST-I/IV, published fixtures)
 - [x] Remove `run_fft_gpu_suite()` mock: replace hardcoded `passed: true, error = 0.0` with real `GpuFft3d` forward + inverse roundtrip on 4×4×4; report actual forward (vs CPU f64 reference) and inverse (roundtrip) max absolute errors; when adapter unavailable report `attempted: false, passed: false`.
 - [x] Compute `forward_max_abs_error` for `low_precision` and `mixed_precision` profiles in `precision_profile_reports()`: compare each profile's forward spectrum against the f64 reference spectrum and store the result in `Some(...)` instead of `None`.

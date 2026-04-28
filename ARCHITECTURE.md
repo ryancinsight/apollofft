@@ -72,7 +72,7 @@ The table below is the authoritative record of per-crate precision support. "Adv
 | apollo-czt-wgpu | WGPU | LOW_PRECISION_F32 | f32, [f16;2] host (mixed) | f32 | f16 promoted to f32 at host boundary |
 | apollo-dctdst-wgpu | WGPU | LOW_PRECISION_F32 | f32 | f32 | mixed f16 host path present |
 | apollo-dht-wgpu | WGPU | LOW_PRECISION_F32 | f32, half::f16 host (mixed) | f32 | f16 promoted at host boundary |
-| apollo-frft-wgpu | WGPU | LOW_PRECISION_F32 | f32, [f16;2] host (mixed) | f32 | f16 promoted at host boundary |
+| apollo-frft-wgpu | WGPU | LOW_PRECISION_F32 | f32, [f16;2] host (mixed) | f32 | f16 promoted at host boundary; UnitaryFrftGpuKernel available |
 | apollo-fwht-wgpu | WGPU | LOW_PRECISION_F32 | f32, half::f16 host (mixed) | f32 | f16 promoted at host boundary |
 | apollo-gft-wgpu | WGPU | LOW_PRECISION_F32 | f32, half::f16 host (mixed) | f32 | f16 promoted at host boundary |
 | apollo-hilbert-wgpu | WGPU | LOW_PRECISION_F32 | f32, half::f16 host (mixed) | f32 | f16 promoted at host boundary |
@@ -94,3 +94,23 @@ When the `native-f16` feature is enabled and the WGPU adapter exposes `wgpu::Fea
 ### Key: NTT precision contract
 
 `apollo-ntt` and `apollo-ntt-wgpu` operate exclusively on exact modular residues. Floating-point mixed precision is architecturally unsupported because modular arithmetic requires exact integer representation. The WGPU surface uses `u32` residues (values mod p where p ≤ u32::MAX); the CPU surface uses `u64` residues for the default 998244353 modulus with 128-bit-widened intermediate products.
+
+### Key: Unitary FrFT (apollo-frft, apollo-frft-wgpu)
+
+Two plans coexist for the fractional Fourier transform:
+
+| Plan | Construction | Per-call | Unitarity |
+|---|---|---|---|
+| `FrftPlan` | O(1) | O(N²) | Non-unitary for non-integer orders (‖M†M‖[j,j] = 1/|sin α|) |
+| `UnitaryFrftPlan` | O(N³) | O(N²) | Provably unitary: ‖DFrFT_a(x)‖₂ = ‖x‖₂ for all real a |
+
+`UnitaryFrftPlan` uses the Candan (2000) eigendecomposition of the Grünbaum commuting matrix.
+Its eigenvector basis V satisfies V^T V = I and eigenvectors are symmetric or antisymmetric
+under index reversal. DFrFT_a(x) = V · diag(exp(−iakπ/2)) · V^T · x.
+
+The GPU backend `apollo-frft-wgpu` exposes `execute_unitary_forward` and `execute_unitary_inverse`
+via `UnitaryFrftGpuKernel`. V is precomputed on CPU (O(N³)) and uploaded as an f32 storage buffer.
+Three sequential GPU submissions execute the 3-pass algorithm with `device.poll` barriers between
+passes to guarantee cross-workgroup storage ordering.
+
+See `design_history_file/adr_unitary_frft.md` for the full algorithm selection record.

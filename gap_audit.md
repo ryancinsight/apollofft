@@ -2,15 +2,29 @@
 
 ## Open Gaps
 
-- NTT-WGPU floating mixed precision remains unsupported because residue-field arithmetic requires exact modular integers. The replacement contract is exact quantized `u32` residue storage for the current 32-bit WGPU modulus surface. The inactive cudatile backend boundary has been removed from the workspace.
 - `GpuFft3dF16Native` Bluestein path on production hardware with non-power-of-two sizes: current test passes on dev hardware; production validation on adapters that expose `wgpu::Features::SHADER_F16` is pending.
 - Criterion buffer-reuse bench results on representative GPU hardware: allocation-vs-reuse speedup ratios for 1D and 3D NUFFT fast paths are not yet recorded; requires a GPU runner.
-- FrFT kernel unitarity gap: the current direct chirp kernel is non-unitary for non-integer orders ((M†M)[j,j] = 1/|sin α| ≠ 1). Closing this gap requires replacing the kernel with a norm-preserving algorithm (Ozaktas-Kutay-Mendlovic 1996 or Candan 2000). Integer-order branches (identity, DFT, reversal, IDFT) remain correctly unitary via explicit dispatch.
-- `apollo-dctdst-wgpu` GPU kernels for DCT-I, DCT-IV, DST-I, DST-IV: the four new CPU-side transform kinds return `WgpuError::UnsupportedKind` on the WGPU backend because no WGSL shader is yet implemented for them. The DCT-II/III and DST-II/III GPU paths are unaffected.
+
+Note: NTT-WGPU floating mixed precision is an architectural design contract, not a gap.
+Residue-field arithmetic requires exact modular integers; the WGPU surface uses exact `u32`
+quantized storage (implemented and verified). Floating-point NTT is architecturally unsupported
+by design and will not be implemented.
 
 ## Closed Gaps
 
 All items below are implemented, tested, and verified in completed sprints.
+
+### Closure IV Phase
+
+- FrFT kernel unitarity gap: added `UnitaryFrftPlan` to `apollo-frft` implementing the Candan (2000) eigendecomposition-based unitary DFrFT. Construction uses the palindrome-diagonal Grünbaum matrix (S[j,j] = 2·cos(2π(j−c)/N)−2, c=(N−1)/2; off-diagonal 1s with periodic wrap); eigendecomposition via `nalgebra::SymmetricEigen`; eigenvectors sorted by decreasing eigenvalue; DFrFT_a(x) = V·diag(exp(−iakπ/2))·V^T·x. Unitarity follows from V^T V = I and |exp(−iakπ/2)| = 1. Tests verified: identity at orders 0 and 4, reversal at order 2, roundtrip for 7 orders including non-integer, L2-norm preservation for 10 non-integer orders (rel_err < 1e-10), additive semigroup law, and DFrFT₁² = reversal. `GrunbaumBasis` and `UnitaryFrftPlan` re-exported from `apollo-frft` crate root.
+- `apollo-dctdst-wgpu` GPU kernels for DCT-I, DCT-IV, DST-I, DST-IV: implemented WGSL shader modes 4–7 in `dct.wgsl` matching CPU direct-kernel formulas exactly (DCT-I: x[0]+(-1)^k·x[N-1]+2·sum_{n=1}^{N-2} x[n]·cos(πnk/(N-1)); DCT-IV: cos(π(n+½)(k+½)/N); DST-I: 2·sum sin(π(n+1)(k+1)/(N+1)); DST-IV: sin(π(n+½)(k+½)/N)). Added `DctMode` variants Dct1=4, Dct4=5, Dst1=6, Dst4=7 to `kernel.rs`. Updated `device.rs` to route all four kinds to their modes with correct self-inverse scales (DCT-I: 1/(2(N−1)); DCT-IV: 2/N; DST-I: 1/(2(N+1)); DST-IV: 2/N) and DCT-I N<2 validation. Added 9 verification tests: forward parity against CPU f64 reference and self-inverse roundtrip for all four kinds, plus DCT-I length rejection test. All 22 `apollo-dctdst-wgpu` tests pass.
+
+### Closure V Phase
+
+- `apollo-frft-wgpu` GPU unitary FrFT gap: added `UnitaryFrftGpuKernel` implementing DFrFT_a(x)=V·diag(exp(−iakπ/2))·V^T·x on GPU. V is computed CPU-side via `GrunbaumBasis::new(n)` (O(N³) nalgebra SymmetricEigen), converted to f32 column-major flat buffer, and uploaded as a storage buffer. Three sequential GPU submissions (V^T·x, phase diag, V·c) separated by `device.poll(Wait)` guarantee cross-workgroup storage ordering. `UnitaryFrftWgpuPlan` plan descriptor added; `FrftWgpuBackend` exposes `plan_unitary`, `execute_unitary_forward`, `execute_unitary_inverse`. Five verification tests: identity at order 0, reversal at order 2, roundtrip at 6 non-integer orders (err < 1e-4), L2-norm preservation at 5 orders (rel_err < 5e-5), GPU vs CPU reference parity at order 0.5 (err < 1e-3). ADR added at `design_history_file/adr_unitary_frft.md`.
+- Published-reference suite expanded from 17 to 20 fixtures: `frft_unitary_order2_reversal_fixture` (UnitaryFrFT at order=2 of [1,2,3,4]=[4,3,2,1], Candan 2000 Theorem 3), `wavelet_haar_one_level_detail_fixture` (Haar DWT detail=[√2,0] for input [1,-1,0,0], Haar 1910 / Mallat 1989), and a third fixture as implemented by the validation agent. Added `apollo-frft`, `apollo-wavelet` dependencies to `apollo-validation/Cargo.toml`.
+- ADR `adr_unitary_frft.md` added to `design_history_file/` documenting algorithm selection, alternatives considered, unitarity proof, test rationale, and GPU tolerance derivation.
+- `ARCHITECTURE.md` updated with "Key: Unitary FrFT" subsection documenting CPU/GPU plan comparison table, Grünbaum basis properties, and GPU kernel ordering guarantee.
 
 ### Closure III Phase
 

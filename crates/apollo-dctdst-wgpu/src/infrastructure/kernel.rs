@@ -1,4 +1,4 @@
-//! GPU execution for DCT-II, DCT-III, DST-II, and DST-III.
+//! GPU execution for DCT-II, DCT-III, DST-II, DST-III, DCT-I, DCT-IV, DST-I, and DST-IV.
 //!
 //! For Apollo's unnormalized convention,
 //! `DCT2_k(x) = sum_n x[n] cos(pi/N * (n + 1/2) * k)` and
@@ -19,7 +19,7 @@ const WORKGROUP_SIZE: u32 = 64;
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug)]
-/// Implemented real-to-real transform modes for the current GPU kernel.
+/// Implemented real-to-real transform modes: DCT-II, DCT-III, DST-II, DST-III, DCT-I, DCT-IV, DST-I, and DST-IV.
 pub enum DctMode {
     /// Type-II discrete cosine transform.
     Dct2 = 0,
@@ -29,6 +29,14 @@ pub enum DctMode {
     Dst2 = 2,
     /// Type-III discrete sine transform.
     Dst3 = 3,
+    /// Type-I discrete cosine transform.
+    Dct1 = 4,
+    /// Type-IV discrete cosine transform.
+    Dct4 = 5,
+    /// Type-I discrete sine transform.
+    Dst1 = 6,
+    /// Type-IV discrete sine transform.
+    Dst4 = 7,
 }
 
 #[repr(C)]

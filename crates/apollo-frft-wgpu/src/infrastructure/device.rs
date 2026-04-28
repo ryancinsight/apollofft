@@ -7,10 +7,11 @@ use num_complex::{Complex32, Complex64};
 use apollo_fft::PrecisionProfile;
 use apollo_frft::FrftStorage;
 
-use crate::application::plan::FrftWgpuPlan;
+use crate::application::plan::{FrftWgpuPlan, UnitaryFrftWgpuPlan};
 use crate::domain::capabilities::WgpuCapabilities;
 use crate::domain::error::{WgpuError, WgpuResult};
 use crate::infrastructure::kernel::FrftGpuKernel;
+use crate::infrastructure::unitary_kernel::UnitaryFrftGpuKernel;
 
 /// Return whether a default WGPU adapter/device can be acquired.
 #[must_use]
@@ -24,6 +25,7 @@ pub struct FrftWgpuBackend {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     kernel: Arc<FrftGpuKernel>,
+    unitary_kernel: Arc<UnitaryFrftGpuKernel>,
 }
 
 impl FrftWgpuBackend {
@@ -31,6 +33,7 @@ impl FrftWgpuBackend {
     pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> WgpuResult<Self> {
         Ok(Self {
             kernel: Arc::new(FrftGpuKernel::new(device.as_ref())),
+            unitary_kernel: Arc::new(UnitaryFrftGpuKernel::new(device.as_ref())),
             device,
             queue,
         })
@@ -84,6 +87,12 @@ impl FrftWgpuBackend {
         FrftWgpuPlan::new(len, order)
     }
 
+    /// Create a unitary-FrFT metadata plan descriptor.
+    #[must_use]
+    pub const fn plan_unitary(&self, len: usize, order: f32) -> UnitaryFrftWgpuPlan {
+        UnitaryFrftWgpuPlan::new(len, order)
+    }
+
     /// Execute the forward FrFT for a complex-valued f32 signal.
     ///
     /// Validates input length, determines the dispatch mode from the plan order,
@@ -127,6 +136,46 @@ impl FrftWgpuBackend {
             csc,
             scale_re,
             scale_im,
+        )
+    }
+
+    /// Execute the forward unitary DFrFT for a complex-valued f32 signal.
+    ///
+    /// Computes DFrFT_a(x) = V · diag(exp(−i·a·k·π/2)) · V^T · x using the
+    /// Grünbaum eigenbasis (Candan 2000). Provably norm-preserving for all real orders.
+    ///
+    /// V is computed CPU-side (O(N³)) and uploaded to GPU as a column-major f32 buffer.
+    /// Three GPU passes enforce cross-workgroup storage ordering.
+    pub fn execute_unitary_forward(
+        &self,
+        plan: &UnitaryFrftWgpuPlan,
+        input: &[Complex32],
+    ) -> WgpuResult<Vec<Complex32>> {
+        Self::validate_unitary(plan, input)?;
+        self.unitary_kernel.execute(
+            self.device.as_ref(),
+            self.queue.as_ref(),
+            input,
+            plan.order(),
+        )
+    }
+
+    /// Execute the inverse unitary DFrFT, equivalent to the forward DFrFT of order −a.
+    ///
+    /// The inverse of DFrFT_a is DFrFT_{−a}: negate the order. The result satisfies
+    /// DFrFT_{−a}(DFrFT_a(x)) = x for all real a and all inputs x.
+    pub fn execute_unitary_inverse(
+        &self,
+        plan: &UnitaryFrftWgpuPlan,
+        input: &[Complex32],
+    ) -> WgpuResult<Vec<Complex32>> {
+        let inv_plan = UnitaryFrftWgpuPlan::new(plan.len(), -plan.order());
+        Self::validate_unitary(&inv_plan, input)?;
+        self.unitary_kernel.execute(
+            self.device.as_ref(),
+            self.queue.as_ref(),
+            input,
+            inv_plan.order(),
         )
     }
 
@@ -202,6 +251,25 @@ impl FrftWgpuBackend {
     }
 
     fn validate(plan: &FrftWgpuPlan, input: &[Complex32]) -> WgpuResult<()> {
+        if plan.len() == 0 {
+            return Err(WgpuError::InvalidPlan {
+                len: 0,
+                message: "length must be greater than zero",
+            });
+        }
+        if !plan.order().is_finite() {
+            return Err(WgpuError::NonFiniteOrder);
+        }
+        if input.len() != plan.len() {
+            return Err(WgpuError::InputLengthMismatch {
+                expected: plan.len(),
+                actual: input.len(),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_unitary(plan: &UnitaryFrftWgpuPlan, input: &[Complex32]) -> WgpuResult<()> {
         if plan.len() == 0 {
             return Err(WgpuError::InvalidPlan {
                 len: 0,

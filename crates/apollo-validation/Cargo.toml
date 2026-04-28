@@ -20,6 +20,9 @@ apollo-dctdst = { path = "../apollo-dctdst" }
 apollo-dht = { path = "../apollo-dht" }
 apollo-ntt = { path = "../apollo-ntt" }
 apollo-czt = { path = "../apollo-czt" }
+apollo-frft = { path = "../apollo-frft" }
+apollo-sdft = { path = "../apollo-sdft" }
+apollo-wavelet = { path = "../apollo-wavelet" }
 apollo-fwht = { path = "../apollo-fwht" }
 apollo-qft = { path = "../apollo-qft" }
 apollo-gft = { path = "../apollo-gft" }

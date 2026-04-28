@@ -1,5 +1,19 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure V phase)
+- [x] Add `UnitaryFrftGpuKernel` to `apollo-frft-wgpu`: 3-pass (V^T·x, phase, V·c) GPU compute; V precomputed from `GrunbaumBasis` and uploaded as f32 storage buffer; 3 sequential submissions with `device.poll(Wait)` enforce cross-workgroup storage ordering. Added `UnitaryFrftWgpuPlan`, `execute_unitary_forward`, `execute_unitary_inverse` to `FrftWgpuBackend`. 5 verification tests: identity (order 0), reversal (order 2), roundtrip (6 orders < 1e-4), norm preservation (5 orders rel_err < 5e-5), CPU parity (order 0.5 < 1e-3).
+- [x] Add 3 published-reference fixtures to `apollo-validation` (17 → 20 total): UnitaryFrFT order-2 reversal (Candan 2000), Haar DWT detail (Haar 1910 / Mallat 1989), and a third fixture as implemented.
+- [x] Add `adr_unitary_frft.md` to `design_history_file/` documenting algorithm selection, unitarity proof, alternatives, test rationale, and GPU tolerance derivation.
+- [x] Update `ARCHITECTURE.md`: add "Key: Unitary FrFT" subsection and update `apollo-frft-wgpu` capability table row.
+- [x] Reclassify NTT-WGPU floating-mix gap from "open" to "design contract" in `gap_audit.md`; remove from open-gaps list.
+
+## Closed in this sprint (Closure IV phase)
+- [x] Implement `UnitaryFrftPlan` in `apollo-frft` using the Candan (2000) eigendecomposition-based unitary DFrFT: palindrome Grünbaum matrix (S[j,j]=2·cos(2π(j−c)/N)−2, off-diagonals=1 with periodic wrap), `nalgebra::SymmetricEigen` decomposition, eigenvectors sorted by decreasing eigenvalue, DFrFT_a(x)=V·diag(exp(−iakπ/2))·V^T·x. Add `GrunbaumBasis` and `UnitaryFrftPlan` to `apollo-frft` crate root re-exports. Add `nalgebra = { workspace = true }` to `apollo-frft/Cargo.toml`.
+- [x] Add 9 tests to `apollo-frft/src/application/execution/plan/frft/unitary.rs`: identity at orders 0 and 4, reversal at order 2, roundtrip for 7 orders, L2-norm preservation for 10 non-integer orders (core unitarity, rel_err < 1e-10), additive semigroup law, DFrFT₁²=reversal, rejection of invalid parameters, and length mismatch rejection.
+- [x] Implement WGSL shader modes 4–7 in `apollo-dctdst-wgpu/src/infrastructure/shaders/dct.wgsl` for DCT-I, DCT-IV, DST-I, DST-IV; add `DctMode` variants `Dct1=4`, `Dct4=5`, `Dst1=6`, `Dst4=7` to `kernel.rs`; update `device.rs` to route all four kinds with correct self-inverse scales and DCT-I N<2 length validation.
+- [x] Add 9 verification tests to `apollo-dctdst-wgpu/src/verification.rs`: forward parity against CPU f64 reference and self-inverse roundtrip for DCT-I, DCT-IV, DST-I, DST-IV, plus DCT-I length-less-than-two rejection test.
+- [x] Verify `cargo test --workspace --all-targets` 0 failures; `cargo clippy --workspace --all-targets -- -D warnings` 0 warnings.
+
 ## Closed in this sprint (Closure III phase)
 - [x] Remove `run_fft_gpu_suite()` mock: replace hardcoded `passed: true, error = 0.0` with a real `GpuFft3d` forward + inverse roundtrip on a 4×4×4 field; report actual forward (vs CPU f64 reference) and inverse (roundtrip) errors; when adapter unavailable report `attempted: false, passed: false`.
 - [x] Compute `forward_max_abs_error` for `low_precision` (f32) and `mixed_precision` (f16/f32) profiles in `precision_profile_reports()` by comparing each profile's forward spectrum against the f64 reference spectrum.

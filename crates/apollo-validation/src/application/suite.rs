@@ -22,6 +22,7 @@ use apollo_fft::{
     fft_1d_array, fft_1d_array_typed, fft_3d_array, ifft_1d_array, ifft_1d_array_typed,
     ifft_3d_array, ifft_3d_array_typed, FftBackend, PrecisionProfile, Shape3D,
 };
+use apollo_frft::UnitaryFrftPlan;
 use apollo_fwht::FwhtPlan;
 use apollo_gft::GftPlan;
 use apollo_ntt::{intt, ntt, NttPlan, DEFAULT_MODULUS};
@@ -30,6 +31,8 @@ use apollo_nufft::{
     nufft_type2_1d_fast, UniformDomain1D, UniformGrid3D, DEFAULT_NUFFT_KERNEL_WIDTH,
 };
 use apollo_qft::qft as qft_transform;
+use apollo_sdft::SdftPlan;
+use apollo_wavelet::{DiscreteWavelet, DwtPlan};
 use nalgebra::DMatrix;
 use ndarray::{Array1, Array3};
 use num_complex::{Complex32, Complex64};
@@ -433,6 +436,9 @@ pub fn run_published_reference_suite() -> SuiteResult<PublishedReferenceReport> 
         qft_two_point_fixture()?,
         czt_unit_impulse_is_dft_fixture()?,
         gft_path_graph_forward_fixture()?,
+        frft_unitary_order2_reversal_fixture()?,
+        wavelet_haar_one_level_detail_fixture()?,
+        sdft_bin_zero_unit_impulse_fixture()?,
     ];
     let passed = fixtures.iter().all(|fixture| fixture.passed);
     Ok(PublishedReferenceReport {
@@ -1130,6 +1136,87 @@ fn gft_path_graph_forward_fixture() -> SuiteResult<PublishedFixtureReport> {
     ))
 }
 
+/// Unitary FrFT of order 2 is the reversal operator.
+///
+/// # Mathematical contract
+///
+/// By Candan et al. (2000), Theorem 3: DFrFT₂(x)[k] = x[N−1−k] for all x.
+/// The palindrome-structured Grünbaum eigenvectors diagonalize the DFT; the
+/// fractional phase exp(−i·2·k·π/2) = (−1)^k combines with V·diag((−1)^k)·Vᵀ
+/// to produce the exact index-reversal operator.
+/// Input [1+0i, 2+0i, 3+0i, 4+0i], N=4, order=2.
+/// Expected output: [4+0i, 3+0i, 2+0i, 1+0i].
+fn frft_unitary_order2_reversal_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let input = Array1::from_vec(vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(2.0, 0.0),
+        Complex64::new(3.0, 0.0),
+        Complex64::new(4.0, 0.0),
+    ]);
+    let plan = UnitaryFrftPlan::new(4, 2.0)?;
+    let actual = plan.forward(&input)?;
+    let expected = [
+        Complex64::new(4.0, 0.0),
+        Complex64::new(3.0, 0.0),
+        Complex64::new(2.0, 0.0),
+        Complex64::new(1.0, 0.0),
+    ];
+    Ok(published_complex_fixture(
+        "UnitaryFrFT",
+        "UnitaryFrFT(order=2,[1,2,3,4])",
+        "Candan et al. (2000), Theorem 3: DFrFT\u{2082} = reversal operator; UnitaryFrFT(order=2,[1,2,3,4])=[4,3,2,1]",
+        actual.iter(),
+        expected.iter(),
+    ))
+}
+
+/// Haar DWT one-level detail coefficients for [1, −1, 0, 0].
+///
+/// # Mathematical contract
+///
+/// Haar highpass QMF: g = [1/√2, −1/√2] (from g[k] = (−1)^k·h[L−1−k] with h=[1/√2,1/√2]).
+/// detail[k] = g[0]·x[2k] + g[1]·x[2k+1] = (x[2k] − x[2k+1]) / √2.
+/// Input [1, −1, 0, 0], N=4, levels=1:
+///   detail[0] = (1 − (−1)) / √2 = 2/√2 = √2
+///   detail[1] = (0 − 0) / √2 = 0
+/// Reference: Haar (1910), Mallat (1989) two-channel QMF framework.
+fn wavelet_haar_one_level_detail_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let input = [1.0_f64, -1.0, 0.0, 0.0];
+    let plan = DwtPlan::new(4, 1, DiscreteWavelet::Haar)?;
+    let coeffs = plan.forward(&input)?;
+    let detail = coeffs.details()[0].as_slice();
+    let expected = [std::f64::consts::SQRT_2, 0.0_f64];
+    Ok(published_real_fixture(
+        "DWT-Haar",
+        "Haar-DWT-1level([1,-1,0,0])",
+        "Haar (1910), Mallat (1989) two-channel QMF: DWT([1,-1,0,0]) detail=[\u{221a}2,0] via g=[1/\u{221a}2,-1/\u{221a}2]",
+        detail,
+        &expected,
+    ))
+}
+
+/// SDFT bin 0 for the unit impulse [1, 0, 0, 0].
+///
+/// # Mathematical contract
+///
+/// DFT bin k=0: F[0] = Σ_{n=0}^{N-1} x[n] = 1 + 0 + 0 + 0 = 1 for the unit impulse.
+/// The SDFT direct-bins path computes the standard DFT for the given window exactly.
+/// Reference: Jacobsen and Lyons (2003), Sliding DFT, IEEE Signal Processing Magazine.
+fn sdft_bin_zero_unit_impulse_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let input = [1.0_f64, 0.0, 0.0, 0.0];
+    let plan = SdftPlan::new(4, 4)?;
+    let bins = plan.direct_bins(&input)?;
+    let actual_arr = [bins[0]];
+    let expected_arr = [Complex64::new(1.0, 0.0)];
+    Ok(published_complex_fixture(
+        "SDFT",
+        "SDFT-bin0-impulse([1,0,0,0])",
+        "Jacobsen and Lyons (2003), SDFT bin-0 at position 0 equals DFT bin-0 = sum(x) = 1 for unit impulse",
+        actual_arr.iter(),
+        expected_arr.iter(),
+    ))
+}
+
 fn representative_signal_1d(len: usize) -> Array1<f64> {
     Array1::from_vec(
         (0..len)
@@ -1206,7 +1293,7 @@ mod tests {
         assert!(report.fft_cpu.parseval_relative_error <= CPU_PARSEVAL_LIMIT);
         assert!(report.nufft.passed);
         assert!(report.external.published_references.passed);
-        assert_eq!(report.external.published_references.attempted, 17);
+        assert_eq!(report.external.published_references.attempted, 20);
         assert_eq!(report.external.rustfft.backend, "rustfft");
         assert_eq!(report.external.numpy.backend, "numpy");
     }
@@ -1214,7 +1301,7 @@ mod tests {
     #[test]
     fn published_reference_suite_checks_computed_fixture_values() {
         let report = run_published_reference_suite().expect("published references");
-        assert_eq!(report.attempted, 17);
+        assert_eq!(report.attempted, 20);
         assert!(report.passed);
         for fixture in &report.fixtures {
             assert!(
