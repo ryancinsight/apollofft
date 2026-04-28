@@ -14,18 +14,23 @@ use crate::infrastructure::numpy::{
 };
 #[cfg(feature = "external-references")]
 use crate::infrastructure::rustfft_reference::{fft1_real, fft3_real};
+use apollo_czt::CztPlan;
 use apollo_dctdst::{DctDstPlan, RealTransformKind};
 use apollo_dht::DhtPlan;
 use apollo_fft::f16;
 use apollo_fft::{
     fft_1d_array, fft_1d_array_typed, fft_3d_array, ifft_1d_array, ifft_1d_array_typed,
-    ifft_3d_array, ifft_3d_array_typed, PrecisionProfile, Shape3D,
+    ifft_3d_array, ifft_3d_array_typed, FftBackend, PrecisionProfile, Shape3D,
 };
+use apollo_fwht::FwhtPlan;
+use apollo_gft::GftPlan;
 use apollo_ntt::{intt, ntt, NttPlan, DEFAULT_MODULUS};
 use apollo_nufft::{
     nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type1_3d_fast, nufft_type2_1d,
     nufft_type2_1d_fast, UniformDomain1D, UniformGrid3D, DEFAULT_NUFFT_KERNEL_WIDTH,
 };
+use apollo_qft::qft as qft_transform;
+use nalgebra::DMatrix;
 use ndarray::{Array1, Array3};
 use num_complex::{Complex32, Complex64};
 use std::error::Error;
@@ -117,45 +122,96 @@ pub fn run_fft_cpu_suite() -> SuiteResult<CpuFftReport> {
 /// Validate WGPU availability and record adapter-backed status.
 pub fn run_fft_gpu_suite() -> SuiteResult<GpuFftReport> {
     let surface_reported_available = apollo_fft_wgpu::gpu_fft_available();
-    match apollo_fft_wgpu::WgpuBackend::try_default() {
-        Ok(_) => Ok(GpuFftReport {
-            surface_reported_available,
-            attempted: true,
-            passed: true,
-            forward_max_abs_error: Some(0.0),
-            inverse_max_abs_error: Some(0.0),
-            note: Some(
-                "adapter/device acquisition succeeded; numerical GPU parity is covered by apollo-fft-wgpu tests"
-                    .to_string(),
-            ),
-            precision_profiles: vec![PrecisionRunReport {
-                profile: "low_precision".to_string(),
-                attempted: true,
-                passed: true,
-                forward_max_abs_error: Some(0.0),
-                inverse_max_abs_error: Some(0.0),
-                relative_error: Some(0.0),
-                note: Some("WGPU surface advertises f32 shader precision".to_string()),
-            }],
-        }),
-        Err(error) => Ok(GpuFftReport {
-            surface_reported_available,
-            attempted: false,
-            passed: true,
-            forward_max_abs_error: None,
-            inverse_max_abs_error: None,
-            note: Some(format!("WGPU adapter unavailable on this host: {error}")),
-            precision_profiles: vec![PrecisionRunReport {
-                profile: "low_precision".to_string(),
+
+    let backend = match apollo_fft_wgpu::WgpuBackend::try_default() {
+        Err(error) => {
+            return Ok(GpuFftReport {
+                surface_reported_available,
                 attempted: false,
-                passed: true,
+                passed: false,
                 forward_max_abs_error: None,
                 inverse_max_abs_error: None,
-                relative_error: None,
-                note: Some("No WGPU adapter available for runtime validation".to_string()),
-            }],
-        }),
-    }
+                note: Some(format!("WGPU adapter unavailable on this host: {error}")),
+                precision_profiles: vec![PrecisionRunReport {
+                    profile: "low_precision".to_string(),
+                    attempted: false,
+                    passed: false,
+                    forward_max_abs_error: None,
+                    inverse_max_abs_error: None,
+                    relative_error: None,
+                    note: Some("No WGPU adapter available for runtime validation".to_string()),
+                }],
+            });
+        }
+        Ok(b) => b,
+    };
+
+    let shape = Shape3D::new(4, 4, 4).expect("valid shape");
+    let plan = match FftBackend::plan_3d(&backend, shape) {
+        Err(error) => {
+            return Ok(GpuFftReport {
+                surface_reported_available,
+                attempted: false,
+                passed: false,
+                forward_max_abs_error: None,
+                inverse_max_abs_error: None,
+                note: Some(format!("GpuFft3d plan creation failed: {error}")),
+                precision_profiles: vec![PrecisionRunReport {
+                    profile: "low_precision".to_string(),
+                    attempted: false,
+                    passed: false,
+                    forward_max_abs_error: None,
+                    inverse_max_abs_error: None,
+                    relative_error: None,
+                    note: None,
+                }],
+            });
+        }
+        Ok(p) => p,
+    };
+
+    // Run an actual GPU forward + inverse roundtrip on a 4×4×4 reference field.
+    let reference = representative_field_3d((4, 4, 4));
+    let spectrum = plan.forward(&reference);
+    let cpu_spectrum = fft_3d_array(&reference);
+
+    // Forward error: max |GPU complex spectrum - CPU f64 reference spectrum|.
+    let forward_max_abs_error = cpu_spectrum
+        .iter()
+        .enumerate()
+        .map(|(idx, cpu_val)| {
+            let gpu_re = f64::from(spectrum[2 * idx]);
+            let gpu_im = f64::from(spectrum[2 * idx + 1]);
+            ((gpu_re - cpu_val.re).powi(2) + (gpu_im - cpu_val.im).powi(2)).sqrt()
+        })
+        .fold(0.0_f64, f64::max);
+
+    // Inverse error: max |GPU roundtrip recovered - reference|.
+    let mut recovered = Array3::<f64>::zeros((4, 4, 4));
+    plan.inverse(&spectrum, &mut recovered);
+    let inverse_max_abs_error = max_real_abs_delta_3d(&reference, &recovered);
+
+    // GPU f32 tolerance: three axis passes with f32 accumulation.
+    const GPU_F32_TOL: f64 = 1.0e-4;
+    let passed = forward_max_abs_error <= GPU_F32_TOL && inverse_max_abs_error <= GPU_F32_TOL;
+
+    Ok(GpuFftReport {
+        surface_reported_available,
+        attempted: true,
+        passed,
+        forward_max_abs_error: Some(forward_max_abs_error),
+        inverse_max_abs_error: Some(inverse_max_abs_error),
+        note: None,
+        precision_profiles: vec![PrecisionRunReport {
+            profile: "low_precision".to_string(),
+            attempted: true,
+            passed,
+            forward_max_abs_error: Some(forward_max_abs_error),
+            inverse_max_abs_error: Some(inverse_max_abs_error),
+            relative_error: Some(forward_max_abs_error.max(inverse_max_abs_error)),
+            note: Some("GPU f32 shader precision; forward error vs CPU f64 reference".to_string()),
+        }],
+    })
 }
 
 /// Validate NUFFT fast paths against exact direct sums.
@@ -370,6 +426,13 @@ pub fn run_published_reference_suite() -> SuiteResult<PublishedReferenceReport> 
         ntt_polynomial_convolution_fixture()?,
         nufft_impulse_at_origin_fixture()?,
         nufft_quarter_period_phase_fixture()?,
+        fft_inverse_four_point_fixture(),
+        dct2_inverse_pair_two_point_fixture()?,
+        dht_self_reciprocal_fixture()?,
+        fwht_two_point_fixture()?,
+        qft_two_point_fixture()?,
+        czt_unit_impulse_is_dft_fixture()?,
+        gft_path_graph_forward_fixture()?,
     ];
     let passed = fixtures.iter().all(|fixture| fixture.passed);
     Ok(PublishedReferenceReport {
@@ -508,22 +571,43 @@ fn precision_profile_reports() -> Vec<PrecisionRunReport> {
     let shape = Shape3D::new(4, 4, 4).expect("valid shape");
     let reference = representative_field_3d((4, 4, 4));
 
+    // f64 high-accuracy path — the authoritative reference for forward error comparisons.
     let high_spectrum = fft_3d_array(&reference);
     let high_recovered = ifft_3d_array(&high_spectrum);
     let high_error = max_real_abs_delta_3d(&reference, &high_recovered);
 
+    // f32 low-precision path.
     let low_input = reference.mapv(|value| value as f32);
     let low_plan =
         apollo_fft::FftPlan3D::with_precision(shape, PrecisionProfile::LOW_PRECISION_F32);
     let low_spectrum: Array3<Complex32> = low_plan.forward_typed(&low_input);
+    // Forward error: max |f32 spectrum - f64 reference spectrum|.
+    let low_forward_error = low_spectrum
+        .iter()
+        .zip(high_spectrum.iter())
+        .map(|(lv, hv)| {
+            ((f64::from(lv.re) - hv.re).powi(2) + (f64::from(lv.im) - hv.im).powi(2)).sqrt()
+        })
+        .fold(0.0_f64, f64::max);
     let low_recovered = low_plan.inverse_typed::<f32>(&low_spectrum).mapv(f64::from);
     let low_reference = low_input.mapv(f64::from);
     let low_error = max_real_abs_delta_3d(&low_reference, &low_recovered);
 
+    // f16/f32 mixed-precision path — compare spectrum against f64 FFT of the f16-represented input.
     let mixed_input = reference.mapv(|value| f16::from_f32(value as f32));
     let mixed_plan =
         apollo_fft::FftPlan3D::with_precision(shape, PrecisionProfile::MIXED_PRECISION_F16_F32);
     let mixed_spectrum: Array3<Complex32> = mixed_plan.forward_typed(&mixed_input);
+    // Use f64 FFT of the quantized input as the mixed-precision forward reference.
+    let mixed_input_f64 = mixed_input.mapv(|v| f64::from(v.to_f32()));
+    let mixed_reference_spectrum = fft_3d_array(&mixed_input_f64);
+    let mixed_forward_error = mixed_spectrum
+        .iter()
+        .zip(mixed_reference_spectrum.iter())
+        .map(|(lv, hv)| {
+            ((f64::from(lv.re) - hv.re).powi(2) + (f64::from(lv.im) - hv.im).powi(2)).sqrt()
+        })
+        .fold(0.0_f64, f64::max);
     let mixed_recovered =
         ifft_3d_array_typed::<f16>(&mixed_spectrum, PrecisionProfile::MIXED_PRECISION_F16_F32)
             .mapv(|value| f64::from(value.to_f32()));
@@ -535,6 +619,7 @@ fn precision_profile_reports() -> Vec<PrecisionRunReport> {
             profile: "high_accuracy".to_string(),
             attempted: true,
             passed: high_error <= 1.0e-10,
+            // f64 IS the authoritative reference; forward error against itself is exactly 0.
             forward_max_abs_error: Some(0.0),
             inverse_max_abs_error: Some(high_error),
             relative_error: Some(high_error),
@@ -544,7 +629,7 @@ fn precision_profile_reports() -> Vec<PrecisionRunReport> {
             profile: "low_precision".to_string(),
             attempted: true,
             passed: low_error <= 1.0e-4,
-            forward_max_abs_error: None,
+            forward_max_abs_error: Some(low_forward_error),
             inverse_max_abs_error: Some(low_error),
             relative_error: Some(low_error),
             note: None,
@@ -553,7 +638,7 @@ fn precision_profile_reports() -> Vec<PrecisionRunReport> {
             profile: "mixed_precision".to_string(),
             attempted: true,
             passed: mixed_error <= 1.0e-3,
-            forward_max_abs_error: None,
+            forward_max_abs_error: Some(mixed_forward_error),
             inverse_max_abs_error: Some(mixed_error),
             relative_error: Some(mixed_error),
             note: None,
@@ -866,6 +951,185 @@ fn published_real_fixture(
     }
 }
 
+/// IDFT of the all-ones vector [1,1,1,1] with N=4.
+///
+/// # Mathematical contract
+///
+/// The normalized IDFT is IDFT[n] = (1/N) Σ_k F[k] exp(2πikn/N).
+/// For F=[1,1,1,1] and N=4, every sum collapses to IDFT[0]=1, IDFT[1..3]=0
+/// because Σ_k exp(2πikn/N) = N·δ_{n,0} by the geometric series identity for
+/// primitive roots of unity. Reference: DFT Inversion Theorem, Cooley and Tukey (1965).
+fn fft_inverse_four_point_fixture() -> PublishedFixtureReport {
+    let spectrum = Array1::from_vec(vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(1.0, 0.0),
+        Complex64::new(1.0, 0.0),
+        Complex64::new(1.0, 0.0),
+    ]);
+    let actual = ifft_1d_array(&spectrum);
+    let expected = [1.0_f64, 0.0, 0.0, 0.0];
+    published_real_fixture(
+        "FFT",
+        "IDFT4([1,1,1,1])",
+        "Cooley and Tukey (1965), DFT inversion theorem: IDFT(DFT(x))=x; DFT([1,0,0,0])=[1,1,1,1] so IDFT([1,1,1,1])=[1,0,0,0]",
+        actual.as_slice().unwrap(),
+        &expected,
+    )
+}
+
+/// DCT-III is the inverse of DCT-II up to a 2/N scaling factor.
+///
+/// # Mathematical contract
+///
+/// For N=2, x=[1,3]: DCT-II([1,3])=[4,−√2].
+/// DCT-III([4,−√2]) scaled by 2/N recovers [1,3].
+/// The `plan.inverse` method applies the 2/N factor.
+/// Reference: Rao and Yip (1990), DCT-III inverse pair theorem.
+fn dct2_inverse_pair_two_point_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = DctDstPlan::new(2, RealTransformKind::DctII)?;
+    let actual = plan.inverse(&[4.0, -std::f64::consts::SQRT_2])?;
+    let expected = [1.0_f64, 3.0];
+    Ok(published_real_fixture(
+        "DCT",
+        "DCT-III(DCT-II([1,3]))\u{00d7}(2/N)=[1,3]",
+        "Rao and Yip (1990), DCT-III is the inverse of DCT-II: DCT-III(DCT-II(x))\u{00b7}(2/N)=x for N=2",
+        &actual,
+        &expected,
+    ))
+}
+
+/// DHT self-reciprocal property: DHT(DHT(x)) = N·x.
+///
+/// # Mathematical contract
+///
+/// For x=[1,0,0,0] and N=4:
+///   step1 = DHT([1,0,0,0]) = [1,1,1,1]  (cas impulse response at n=0)
+///   step2 = DHT([1,1,1,1]) = [4,0,0,0]  (DC-only signal maps to scaled impulse)
+/// step2 = N·x = 4·[1,0,0,0] = [4,0,0,0]. ✓
+/// Reference: Bracewell (1983), DHT self-reciprocal property: H{H{x}}[n] = N·x[n].
+fn dht_self_reciprocal_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = DhtPlan::new(4)?;
+    let step1 = plan.forward(&[1.0_f64, 0.0, 0.0, 0.0])?;
+    let step2 = plan.forward(step1.values())?;
+    let expected = [4.0_f64, 0.0, 0.0, 0.0];
+    Ok(published_real_fixture(
+        "DHT",
+        "DHT(DHT([1,0,0,0]))=[4,0,0,0]",
+        "Bracewell (1983), DHT self-reciprocal property: DHT(DHT(x))=N\u{00b7}x; for x=[1,0,0,0], DHT([1,0,0,0])=[1,1,1,1] then DHT([1,1,1,1])=[4,0,0,0]",
+        step2.values(),
+        &expected,
+    ))
+}
+
+/// FWHT two-point known-value fixture.
+///
+/// # Mathematical contract
+///
+/// The 2×2 Hadamard matrix is H₂ = [[1,1],[1,−1]].
+/// H₂·[1,1]ᵀ = [2,0]ᵀ (both basis functions evaluate to 1+1 and 1−1 respectively).
+/// The FWHT is the unnormalized Hadamard transform.
+/// Reference: Hadamard (1893), two-point Walsh-Hadamard matrix definition.
+fn fwht_two_point_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = FwhtPlan::new(2)?;
+    let input = Array1::from_vec(vec![1.0_f64, 1.0]);
+    let actual = plan.forward(&input)?;
+    let expected = [2.0_f64, 0.0];
+    Ok(published_real_fixture(
+        "FWHT",
+        "FWHT2([1,1])",
+        "Hadamard (1893), H_2=[[1,1],[1,-1]], H_2\u{00b7}[1,1]^T=[2,0]^T",
+        actual.as_slice().unwrap(),
+        &expected,
+    ))
+}
+
+/// QFT two-point known-value fixture: QFT₂(|0⟩) = (1/√2)(|0⟩ + |1⟩).
+///
+/// # Mathematical contract
+///
+/// The unitary QFT matrix for N=2 is (1/√2)·[[1,1],[1,−1]].
+/// For input [1,0] (computational basis state |0⟩):
+///   QFT₂([1,0])ᵀ = (1/√2)·[1,1]ᵀ.
+/// Both output components equal 1/√2 = 1/√2 + 0i.
+/// Reference: Shor (1994), quantum Fourier transform for N=2 as Hadamard gate.
+fn qft_two_point_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let input = Array1::from_vec(vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)]);
+    let actual = qft_transform(&input)?;
+    let inv_sqrt2 = 1.0 / std::f64::consts::SQRT_2;
+    let expected = [
+        Complex64::new(inv_sqrt2, 0.0),
+        Complex64::new(inv_sqrt2, 0.0),
+    ];
+    Ok(published_complex_fixture(
+        "QFT",
+        "QFT2([1,0])",
+        "Shor (1994), QFT for N=2 is the Hadamard gate: QFT([1,0])=[1/\u{221a}2, 1/\u{221a}2]",
+        actual.iter(),
+        expected.iter(),
+    ))
+}
+
+/// CZT with DFT parameters equals the DFT for the unit impulse [1,0,0,0].
+///
+/// # Mathematical contract
+///
+/// When A=1 and W=exp(−2πi/N), the CZT spiral contour collapses to the unit
+/// circle at the N-th roots of unity, recovering the DFT exactly.
+/// For input [1+0i,0,0,0], DFT([1,0,0,0])=[1,1,1,1].
+/// Therefore CZT(N=4,M=4,A=1,W=exp(−2πi/4))([1,0,0,0])=[1,1,1,1].
+/// Reference: Rabiner, Schafer and Rader (1969), CZT spiral-collapse theorem.
+fn czt_unit_impulse_is_dft_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let n = 4usize;
+    let a = Complex64::new(1.0, 0.0);
+    let w = Complex64::from_polar(1.0, -std::f64::consts::TAU / n as f64);
+    let plan = CztPlan::new(n, n, a, w)?;
+    let input = Array1::from_vec(vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ]);
+    let actual = plan.forward(&input)?;
+    let expected = [
+        Complex64::new(1.0, 0.0),
+        Complex64::new(1.0, 0.0),
+        Complex64::new(1.0, 0.0),
+        Complex64::new(1.0, 0.0),
+    ];
+    Ok(published_complex_fixture(
+        "CZT",
+        "CZT4(A=1,W=exp(-2\u{03c0}i/4),[1,0,0,0])",
+        "Rabiner, Schafer and Rader (1969), CZT with A=1 and W=exp(-2\u{03c0}i/N) equals DFT; DFT([1,0,0,0])=[1,1,1,1]",
+        actual.iter(),
+        expected.iter(),
+    ))
+}
+
+/// GFT K₂ path graph Laplacian eigenvalues are {0, 2}.
+///
+/// # Mathematical contract
+///
+/// For the 2-vertex path graph with adjacency A=[[0,1],[1,0]], the combinatorial
+/// Laplacian L = D − A = [[1,−1],[−1,1]]. Its characteristic polynomial is
+/// det(L − λI) = (1−λ)² − 1 = λ² − 2λ = λ(λ−2), giving eigenvalues {0, 2}.
+/// The `spectral_basis` kernel sorts eigenvalues in ascending order, so the
+/// GFT plan returns eigenvalues [0.0, 2.0]. This is a sign-independent,
+/// numerically deterministic published result.
+/// Reference: Shuman et al. (2013), IEEE Signal Processing Magazine, graph Fourier basis definition.
+fn gft_path_graph_forward_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let adjacency = DMatrix::from_row_slice(2, 2, &[0.0_f64, 1.0, 1.0, 0.0]);
+    let plan = GftPlan::from_adjacency(&adjacency)?;
+    let eigenvalues = plan.eigenvalues().to_vec();
+    let expected = [0.0_f64, 2.0];
+    Ok(published_real_fixture(
+        "GFT",
+        "GFT-K2-path-eigenvalues",
+        "Shuman et al. (2013), K\u{2082} path graph Laplacian L=[[1,-1],[-1,1]]: eigenvalues {0,2} from det(L-\u{03bb}I)=\u{03bb}(\u{03bb}-2)",
+        &eigenvalues,
+        &expected,
+    ))
+}
+
 fn representative_signal_1d(len: usize) -> Array1<f64> {
     Array1::from_vec(
         (0..len)
@@ -942,7 +1206,7 @@ mod tests {
         assert!(report.fft_cpu.parseval_relative_error <= CPU_PARSEVAL_LIMIT);
         assert!(report.nufft.passed);
         assert!(report.external.published_references.passed);
-        assert_eq!(report.external.published_references.attempted, 10);
+        assert_eq!(report.external.published_references.attempted, 17);
         assert_eq!(report.external.rustfft.backend, "rustfft");
         assert_eq!(report.external.numpy.backend, "numpy");
     }
@@ -950,7 +1214,7 @@ mod tests {
     #[test]
     fn published_reference_suite_checks_computed_fixture_values() {
         let report = run_published_reference_suite().expect("published references");
-        assert_eq!(report.attempted, 10);
+        assert_eq!(report.attempted, 17);
         assert!(report.passed);
         for fixture in &report.fixtures {
             assert!(

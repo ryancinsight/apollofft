@@ -2,7 +2,7 @@
 
 use crate::domain::contracts::error::{DctDstError, DctDstResult};
 use crate::domain::metadata::kind::{RealTransformConfig, RealTransformKind};
-use crate::infrastructure::kernel::direct::{dct2, dct3, dst2, dst3};
+use crate::infrastructure::kernel::direct::{dct1, dct2, dct3, dct4, dst1, dst2, dst3, dst4};
 use crate::infrastructure::kernel::fast::{
     dct2_fast, dct3_fast, dst2_fast, dst3_fast, FAST_THRESHOLD,
 };
@@ -22,15 +22,26 @@ use apollo_fft::{f16, PrecisionProfile};
 /// DST-III(DST-II(x)) = (N / 2) x
 /// ```
 ///
-/// Therefore multiplying the paired inverse by `2 / N` recovers the input in
-/// exact arithmetic.
+/// DCT-I, DCT-IV, DST-I, and DST-IV are each self-inverse under the following scales:
+///
+/// ```text
+/// DCT-I(DCT-I(x))   = 2(N−1) · x    (N ≥ 2)
+/// DCT-IV(DCT-IV(x)) = (N/2)  · x
+/// DST-I(DST-I(x))   = 2(N+1) · x
+/// DST-IV(DST-IV(x)) = (N/2)  · x
+/// ```
+///
+/// Therefore `inverse` scales by `2 / N` for all type-II/III/IV pairs and by
+/// `1 / (2(N−1))` or `1 / (2(N+1))` for DCT-I and DST-I respectively.
 ///
 /// # Proof sketch
 ///
 /// The cosine and sine basis functions used by the type-II/type-III pairs are
 /// orthogonal over the half-sample shifted grid. The cross terms vanish by
 /// finite trigonometric sum identities, and the diagonal terms evaluate to
-/// `N / 2` under Apollo's unnormalized convention.
+/// `N / 2` under Apollo's unnormalized convention. DCT-I and DST-I carry an
+/// explicit factor of 2 in their definitions; their orthogonality diagonals
+/// evaluate to `(N−1)` and `(N+1)` respectively, yielding the stated scales.
 ///
 /// # Complexity
 ///
@@ -114,6 +125,11 @@ impl DctDstPlan {
                 RealTransformKind::DctIII => dct3_fast(signal, output),
                 RealTransformKind::DstII => dst2_fast(signal, output),
                 RealTransformKind::DstIII => dst3_fast(signal, output),
+                // No fast path implemented yet; fall through to direct O(N²) kernel.
+                RealTransformKind::DctI => dct1(signal, output),
+                RealTransformKind::DctIV => dct4(signal, output),
+                RealTransformKind::DstI => dst1(signal, output),
+                RealTransformKind::DstIV => dst4(signal, output),
             }
         } else {
             match self.kind() {
@@ -121,6 +137,10 @@ impl DctDstPlan {
                 RealTransformKind::DctIII => dct3(signal, output),
                 RealTransformKind::DstII => dst2(signal, output),
                 RealTransformKind::DstIII => dst3(signal, output),
+                RealTransformKind::DctI => dct1(signal, output),
+                RealTransformKind::DctIV => dct4(signal, output),
+                RealTransformKind::DstI => dst1(signal, output),
+                RealTransformKind::DstIV => dst4(signal, output),
             }
         }
 
@@ -131,7 +151,9 @@ impl DctDstPlan {
     ///
     /// DCT-III is the inverse of DCT-II (up to a 2/N scaling factor).
     /// DST-III is the inverse of DST-II (up to a 2/N scaling factor).
-    /// The result is scaled by 2/N to recover the original signal.
+    /// DCT-I, DCT-IV, DST-I, and DST-IV are self-inverse; each is scaled by
+    /// `1/(2(N−1))`, `2/N`, `1/(2(N+1))`, and `2/N` respectively.
+    /// The result is scaled to recover the original signal.
     ///
     /// Returns `LengthMismatch` when the input slice length differs from the
     /// plan length.
@@ -150,7 +172,9 @@ impl DctDstPlan {
     ///
     /// DCT-III is the inverse of DCT-II (up to a 2/N scaling factor).
     /// DST-III is the inverse of DST-II (up to a 2/N scaling factor).
-    /// The result is scaled by 2/N to recover the original signal.
+    /// DCT-I, DCT-IV, DST-I, and DST-IV are self-inverse; each is scaled by
+    /// `1/(2(N−1))`, `2/N`, `1/(2(N+1))`, and `2/N` respectively.
+    /// The result is scaled to recover the original signal.
     ///
     /// Returns `LengthMismatch` when either slice length differs from the plan
     /// length.
@@ -178,6 +202,11 @@ impl DctDstPlan {
                 RealTransformKind::DstII => dst3_fast(signal, &mut raw),
                 RealTransformKind::DctIII => dct2_fast(signal, &mut raw),
                 RealTransformKind::DstIII => dst2_fast(signal, &mut raw),
+                // No fast path implemented yet; fall through to direct O(N²) kernel.
+                RealTransformKind::DctI => dct1(signal, &mut raw),
+                RealTransformKind::DctIV => dct4(signal, &mut raw),
+                RealTransformKind::DstI => dst1(signal, &mut raw),
+                RealTransformKind::DstIV => dst4(signal, &mut raw),
             }
         } else {
             match self.kind() {
@@ -185,10 +214,22 @@ impl DctDstPlan {
                 RealTransformKind::DstII => dst3(signal, &mut raw),
                 RealTransformKind::DctIII => dct2(signal, &mut raw),
                 RealTransformKind::DstIII => dst2(signal, &mut raw),
+                RealTransformKind::DctI => dct1(signal, &mut raw),
+                RealTransformKind::DctIV => dct4(signal, &mut raw),
+                RealTransformKind::DstI => dst1(signal, &mut raw),
+                RealTransformKind::DstIV => dst4(signal, &mut raw),
             }
         }
 
-        let scale = 2.0 / n as f64;
+        // Scale factor derived from the self-inverse identity of each transform kind:
+        //   DCT-II/III, DST-II/III, DCT-IV, DST-IV: paired/self-inverse scale = 2/N
+        //   DCT-I: C₁·C₁ = 2(N−1)·I  →  scale = 1/(2(N−1))
+        //   DST-I: S₁·S₁ = 2(N+1)·I  →  scale = 1/(2(N+1))
+        let scale = match self.kind() {
+            RealTransformKind::DctI => 1.0 / (2.0 * (n - 1) as f64),
+            RealTransformKind::DstI => 1.0 / (2.0 * (n + 1) as f64),
+            _ => 2.0 / n as f64,
+        };
         for (slot, value) in output.iter_mut().zip(raw.into_iter()) {
             *slot = value * scale;
         }

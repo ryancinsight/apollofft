@@ -143,6 +143,55 @@ mod tests {
     }
 
     #[test]
+    fn qft_unitarity_holds_for_multiple_sizes() {
+        // QFT satisfies U†U = I for all n ≥ 1 (Shor 1994, Nielsen & Chuang 2010).
+        // Proof: M[k,j] = exp(2πijk/n)/√n. Then (M†M)[j,j'] = (1/n) Σ_k exp(2πi(j-j')k/n)
+        //   = δ(j,j') by DFT orthogonality, so M†M = I and ||QFT(x)||² = ||x||² for all x.
+        use approx::assert_abs_diff_eq;
+        use std::f64::consts::TAU;
+        for n in [2usize, 3, 4, 5, 6, 8] {
+            let dim = QuantumStateDimension::new(n).expect("valid dim");
+            let plan = QftPlan::new(dim);
+            // x[j] = cos(2πj/n) + i·sin(4πj/n): analytically constructed, no round numbers.
+            let input: Array1<Complex64> = Array1::from_shape_fn(n, |j| {
+                Complex64::new(
+                    (TAU * j as f64 / n as f64).cos(),
+                    (TAU * 2.0 * j as f64 / n as f64).sin(),
+                )
+            });
+            let energy_in: f64 = input.iter().map(|c| c.norm_sqr()).sum();
+            let spectrum = plan.forward(&input).expect("forward");
+            let energy_out: f64 = spectrum.iter().map(|c| c.norm_sqr()).sum();
+            assert_abs_diff_eq!(energy_out, energy_in, epsilon = 1e-10);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn qft_unitarity_holds_for_random_size_and_input(
+            n in 2usize..=8,
+            // Always generate 8 pairs so we can cycle-take n regardless of generated n.
+            data in proptest::collection::vec((-5.0f64..5.0f64, -5.0f64..5.0f64), 8usize..=8)
+        ) {
+            // QFT unitarity (Shor 1994, Nielsen & Chuang 2010):
+            // ||QFT_n(x)||² = ||x||² for all n ≥ 1 and x ∈ ℂⁿ.
+            let dim = QuantumStateDimension::new(n).expect("valid dim");
+            let plan = QftPlan::new(dim);
+            let input: Array1<Complex64> = Array1::from_vec(
+                data.into_iter().cycle().take(n).map(|(re, im)| Complex64::new(re, im)).collect(),
+            );
+            let energy_in: f64 = input.iter().map(|c| c.norm_sqr()).sum();
+            let spectrum = plan.forward(&input).expect("forward");
+            let energy_out: f64 = spectrum.iter().map(|c| c.norm_sqr()).sum();
+            prop_assert!(
+                (energy_in - energy_out).abs() < 1e-10,
+                "n={n}, energy_in={energy_in:.15}, energy_out={energy_out:.15}, diff={}",
+                (energy_in - energy_out).abs()
+            );
+        }
+    }
+
+    #[test]
     fn qft_n3_roundtrip() {
         // n=3 is not a power of two; the dense QFT handles arbitrary positive lengths.
         let plan = QftPlan::new(QuantumStateDimension::new(3).expect("valid dim"));

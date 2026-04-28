@@ -1,5 +1,4 @@
 #![warn(missing_docs)]
-#![allow(unused_imports)]
 //! Fast Walsh-Hadamard transform utilities for Apollo.
 //!
 //! This crate implements the unnormalized Hadamard transform on vectors whose

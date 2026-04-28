@@ -239,6 +239,7 @@ version = "0.1.0"
 dependencies = [
  "apollo-fft",
  "approx",
+ "ndarray",
  "num-complex",
  "proptest",
  "rayon",
@@ -521,13 +522,18 @@ dependencies = [
 name = "apollo-validation"
 version = "0.1.0"
 dependencies = [
+ "apollo-czt",
  "apollo-dctdst",
  "apollo-dht",
  "apollo-fft",
  "apollo-fft-wgpu",
+ "apollo-fwht",
+ "apollo-gft",
  "apollo-ntt",
  "apollo-nufft",
  "apollo-nufft-wgpu",
+ "apollo-qft",
+ "nalgebra",
  "ndarray",
  "num-complex",
  "rustfft",

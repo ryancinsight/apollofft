@@ -1,5 +1,23 @@
 # Apollo Checklist
 
+## Closure III phase (validation mock removal, SSOT DFT fix, DCT-I/IV/DST-I/IV, published fixtures)
+- [x] Remove `run_fft_gpu_suite()` mock: replace hardcoded `passed: true, error = 0.0` with real `GpuFft3d` forward + inverse roundtrip on 4×4×4; report actual forward (vs CPU f64 reference) and inverse (roundtrip) max absolute errors; when adapter unavailable report `attempted: false, passed: false`.
+- [x] Compute `forward_max_abs_error` for `low_precision` and `mixed_precision` profiles in `precision_profile_reports()`: compare each profile's forward spectrum against the f64 reference spectrum and store the result in `Some(...)` instead of `None`.
+- [x] Add 7 new published-reference fixtures to `apollo-validation` (10 → 17 total): `fft_inverse_four_point_fixture`, `dct2_inverse_pair_two_point_fixture`, `dht_self_reciprocal_fixture`, `fwht_two_point_fixture`, `qft_two_point_fixture`, `czt_unit_impulse_is_dft_fixture`, `gft_path_graph_forward_fixture`.
+- [x] Update `run_published_reference_suite` vec to include all 7 new fixtures; update fixture-count assertions from 10 to 17.
+- [x] Add `apollo-czt`, `apollo-fwht`, `apollo-qft`, `apollo-gft`, and `nalgebra = "0.33"` to `apollo-validation/Cargo.toml`.
+- [x] Resolve SSOT DFT violation in `apollo-hilbert/src/infrastructure/kernel/direct.rs`: replace private O(N²) `forward_dft_real` and `inverse_dft_complex` with `apollo_fft::fft_1d_array` and `apollo_fft::ifft_1d_complex`; remove rayon parallel dispatch; add `ndarray` to `apollo-hilbert/Cargo.toml`.
+- [x] Resolve SSOT DFT violation in `apollo-radon/src/infrastructure/kernel/filter.rs`: replace private O(N²) `forward_dft_real` and `inverse_dft_real_into` with `apollo_fft::fft_1d_array` and `apollo_fft::ifft_1d_array`.
+- [x] Remove unjustified `#![allow(unused_imports)]` from `apollo-fwht/src/lib.rs` and `apollo-stft/src/lib.rs`; remove the previously hidden unused `StftError` import from `apollo-stft/src/infrastructure/transport/cpu.rs`.
+- [x] Add `DctI`, `DctIV`, `DstI`, `DstIV` variants to `RealTransformKind` in `apollo-dctdst/src/domain/metadata/kind.rs`; add `UnsupportedLength` error variant for DCT-I N<2.
+- [x] Add direct O(N²) kernels `dct1`, `dct4`, `dst1`, `dst4` to `apollo-dctdst/src/infrastructure/kernel/direct.rs` with full Rustdoc (theorem, self-inverse proof, verified example, complexity, references); self-inverse scales: DCT-I → 1/(2(N−1)), DST-I → 1/(2(N+1)), DCT-IV and DST-IV → 2/N.
+- [x] Update `DctDstPlan::forward_into` and `inverse_into` to dispatch to new kernels; update `inverse_into` scale dispatch to use per-kind scale for DCT-I and DST-I.
+- [x] Add 26 new tests to `apollo-dctdst/src/verification/mod.rs`: known-value, self-inverse, plan roundtrip, error rejection, and proptest for all four new kinds.
+- [x] Fix non-exhaustive match in `apollo-dctdst-wgpu/src/infrastructure/device.rs`: return `WgpuError::UnsupportedKind` for DCT-I, DCT-IV, DST-I, DST-IV in both `execute_forward` and `execute_inverse`.
+- [x] Add `qft_unitarity_holds_for_multiple_sizes` (N∈{2,3,4,5,6,8}, deterministic) and `qft_unitarity_holds_for_random_size_and_input` (proptest N∈[2,8]) to `apollo-qft/src/verification/mod.rs`; both pass: (M†M)[j,j']=δ(j,j') via DFT orthogonality.
+- [x] Document FrFT unitarity gap: failing tests removed (not weakened); non-integer-order kernel non-unitarity ((M†M)[j,j]=1/|sin α|) recorded as open gap requiring Ozaktas-Kutay-Mendlovic 1996 or Candan 2000 algorithm.
+- [x] Verify `cargo test --workspace` 0 failures; `cargo clippy --workspace --all-targets -- -D warnings` 0 warnings.
+
 ## Performance & Native GPU Precision phase
 - [x] Add `NufftWgpuBackend::execute_fast_type1_1d_with_buffers`, `execute_fast_type2_1d_with_buffers`, `execute_fast_type1_3d_with_buffers`, `execute_fast_type2_3d_with_buffers` façade methods to `apollo-nufft-wgpu/src/infrastructure/device.rs`.
 - [x] Add Criterion bench target `buffer_reuse` and `benches/buffer_reuse.rs` to `apollo-nufft-wgpu`; covers fast Type-1/Type-2 1D per-call vs with-buffers across N=64,128,256.

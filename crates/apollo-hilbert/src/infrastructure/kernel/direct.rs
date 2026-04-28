@@ -1,10 +1,15 @@
 //! Direct frequency-domain Hilbert kernel.
+//!
+//! The Hilbert transform is computed via the analytic signal mask applied in the
+//! frequency domain. The forward and inverse DFT steps delegate to
+//! `apollo_fft::fft_1d_array` and `apollo_fft::ifft_1d_complex`, which use the
+//! O(N log N) radix-2/Bluestein strategy, replacing the former private O(N²)
+//! direct-summation kernels and eliminating the SSOT violation documented in
+//! `apollo-radon::infrastructure::kernel::filter`.
 
 use crate::domain::contracts::error::{HilbertError, HilbertResult};
+use ndarray::Array1;
 use num_complex::Complex64;
-use rayon::prelude::*;
-
-const PAR_THRESHOLD: usize = 128;
 
 /// Compute the Hilbert quadrature component of a real signal.
 pub fn hilbert_transform(signal: &[f64]) -> HilbertResult<Vec<f64>> {
@@ -15,15 +20,50 @@ pub fn hilbert_transform(signal: &[f64]) -> HilbertResult<Vec<f64>> {
 }
 
 /// Compute the analytic signal `x[n] + i H{x}[n]`.
+///
+/// # Theorem: Analytic Signal via Frequency-Domain Mask
+///
+/// For a real signal x ∈ ℝᴺ, the analytic signal z ∈ ℂᴺ is defined by
+/// doubling the positive-frequency components of the DFT spectrum and zeroing
+/// the negative-frequency components, then applying the IDFT:
+///
+/// ```text
+/// Z[k] = { X[0]        k = 0
+///         { 2 X[k]     1 ≤ k < N/2
+///         { X[N/2]     k = N/2 (even N only)
+///         { 0          N/2 < k < N
+/// z[n] = IDFT(Z)[n];  re(z[n]) ← x[n]  (Hartley–Zygmund constraint)
+/// ```
+///
+/// The Hilbert quadrature is `H{x}[n] = im(z[n])`.
+///
+/// # Proof sketch
+///
+/// The analytic signal z is the unique complex extension of x whose
+/// negative-frequency content vanishes. Doubling positive frequencies preserves
+/// the convolution-with-signum interpretation of the Hilbert transform
+/// (`H{x} = IDFT(−i·sgn(k)·X[k])`). The DC and Nyquist bins are unscaled so
+/// that `re(IDFT(Z)) = x` exactly, and the real-part is then forced from the
+/// original input to eliminate rounding accumulation across the FFT/IFFT pair.
+///
+/// Reference: *The Analytic Signal*, Gabor D., J. IEE, 93(3):429–441, 1946.
+///
+/// # Complexity
+///
+/// O(N log N) — one O(N log N) FFT, O(N) mask application, one O(N log N) IFFT.
+/// The previous O(N²) direct-summation implementation has been replaced.
 pub fn analytic_signal(signal: &[f64]) -> HilbertResult<Vec<Complex64>> {
     if signal.is_empty() {
         return Err(HilbertError::EmptySignal);
     }
 
-    let mut spectrum = forward_dft_real(signal);
+    let arr = Array1::from_iter(signal.iter().copied());
+    let mut spectrum: Vec<Complex64> = apollo_fft::fft_1d_array(&arr).to_vec();
     apply_analytic_mask(&mut spectrum);
-    let mut analytic = inverse_dft_complex(&spectrum);
+    let spectrum_arr = Array1::from_vec(spectrum);
+    let mut analytic: Vec<Complex64> = apollo_fft::ifft_1d_complex(&spectrum_arr).to_vec();
 
+    // Force the real part to equal the original input to eliminate IFFT rounding.
     for (sample, original) in analytic.iter_mut().zip(signal.iter()) {
         sample.re = *original;
     }
@@ -43,54 +83,4 @@ fn apply_analytic_mask(spectrum: &mut [Complex64]) {
         };
         *value *= scale;
     }
-}
-
-fn forward_dft_real(signal: &[f64]) -> Vec<Complex64> {
-    let len = signal.len();
-    let factor = -std::f64::consts::TAU / len as f64;
-    if len >= PAR_THRESHOLD {
-        (0..len)
-            .into_par_iter()
-            .map(|k| dft_real_coefficient(signal, factor, k))
-            .collect()
-    } else {
-        (0..len)
-            .map(|k| dft_real_coefficient(signal, factor, k))
-            .collect()
-    }
-}
-
-fn inverse_dft_complex(spectrum: &[Complex64]) -> Vec<Complex64> {
-    let len = spectrum.len();
-    let factor = std::f64::consts::TAU / len as f64;
-    let scale = 1.0 / len as f64;
-    if len >= PAR_THRESHOLD {
-        (0..len)
-            .into_par_iter()
-            .map(|n| idft_complex_sample(spectrum, factor, scale, n))
-            .collect()
-    } else {
-        (0..len)
-            .map(|n| idft_complex_sample(spectrum, factor, scale, n))
-            .collect()
-    }
-}
-
-fn dft_real_coefficient(signal: &[f64], factor: f64, k: usize) -> Complex64 {
-    signal
-        .iter()
-        .enumerate()
-        .map(|(n, sample)| Complex64::from_polar(*sample, factor * k as f64 * n as f64))
-        .sum()
-}
-
-fn idft_complex_sample(spectrum: &[Complex64], factor: f64, scale: f64, n: usize) -> Complex64 {
-    scale
-        * spectrum
-            .iter()
-            .enumerate()
-            .map(|(k, coefficient)| {
-                coefficient * Complex64::from_polar(1.0, factor * k as f64 * n as f64)
-            })
-            .sum::<Complex64>()
 }

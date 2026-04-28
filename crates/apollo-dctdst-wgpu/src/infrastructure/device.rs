@@ -90,6 +90,18 @@ impl DctDstWgpuBackend {
             RealTransformKind::DctIII => DctMode::Dct3,
             RealTransformKind::DstII => DctMode::Dst2,
             RealTransformKind::DstIII => DctMode::Dst3,
+            RealTransformKind::DctI => {
+                return Err(WgpuError::UnsupportedKind { kind: "DCT-I" });
+            }
+            RealTransformKind::DctIV => {
+                return Err(WgpuError::UnsupportedKind { kind: "DCT-IV" });
+            }
+            RealTransformKind::DstI => {
+                return Err(WgpuError::UnsupportedKind { kind: "DST-I" });
+            }
+            RealTransformKind::DstIV => {
+                return Err(WgpuError::UnsupportedKind { kind: "DST-IV" });
+            }
         };
         self.kernel
             .execute(self.device.as_ref(), self.queue.as_ref(), input, mode, 1.0)
@@ -103,6 +115,18 @@ impl DctDstWgpuBackend {
             RealTransformKind::DctIII => (DctMode::Dct2, 2.0 / plan.len() as f32),
             RealTransformKind::DstII => (DctMode::Dst3, 2.0 / plan.len() as f32),
             RealTransformKind::DstIII => (DctMode::Dst2, 2.0 / plan.len() as f32),
+            RealTransformKind::DctI => {
+                return Err(WgpuError::UnsupportedKind { kind: "DCT-I" });
+            }
+            RealTransformKind::DctIV => {
+                return Err(WgpuError::UnsupportedKind { kind: "DCT-IV" });
+            }
+            RealTransformKind::DstI => {
+                return Err(WgpuError::UnsupportedKind { kind: "DST-I" });
+            }
+            RealTransformKind::DstIV => {
+                return Err(WgpuError::UnsupportedKind { kind: "DST-IV" });
+            }
         };
         self.kernel.execute(
             self.device.as_ref(),

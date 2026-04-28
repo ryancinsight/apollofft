@@ -1,5 +1,7 @@
 //! Projection-domain filters for filtered backprojection.
 
+use apollo_fft::{fft_1d_array, ifft_1d_array};
+use ndarray::Array1;
 use num_complex::Complex64;
 
 /// Apply the unwindowed ramp filter `|omega|` to one projection.
@@ -15,6 +17,18 @@ pub fn ramp_filter_projection(projection: &[f64], detector_spacing: f64) -> Vec<
 /// This avoids per-angle output allocation in filtered backprojection while
 /// preserving the same direct DFT mathematical contract as
 /// `ramp_filter_projection`.
+///
+/// # Algorithm
+///
+/// The ramp filter is applied in the frequency domain:
+/// 1. Forward FFT of the projection via `apollo_fft::fft_1d_array` (O(N log N)).
+/// 2. Multiply each complex coefficient by `|omega_k|`, the ramp frequency for bin k.
+/// 3. Inverse FFT via `apollo_fft::ifft_1d_array`, returning the real-valued filtered
+///    projection.
+///
+/// Using `apollo_fft` as the single source of truth for DFT arithmetic removes the
+/// previously duplicated O(N²) private `forward_dft_real` kernel that was also present
+/// in `apollo-hilbert`. Both crates now share the same authoritative O(N log N) path.
 pub fn ramp_filter_projection_into(projection: &[f64], detector_spacing: f64, output: &mut [f64]) {
     assert_eq!(
         projection.len(),
@@ -25,11 +39,20 @@ pub fn ramp_filter_projection_into(projection: &[f64], detector_spacing: f64, ou
         return;
     }
 
-    let mut spectrum = forward_dft_real(projection);
+    let arr = Array1::from_iter(projection.iter().copied());
+    let mut spectrum: Vec<Complex64> = fft_1d_array(&arr).to_vec();
+
     for (k, coefficient) in spectrum.iter_mut().enumerate() {
         *coefficient *= ramp_frequency(k, projection.len(), detector_spacing);
     }
-    inverse_dft_real_into(&spectrum, output);
+
+    let spectrum_arr = Array1::from_vec(spectrum);
+    let result = ifft_1d_array(&spectrum_arr);
+
+    output
+        .iter_mut()
+        .zip(result.iter())
+        .for_each(|(dst, src)| *dst = *src);
 }
 
 fn ramp_frequency(k: usize, len: usize, detector_spacing: f64) -> f64 {
@@ -39,41 +62,4 @@ fn ramp_frequency(k: usize, len: usize, detector_spacing: f64) -> f64 {
         k as f64 - len as f64
     };
     std::f64::consts::TAU * signed_bin.abs() / (len as f64 * detector_spacing)
-}
-
-/// Direct O(N^2) forward DFT on a real signal.
-///
-/// ## SSOT note
-/// This function duplicates a private kernel also present in apollo-hilbert.
-/// A future refactor should extract shared DFT kernels into apollo-fft internal API.
-fn forward_dft_real(signal: &[f64]) -> Vec<Complex64> {
-    let len = signal.len();
-    let factor = -std::f64::consts::TAU / len as f64;
-    (0..len)
-        .map(|k| {
-            signal
-                .iter()
-                .enumerate()
-                .map(|(n, sample)| Complex64::from_polar(*sample, factor * k as f64 * n as f64))
-                .sum()
-        })
-        .collect()
-}
-
-fn inverse_dft_real_into(spectrum: &[Complex64], output: &mut [f64]) {
-    let len = spectrum.len();
-    debug_assert_eq!(len, output.len());
-    let factor = std::f64::consts::TAU / len as f64;
-    let scale = 1.0 / len as f64;
-    for (n, value) in output.iter_mut().enumerate() {
-        *value = scale
-            * spectrum
-                .iter()
-                .enumerate()
-                .map(|(k, coefficient)| {
-                    coefficient * Complex64::from_polar(1.0, factor * k as f64 * n as f64)
-                })
-                .sum::<Complex64>()
-                .re;
-    }
 }

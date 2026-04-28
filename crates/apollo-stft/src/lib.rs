@@ -1,5 +1,4 @@
 #![warn(missing_docs)]
-#![allow(unused_imports)]
 //! Short-time Fourier transform.
 
 /// Application-layer orchestration and execution plans.

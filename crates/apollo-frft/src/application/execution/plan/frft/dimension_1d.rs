@@ -330,6 +330,7 @@ mod tests {
         assert_eq!(FrftPlan::new(0, 1.0), Err(FrftError::EmptySignal));
         assert_eq!(FrftPlan::new(4, f64::NAN), Err(FrftError::NonFiniteOrder));
     }
+
     #[test]
     fn frft_order_1_matches_dft() {
         use std::f64::consts::PI;

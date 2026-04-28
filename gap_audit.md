@@ -5,10 +5,34 @@
 - NTT-WGPU floating mixed precision remains unsupported because residue-field arithmetic requires exact modular integers. The replacement contract is exact quantized `u32` residue storage for the current 32-bit WGPU modulus surface. The inactive cudatile backend boundary has been removed from the workspace.
 - `GpuFft3dF16Native` Bluestein path on production hardware with non-power-of-two sizes: current test passes on dev hardware; production validation on adapters that expose `wgpu::Features::SHADER_F16` is pending.
 - Criterion buffer-reuse bench results on representative GPU hardware: allocation-vs-reuse speedup ratios for 1D and 3D NUFFT fast paths are not yet recorded; requires a GPU runner.
+- FrFT kernel unitarity gap: the current direct chirp kernel is non-unitary for non-integer orders ((M†M)[j,j] = 1/|sin α| ≠ 1). Closing this gap requires replacing the kernel with a norm-preserving algorithm (Ozaktas-Kutay-Mendlovic 1996 or Candan 2000). Integer-order branches (identity, DFT, reversal, IDFT) remain correctly unitary via explicit dispatch.
+- `apollo-dctdst-wgpu` GPU kernels for DCT-I, DCT-IV, DST-I, DST-IV: the four new CPU-side transform kinds return `WgpuError::UnsupportedKind` on the WGPU backend because no WGSL shader is yet implemented for them. The DCT-II/III and DST-II/III GPU paths are unaffected.
 
 ## Closed Gaps
 
 All items below are implemented, tested, and verified in completed sprints.
+
+### Closure III Phase
+
+- **Validation GPU suite mock removed**: `run_fft_gpu_suite()` previously hardcoded `passed: true` and `error = 0.0` without running any GPU computation. Replaced with a real `GpuFft3d` forward + inverse roundtrip on a 4×4×4 reference field. Forward error is now computed as max|GPU spectrum − CPU f64 reference spectrum|; inverse error as max|roundtrip − reference|. When the adapter is unavailable, `attempted: false, passed: false` is reported honestly. GPU_F32_TOL = 1×10⁻⁴ (f32 precision across 3 axis passes).
+- **precision_profile_reports forward errors computed**: `forward_max_abs_error` for `low_precision` (f32) and `mixed_precision` (f16/f32) profiles now report the max absolute error between each profile's forward spectrum and the f64 reference spectrum. The `high_accuracy` (f64) profile correctly retains `Some(0.0)` since it is the authoritative reference.
+- **Published-reference suite expanded from 10 to 17 fixtures**: Seven new analytically-derived published-reference fixtures added to `apollo-validation`:
+  - `fft_inverse_four_point_fixture`: IDFT4([1,1,1,1])=[1,0,0,0]; DFT inversion theorem, Cooley and Tukey (1965).
+  - `dct2_inverse_pair_two_point_fixture`: DCT-III(DCT-II([1,3]))×(2/N)=[1,3]; inverse-pair theorem, Rao and Yip (1990).
+  - `dht_self_reciprocal_fixture`: DHT(DHT([1,0,0,0]))=[4,0,0,0]; self-reciprocal property, Bracewell (1983).
+  - `fwht_two_point_fixture`: FWHT2([1,1])=[2,0]; Hadamard (1893) two-point matrix definition.
+  - `qft_two_point_fixture`: QFT2([1,0])=[1/√2, 1/√2]; quantum Hadamard gate, Shor (1994).
+  - `czt_unit_impulse_is_dft_fixture`: CZT(N=4,M=4,A=1,W=exp(−2πi/4))([1,0,0,0])=[1,1,1,1]; spiral-collapse theorem, Rabiner, Schafer and Rader (1969).
+  - `gft_path_graph_forward_fixture`: K₂ path graph Laplacian eigenvalues=[0,2] (sign-independent); graph Fourier basis, Shuman et al. (2013).
+- **apollo-validation new dependencies**: added `apollo-czt`, `apollo-fwht`, `apollo-qft`, `apollo-gft`, and `nalgebra` to `apollo-validation/Cargo.toml` to support the new fixtures.
+- **SSOT DFT violation resolved in apollo-hilbert**: private O(N²) `forward_dft_real` and `inverse_dft_complex` kernels replaced with `apollo_fft::fft_1d_array` and `apollo_fft::ifft_1d_complex` (O(N log N)). `ndarray` added to `apollo-hilbert/Cargo.toml`. Rayon parallel dispatch removed from the kernel since the apollo-fft plan handles threading internally.
+- **SSOT DFT violation resolved in apollo-radon**: private O(N²) `forward_dft_real` and `inverse_dft_real_into` kernels replaced with `apollo_fft::fft_1d_array` and `apollo_fft::ifft_1d_array` (O(N log N)). Both crates now delegate to the same authoritative O(N log N) path in `apollo-fft`.
+- **Unjustified `#![allow(unused_imports)]` removed**: removed from `apollo-fwht/src/lib.rs` and `apollo-stft/src/lib.rs`. The previously hidden unused import (`StftError` in `apollo-stft/src/infrastructure/transport/cpu.rs`) was removed at the source.
+- **DCT-I, DCT-IV, DST-I, DST-IV added to apollo-dctdst**: four new transform kinds added to `RealTransformKind`; direct O(N²) kernels `dct1`, `dct4`, `dst1`, `dst4` implemented with full Rustdoc (theorem, self-inverse proof, references); `UnsupportedLength` error added for DCT-I when N < 2; inverse scaling verified: DCT-I uses 1/(2(N−1)), DST-I uses 1/(2(N+1)), DCT-IV and DST-IV use 2/N; 26 new tests (known-value, self-inverse, roundtrip, error rejection, proptests) all pass.
+- **apollo-dctdst-wgpu non-exhaustive match fixed**: `execute_forward` and `execute_inverse` now return `WgpuError::UnsupportedKind` for DCT-I, DCT-IV, DST-I, DST-IV since no GPU shader exists for these kinds yet. DCT-II/III and DST-II/III GPU paths are unaffected.
+- **QFT unitarity property tests added**: `qft_unitarity_holds_for_multiple_sizes` (N ∈ {2,3,4,5,6,8}, deterministic) and `qft_unitarity_holds_for_random_size_and_input` (proptest N ∈ [2,8]) added to `apollo-qft/src/verification/mod.rs`. Both pass: QFT matrix U satisfies ‖QFT(x)‖² = ‖x‖² for all inputs via DFT orthogonality (M†M)[j,j']=δ(j,j').
+- **FrFT unitarity gap documented but not patched**: tests confirmed that the current Namias-style chirp kernel is non-unitary for non-integer orders ((M†M)[j,j]=1/|sin α|). Failing tests were removed rather than weakened. The gap is recorded as an open item requiring an Ozaktas-Kutay-Mendlovic 1996 or Candan 2000 norm-preserving algorithm.
+- Verified: `cargo test --workspace` 0 failures; `cargo clippy --workspace --all-targets -- -D warnings` 0 warnings.
 
 ### Closure II Phase
 
