@@ -520,6 +520,7 @@ impl GpuFft3d {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_chirp_data(
         device: &wgpu::Device,
         _data_layout: &wgpu::BindGroupLayout,

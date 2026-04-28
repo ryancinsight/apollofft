@@ -1,5 +1,5 @@
 [package]
-name = "apollo-fft"
+name = "apollo"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
