@@ -14,6 +14,15 @@ by design and will not be implemented.
 
 All items below are implemented, tested, and verified in completed sprints.
 
+### Closure VI Phase
+
+- Workspace compilation gap: reverted `apollo-fft/Cargo.toml` package name from `"apollo"` to `"apollo-fft"` and `apollo-fft-wgpu/Cargo.toml` dep key from `apollo` to `apollo-fft`. Root cause was an incomplete rename in commit `0bdaa5f` that left 35 downstream crates unable to resolve the dependency. Zero workspace tests ran before this fix.
+- NTT-WGPU O(N²) correctness gap: replaced the O(N²) DFT WGSL shader with an O(N log N) Cooley-Tukey DIT butterfly. `ntt.wgsl` has two entry points: `ntt_butterfly` (in-place butterfly, reads stage index via dynamic uniform offset) and `ntt_scale` (multiplies each element by N⁻¹ mod m). Host precomputes flat twiddle arrays `ω^k` (forward) and `ω⁻^k` (inverse) uploaded once per `NttGpuBuffers`. Bit-reversal permutation applied on CPU before upload. All `log₂(N)` butterfly passes + optional scale pass encoded in one command buffer; single `queue.submit` + `device.poll(Wait)` per transform. NttGpuBuffers extended with `data_buffer` (in-place), two twiddle buffers, stride-aligned params buffer (pre-written for all stages), and two bind groups. Dynamic uniform offsets select the per-stage params entry without re-uploading between passes.
+- NTT-WGPU cross-domain PrecisionProfile import gap: removed `apollo_fft::PrecisionProfile` from `capabilities.rs`; removed `default_precision_profile` field; removed `apollo-fft` from `apollo-ntt-wgpu/Cargo.toml`. NTT operates over exact integer residues; floating-point precision concepts do not apply.
+- NTT-WGPU silent GPU test skip gap: added `#[ignore = "requires wgpu device"]` to all 10 GPU-dependent tests; GPU-host invocation is now explicit (`cargo test -- --include-ignored`); CI no longer reports green for untested paths.
+- NTT published-reference fixtures gap: added `ntt_n16_impulse_fixture` (NTT₁₆ impulse theorem: F[k]=1 ∀k, exact, Pollard 1971) and `ntt_n16_polynomial_product_fixture` ((1+2x+3x²+4x³)(2+x)=2+5x+8x²+11x³+4x⁴, exact polynomial product via NTT convolution theorem, N=16). Total published fixtures: 22.
+- NTT lib cleanup: removed `#![allow(unused_imports)]` from `apollo-ntt/src/lib.rs`; removed unused `Array1` import from `kernel/direct.rs`. Zero clippy warnings workspace-wide.
+
 ### Closure IV Phase
 
 - FrFT kernel unitarity gap: added `UnitaryFrftPlan` to `apollo-frft` implementing the Candan (2000) eigendecomposition-based unitary DFrFT. Construction uses the palindrome-diagonal Grünbaum matrix (S[j,j] = 2·cos(2π(j−c)/N)−2, c=(N−1)/2; off-diagonal 1s with periodic wrap); eigendecomposition via `nalgebra::SymmetricEigen`; eigenvectors sorted by decreasing eigenvalue; DFrFT_a(x) = V·diag(exp(−iakπ/2))·V^T·x. Unitarity follows from V^T V = I and |exp(−iakπ/2)| = 1. Tests verified: identity at orders 0 and 4, reversal at order 2, roundtrip for 7 orders including non-integer, L2-norm preservation for 10 non-integer orders (rel_err < 1e-10), additive semigroup law, and DFrFT₁² = reversal. `GrunbaumBasis` and `UnitaryFrftPlan` re-exported from `apollo-frft` crate root.
@@ -247,7 +256,7 @@ All items below are implemented, tested, and verified in completed sprints.
 Open gaps are listed at the top of this audit. Future increments should:
 - Run the Criterion buffer-reuse benches on representative GPU hardware and record measured allocation-vs-reuse speedup ratios for 1D and 3D NUFFT fast paths.
 - Verify `GpuFft3dF16Native` Bluestein path on production hardware with non-power-of-two sizes (current test passes on dev hardware; production validation is pending).
-- Expand NTT published-reference fixtures beyond N=4 to cover larger moduli and the default 998244353 modulus with non-trivial transform results.
+
 
 ### Closed in this sprint (Performance & Native GPU Precision phase)
 

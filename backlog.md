@@ -1,5 +1,17 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure VI phase)
+- [x] [patch] Fix workspace-wide compilation: revert `apollo-fft/Cargo.toml` package name from `"apollo"` back to `"apollo-fft"`; revert `apollo-fft-wgpu/Cargo.toml` dep key from `apollo` back to `apollo-fft`. Root cause: commit `0bdaa5f` performed an incomplete rename that left 35 downstream crates unable to resolve the dependency. Zero tests ran before this fix; all pass after.
+- [x] [major] Replace O(N²) DFT WGSL shader in `apollo-ntt-wgpu` with O(N log N) Cooley-Tukey DIT butterfly: `ntt.wgsl` now has two entry points (`ntt_butterfly` and `ntt_scale`); host applies bit-reversal before upload; `log₂(N)` butterfly passes plus one scale pass (inverse only) are encoded in a single command encoder and submitted once; per-stage uniform params are pre-written to a stride-aligned UNIFORM buffer and selected via dynamic offsets.
+- [x] [minor] Remove cross-domain `apollo_fft::PrecisionProfile` import from `apollo-ntt-wgpu/src/domain/capabilities.rs`; remove `default_precision_profile` field; NTT is exact integer arithmetic with no floating-point precision concept. Remove `apollo-fft` dependency from `apollo-ntt-wgpu/Cargo.toml`.
+- [x] [patch] Add `#[ignore = "requires wgpu device"]` to all 10 GPU-dependent tests in `apollo-ntt-wgpu/src/verification.rs`; replace silent early-returns with explicit skips visible in CI.
+- [x] [patch] Add CPU-only proptest tests to `apollo-ntt-wgpu/src/verification.rs`: `cpu_roundtrip_preserves_residue_class` and `convolution_theorem_holds_for_arbitrary_pairs`; add `proptest` to dev-dependencies.
+- [x] [patch] Remove `#![allow(unused_imports)]` from `apollo-ntt/src/lib.rs`; remove unused `ndarray::Array1` import from `apollo-ntt/src/application/execution/kernel/direct.rs`.
+- [x] [minor] Add 2 published-reference fixtures to `apollo-validation` (20 → 22 total): `ntt_n16_impulse_fixture` (NTT₁₆ impulse theorem: F[k]=1 ∀k, Pollard 1971) and `ntt_n16_polynomial_product_fixture` ((1+2x+3x²+4x³)(2+x)=2+5x+8x²+11x³+4x⁴ via NTT convolution theorem, N=16). Update fixture-count assertions from 20 to 22.
+- [x] Verify `cargo check --workspace --all-targets` clean.
+- [x] Verify `cargo clippy --workspace --all-targets -- -D warnings` zero warnings.
+- [x] Verify `cargo test --workspace --all-targets` zero failures (10 GPU tests ignored, all others pass).
+
 ## Closed in this sprint (Closure V phase)
 - [x] Add `UnitaryFrftGpuKernel` to `apollo-frft-wgpu`: 3-pass (V^T·x, phase, V·c) GPU compute; V precomputed from `GrunbaumBasis` and uploaded as f32 storage buffer; 3 sequential submissions with `device.poll(Wait)` enforce cross-workgroup storage ordering. Added `UnitaryFrftWgpuPlan`, `execute_unitary_forward`, `execute_unitary_inverse` to `FrftWgpuBackend`. 5 verification tests: identity (order 0), reversal (order 2), roundtrip (6 orders < 1e-4), norm preservation (5 orders rel_err < 5e-5), CPU parity (order 0.5 < 1e-3).
 - [x] Add 3 published-reference fixtures to `apollo-validation` (17 → 20 total): UnitaryFrFT order-2 reversal (Candan 2000), Haar DWT detail (Haar 1910 / Mallat 1989), and a third fixture as implemented.

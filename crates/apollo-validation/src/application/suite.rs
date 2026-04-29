@@ -439,6 +439,8 @@ pub fn run_published_reference_suite() -> SuiteResult<PublishedReferenceReport> 
         frft_unitary_order2_reversal_fixture()?,
         wavelet_haar_one_level_detail_fixture()?,
         sdft_bin_zero_unit_impulse_fixture()?,
+        ntt_n16_impulse_fixture()?,
+        ntt_n16_polynomial_product_fixture()?,
     ];
     let passed = fixtures.iter().all(|fixture| fixture.passed);
     Ok(PublishedReferenceReport {
@@ -1195,6 +1197,71 @@ fn wavelet_haar_one_level_detail_fixture() -> SuiteResult<PublishedFixtureReport
     ))
 }
 
+/// NTT of the unit impulse [1, 0, 0, ..., 0] with N=16, modulus=998244353.
+///
+/// # Mathematical contract
+/// By the NTT impulse theorem (Pollard 1971): for x[0]=1 and x[n]=0 for n≥1,
+///   F[k] = Σ_{n=0}^{N-1} x[n] · ω^{nk} = ω^{0·k} = 1  for all k = 0..15.
+/// This extends the N=4 and N=8 impulse fixtures to N=16, confirming that the
+/// twiddle precomputation and butterfly structure are correct at this size.
+/// Reference: "NTT impulse theorem, Pollard (1971): F[k]=1 ∀k for impulse input"
+fn ntt_n16_impulse_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let mut input_vec = vec![0u64; 16];
+    input_vec[0] = 1;
+    let input = Array1::from_vec(input_vec);
+    let plan = NttPlan::new(16)?;
+    let actual = plan.forward(&input)?;
+    let actual_f64: Vec<f64> = actual.iter().map(|&v| v as f64).collect();
+    let expected = [1.0_f64; 16];
+    Ok(published_real_fixture(
+        "NTT",
+        "NTT16([1,0,...,0])",
+        "NTT impulse theorem, Pollard (1971): F[k]=1 for all k; impulse input, N=16",
+        &actual_f64,
+        &expected,
+    ))
+}
+
+/// NTT convolution theorem for N=16: degree-3 times degree-1 polynomial product.
+///
+/// # Mathematical contract
+/// By the NTT Convolution Theorem (Pollard 1971):
+///   INTT(NTT(a) ⊙ NTT(b)) = cyclic convolution a ★ b  mod p
+/// For a = [1,2,3,4,0,...,0] and b = [2,1,0,...,0] (N=16):
+///   (1 + 2x + 3x² + 4x³)(2 + x) = 2 + 5x + 8x² + 11x³ + 4x⁴
+/// All coefficients (2, 5, 8, 11, 4) are ≪ p = 998244353, so modular reduction
+/// is trivial and the result equals the integer polynomial product exactly.
+/// Reference: "NTT Convolution Theorem (Pollard 1971): INTT(NTT(a)⊙NTT(b))=a★b; N=16"
+fn ntt_n16_polynomial_product_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let p = DEFAULT_MODULUS;
+    let plan = NttPlan::new(16)?;
+    let mut a_vec = vec![0u64; 16];
+    a_vec[..4].copy_from_slice(&[1u64, 2, 3, 4]);
+    let mut b_vec = vec![0u64; 16];
+    b_vec[..2].copy_from_slice(&[2u64, 1]);
+    let a = Array1::from_vec(a_vec);
+    let b = Array1::from_vec(b_vec);
+    let fa = plan.forward(&a)?;
+    let fb = plan.forward(&b)?;
+    let fc: Vec<u64> = fa
+        .iter()
+        .zip(fb.iter())
+        .map(|(&x, &y)| ((x as u128 * y as u128) % p as u128) as u64)
+        .collect();
+    let c = plan.inverse(&Array1::from_vec(fc))?;
+    let actual_f64: Vec<f64> = c.iter().map(|&v| v as f64).collect();
+    // (1+2x+3x²+4x³)(2+x) = 2 + 5x + 8x² + 11x³ + 4x⁴, all higher coefficients 0
+    let mut expected = [0.0_f64; 16];
+    expected[..5].copy_from_slice(&[2.0, 5.0, 8.0, 11.0, 4.0]);
+    Ok(published_real_fixture(
+        "NTT",
+        "INTT(NTT([1,2,3,4,0\u{2026}])\u{2299}NTT([2,1,0\u{2026}]))",
+        "NTT Convolution Theorem (Pollard 1971): (1+2x+3x\u{00b2}+4x\u{00b3})(2+x)=2+5x+8x\u{00b2}+11x\u{00b3}+4x\u{2074}; N=16",
+        &actual_f64,
+        &expected,
+    ))
+}
+
 /// SDFT bin 0 for the unit impulse [1, 0, 0, 0].
 ///
 /// # Mathematical contract
@@ -1293,7 +1360,7 @@ mod tests {
         assert!(report.fft_cpu.parseval_relative_error <= CPU_PARSEVAL_LIMIT);
         assert!(report.nufft.passed);
         assert!(report.external.published_references.passed);
-        assert_eq!(report.external.published_references.attempted, 20);
+        assert_eq!(report.external.published_references.attempted, 22);
         assert_eq!(report.external.rustfft.backend, "rustfft");
         assert_eq!(report.external.numpy.backend, "numpy");
     }
@@ -1301,7 +1368,7 @@ mod tests {
     #[test]
     fn published_reference_suite_checks_computed_fixture_values() {
         let report = run_published_reference_suite().expect("published references");
-        assert_eq!(report.attempted, 20);
+        assert_eq!(report.attempted, 22);
         assert!(report.passed);
         for fixture in &report.fixtures {
             assert!(

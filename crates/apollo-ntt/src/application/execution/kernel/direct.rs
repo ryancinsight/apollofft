@@ -1,5 +1,4 @@
 use crate::domain::contracts::math::{bit_reverse_permute, mod_add, mod_mul, mod_sub};
-use ndarray::Array1;
 use rayon::prelude::*;
 
 const PAR_THRESHOLD: usize = 1024;

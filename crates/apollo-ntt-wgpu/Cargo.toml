@@ -7,8 +7,11 @@ authors = ["Ryan Clanton PhD <ryanclanton@outlook.com>"]
 repository = "https://github.com/ryancinsight/kwavers"
 description = "WGPU backend boundary for Apollo NTT"
 
+[features]
+default = []
+proptest_gpu = []
+
 [dependencies]
-apollo-fft = { path = "../apollo-fft" }
 apollo-ntt = { path = "../apollo-ntt" }
 bytemuck = { version = "1.19", features = ["derive"] }
 pollster = "0.4"
@@ -17,6 +20,7 @@ wgpu = { version = "26.0", features = ["wgsl"] }
 
 [dev-dependencies]
 ndarray = "0.16"
+proptest = { workspace = true }
 
 [lints]
 workspace = true

@@ -303,11 +303,11 @@ dependencies = [
 name = "apollo-ntt-wgpu"
 version = "0.1.0"
 dependencies = [
- "apollo-fft",
  "apollo-ntt",
  "bytemuck",
  "ndarray",
  "pollster",
+ "proptest",
  "thiserror 1.0.69",
  "wgpu",
 ]

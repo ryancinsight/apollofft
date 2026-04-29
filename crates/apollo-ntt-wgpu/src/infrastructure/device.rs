@@ -98,19 +98,21 @@ impl NttWgpuBackend {
         if len == 0 {
             return Err(WgpuError::InvalidBufferLength { len });
         }
-        self.kernel.create_buffers(self.device.as_ref(), len)
+        let omega = Self::validate_plan_and_len(plan, len)?;
+        self.kernel
+            .create_buffers(self.device.as_ref(), len, plan.modulus(), omega)
     }
 
     /// Execute the direct forward NTT over the configured residue field.
     pub fn execute_forward(&self, plan: &NttWgpuPlan, input: &[u64]) -> WgpuResult<Vec<u64>> {
-        let root = Self::validate_plan_and_input(plan, input)?;
+        let omega = Self::validate_plan_and_input(plan, input)?;
         self.kernel.execute(
             self.device.as_ref(),
             self.queue.as_ref(),
             input,
             plan.len(),
             plan.modulus(),
-            root,
+            omega,
             NttMode::Forward,
         )
     }
@@ -146,13 +148,11 @@ impl NttWgpuBackend {
         input: &[u64],
         buffers: &mut NttGpuBuffers,
     ) -> WgpuResult<()> {
-        let root = Self::validate_plan_input_and_buffers(plan, input, buffers)?;
+        Self::validate_plan_input_and_buffers(plan, input, buffers)?;
         self.kernel.execute_with_buffers(
             self.device.as_ref(),
             self.queue.as_ref(),
             input,
-            plan.modulus(),
-            root,
             NttMode::Forward,
             buffers,
         )
@@ -160,14 +160,14 @@ impl NttWgpuBackend {
 
     /// Execute the direct inverse NTT over the configured residue field.
     pub fn execute_inverse(&self, plan: &NttWgpuPlan, input: &[u64]) -> WgpuResult<Vec<u64>> {
-        let root = Self::validate_plan_and_input(plan, input)?;
+        let omega = Self::validate_plan_and_input(plan, input)?;
         self.kernel.execute(
             self.device.as_ref(),
             self.queue.as_ref(),
             input,
             plan.len(),
             plan.modulus(),
-            root,
+            omega,
             NttMode::Inverse,
         )
     }
@@ -199,13 +199,11 @@ impl NttWgpuBackend {
         input: &[u64],
         buffers: &mut NttGpuBuffers,
     ) -> WgpuResult<()> {
-        let root = Self::validate_plan_input_and_buffers(plan, input, buffers)?;
+        Self::validate_plan_input_and_buffers(plan, input, buffers)?;
         self.kernel.execute_with_buffers(
             self.device.as_ref(),
             self.queue.as_ref(),
             input,
-            plan.modulus(),
-            root,
             NttMode::Inverse,
             buffers,
         )
@@ -231,14 +229,12 @@ impl NttWgpuBackend {
                 actual: output.len(),
             });
         }
-        let root = Self::validate_plan_and_len(plan, input.len())?;
+        Self::validate_plan_and_len(plan, input.len())?;
         let mut buffers = self.create_buffers(plan)?;
         self.kernel.execute_quantized_with_buffers(
             self.device.as_ref(),
             self.queue.as_ref(),
             input,
-            plan.modulus(),
-            root,
             mode,
             &mut buffers,
         )?;
@@ -255,13 +251,11 @@ impl NttWgpuBackend {
         buffers: &mut NttGpuBuffers,
         mode: NttMode,
     ) -> WgpuResult<()> {
-        let root = Self::validate_plan_input_and_buffers_len(plan, input.len(), buffers)?;
+        Self::validate_plan_input_and_buffers_len(plan, input.len(), buffers)?;
         self.kernel.execute_quantized_with_buffers(
             self.device.as_ref(),
             self.queue.as_ref(),
             input,
-            plan.modulus(),
-            root,
             mode,
             buffers,
         )
@@ -271,7 +265,7 @@ impl NttWgpuBackend {
         plan: &NttWgpuPlan,
         input: &[u64],
         buffers: &NttGpuBuffers,
-    ) -> WgpuResult<u64> {
+    ) -> WgpuResult<()> {
         Self::validate_plan_input_and_buffers_len(plan, input.len(), buffers)
     }
 
@@ -279,15 +273,15 @@ impl NttWgpuBackend {
         plan: &NttWgpuPlan,
         input_len: usize,
         buffers: &NttGpuBuffers,
-    ) -> WgpuResult<u64> {
-        let root = Self::validate_plan_and_len(plan, input_len)?;
+    ) -> WgpuResult<()> {
+        Self::validate_plan_and_len(plan, input_len)?;
         if buffers.len() != plan.len() {
             return Err(WgpuError::BufferLengthMismatch {
                 expected: plan.len(),
                 actual: buffers.len(),
             });
         }
-        Ok(root)
+        Ok(())
     }
 
     fn validate_plan_and_input(plan: &NttWgpuPlan, input: &[u64]) -> WgpuResult<u64> {

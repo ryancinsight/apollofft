@@ -1,5 +1,23 @@
 # Apollo Checklist
 
+## Closure VI phase (workspace unblock, O(N log N) NTT WGPU, expanded fixtures, cleanup)
+- [x] Fix `apollo-fft/Cargo.toml`: `name = "apollo"` → `name = "apollo-fft"` (workspace-blocking patch).
+- [x] Fix `apollo-fft-wgpu/Cargo.toml`: dep key `apollo` → `apollo-fft` (workspace-blocking patch).
+- [x] Rewrite `apollo-ntt-wgpu/src/infrastructure/shaders/ntt.wgsl`: replace O(N²) DFT entry point `ntt_transform` with O(N log N) Cooley-Tukey DIT entry points `ntt_butterfly` (per-stage butterfly) and `ntt_scale` (inverse N⁻¹ scaling). Flat twiddle array `twiddles[k]=ω^k`. No-race proof: disjoint (i,j) pairs per thread per stage.
+- [x] Rewrite `apollo-ntt-wgpu/src/infrastructure/kernel.rs`: `NttGpuKernel` now holds `butterfly_pipeline` + `scale_pipeline`. `NttGpuBuffers` carries in-place `data_buffer`, forward+inverse `twiddle_buffer`s, stride-aligned `params_buffer` (pre-written once at creation for all stages), `fwd_bind_group` + `inv_bind_group`. `execute_from_residues`: one encoder, `log₂(N)` butterfly passes + optional scale pass, dynamic uniform offsets, single `queue.submit` + single `device.poll(Wait)`.
+- [x] Update `apollo-ntt-wgpu/src/infrastructure/device.rs`: pass `omega` to `kernel.create_buffers`; remove stale `modulus`/`root` args from `execute_with_buffers` and `execute_quantized_with_buffers` call sites.
+- [x] Remove `apollo_fft::PrecisionProfile` from `apollo-ntt-wgpu/src/domain/capabilities.rs`; remove `default_precision_profile` field; update doc to state NTT has no floating-point precision concept.
+- [x] Remove `apollo-fft` from `apollo-ntt-wgpu/Cargo.toml` dependencies.
+- [x] Fix `apollo-ntt-wgpu/src/verification.rs`: add `#[ignore = "requires wgpu device"]` to 10 GPU tests; add `proptest_gpu` feature gate for GPU proptest; add CPU-only proptest module (`cpu_roundtrip_preserves_residue_class`, `convolution_theorem_holds_for_arbitrary_pairs`).
+- [x] Add `proptest = { workspace = true }` and `[features] proptest_gpu = []` to `apollo-ntt-wgpu/Cargo.toml`.
+- [x] Remove `#![allow(unused_imports)]` from `apollo-ntt/src/lib.rs`.
+- [x] Remove unused `use ndarray::Array1` from `apollo-ntt/src/application/execution/kernel/direct.rs`.
+- [x] Add `ntt_n16_impulse_fixture` and `ntt_n16_polynomial_product_fixture` to `apollo-validation/src/application/suite.rs`.
+- [x] Update fixture-count assertions from 20 to 22 in `apollo-validation/src/application/suite.rs`.
+- [x] Verify `cargo check --workspace --all-targets` clean.
+- [x] Verify `cargo clippy --workspace --all-targets -- -D warnings` zero warnings.
+- [x] Verify `cargo test --workspace --all-targets` zero failures; `10 ignored` in apollo-ntt-wgpu for GPU-device-dependent tests.
+
 ## Closure V phase (GPU Unitary FrFT, validation fixtures, docs)
 - [x] Create `apollo-frft-wgpu/src/infrastructure/shaders/frft_unitary.wgsl` with single-entry-point 3-pass WGSL shader (step=0: V^T·x, step=1: phase, step=2: V·c; column-major V; `@workgroup_size(64)`).
 - [x] Create `apollo-frft-wgpu/src/infrastructure/unitary_kernel.rs` with `UnitaryFrftGpuKernel` (BGL 5 entries, compiled pipeline, `execute` method with 3 sequential submissions + polls).
