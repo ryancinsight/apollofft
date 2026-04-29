@@ -63,7 +63,7 @@ impl HilbertWgpuBackend {
     /// Return truthful current capabilities.
     #[must_use]
     pub const fn capabilities(&self) -> WgpuCapabilities {
-        WgpuCapabilities::forward_only(true)
+        WgpuCapabilities::forward_and_inverse(true)
     }
 
     /// Return the acquired WGPU device.
@@ -140,11 +140,41 @@ impl HilbertWgpuBackend {
         Ok(())
     }
 
-    /// Inverse or adjoint execution is unsupported until the owning Hilbert crate defines it.
-    pub fn execute_inverse(&self) -> WgpuResult<()> {
-        Err(WgpuError::UnsupportedExecution {
-            operation: "inverse",
-        })
+    /// Execute the inverse Hilbert transform: recover the original real signal from its quadrature component.
+    ///
+    /// By the Hilbert inversion theorem H(H(x)) = -I, the original signal is
+    /// x[n] = -H{H{x}[n]} = -H{quadrature[n]}.
+    pub fn execute_inverse(
+        &self,
+        plan: &HilbertWgpuPlan,
+        quadrature: &[f32],
+    ) -> WgpuResult<Vec<f32>> {
+        Self::validate_plan_input(plan, quadrature)?;
+        self.kernel
+            .execute_inverse(self.device.as_ref(), self.queue.as_ref(), quadrature)
+    }
+
+    /// Execute the inverse Hilbert transform with typed storage.
+    pub fn execute_inverse_typed_into<T: HilbertStorage>(
+        &self,
+        plan: &HilbertWgpuPlan,
+        precision: PrecisionProfile,
+        quadrature: &[T],
+        output: &mut [T],
+    ) -> WgpuResult<()> {
+        Self::validate_hilbert_typed_precision::<T>(precision)?;
+        if output.len() != plan.len() {
+            return Err(WgpuError::LengthMismatch {
+                expected: plan.len(),
+                actual: output.len(),
+            });
+        }
+        let represented: Vec<f32> = quadrature.iter().map(|v| v.to_f64() as f32).collect();
+        let computed = self.execute_inverse(plan, &represented)?;
+        for (slot, value) in output.iter_mut().zip(computed.iter().copied()) {
+            *slot = T::from_f64(f64::from(value));
+        }
+        Ok(())
     }
 
     fn validate_plan_input(plan: &HilbertWgpuPlan, input: &[f32]) -> WgpuResult<()> {

@@ -1,5 +1,11 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure VIII phase)
+- [x] [minor] GPU inverse Hilbert transform (`apollo-hilbert-wgpu`): `hilbert_inverse_mask` WGSL entry point (DC/Nyquist zeroed, positive: X[k]=j·Q[k], negative: X[k]=-j·Q[k]); fix `hilbert_inverse_dft` stale self-assign bug; `inverse_mask_pipeline` in kernel; `HilbertGpuKernel::execute_inverse` (3-pass single-encoder); `execute_inverse` + `execute_inverse_typed_into` backend methods; `forward_and_inverse` capability constructor; 3 value-semantic verification tests.
+- [x] [minor] GPU inverse SDFT (`apollo-sdft-wgpu`): `sdft_inverse_bins` WGSL entry point (x[n]=(1/K)·Σ X[b]·exp(+2πi·b·n/K), complex bins as interleaved f32 pairs); split `pipeline` into `forward_pipeline` + `inverse_pipeline`; `SdftGpuKernel::execute_inverse`; `execute_inverse` + `execute_inverse_typed_into` + `validate_plan_bins` backend methods; `forward_and_inverse` capability constructor; 4 value-semantic verification tests.
+- [x] [patch] Fix CZT proptest absolute-tolerance defect: `bluestein_equals_direct_for_arbitrary_parameters` threshold 1e-9 was violated for |w|>1 (chirp amplification). Replace `diff < 1e-9` with `diff < 1e-9 · max(|direct[k]|, 1.0)`. Formal basis: Bluestein relative error ≤ C·log₂(p)·ε_machine ≈ 2.6e-15; 1e-9 relative bound provides ×3.8e5 safety margin.
+
+
 ## Closed in this sprint (Closure VII phase)
 - [x] [patch] Fix README.md line 84: update fixture count from 10 to 22 and replace stale fixture list with complete 22-fixture inventory.
 - [x] [patch] Create CHANGELOG.md with full sprint-by-sprint version history from 0.1.0 through the current unreleased Closure VII increment.

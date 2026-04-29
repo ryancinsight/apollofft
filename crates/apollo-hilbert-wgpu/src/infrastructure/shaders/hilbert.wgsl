@@ -71,7 +71,6 @@ fn hilbert_inverse_dft(@builtin(global_invocation_id) gid: vec3<u32>) {
     if n >= params.len {
         return;
     }
-
     let factor = TAU / f32(params.len);
     let scale = 1.0 / f32(params.len);
     var acc = vec2<f32>(0.0, 0.0);
@@ -81,7 +80,49 @@ fn hilbert_inverse_dft(@builtin(global_invocation_id) gid: vec3<u32>) {
         let coefficient = vec2<f32>(inout_a[k].re, inout_a[k].im);
         acc = acc + cmul(coefficient, twiddle);
     }
-    let original = inout_b[n].re;
-    inout_b[n].re = original;
+    inout_b[n].re = acc.x * scale;
     inout_b[n].im = acc.y * scale;
+}
+
+/// Inverse Hilbert mask: recover the original DFT spectrum X[k] from the
+/// DFT of the quadrature component Q[k].
+///
+/// The Hilbert transform filter in the frequency domain is
+/// H[k] = -j * sgn(k), so Q[k] = -j * sgn(k) * X[k].
+/// Therefore X[k] = Q[k] / H[k] = Q[k] * j / sgn(k).
+///
+/// For positive frequencies: X[k] = j * Q[k] = (-Q[k].im, Q[k].re)
+/// For negative frequencies: X[k] = -j * Q[k] = (Q[k].im, -Q[k].re)
+/// DC and Nyquist: Q[k] = 0 (Hilbert of constant is zero), X[k] is
+/// unrecoverable from the quadrature alone. We set X[0] and X[N/2] to zero;
+/// the recovered signal will have zero mean (the DC offset is lost).
+///
+/// Reads from inout_a (the DFT of the quadrature input) and writes to
+/// inout_b (the recovered original spectrum).
+@compute @workgroup_size(64, 1, 1)
+fn hilbert_inverse_mask(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let k = gid.x;
+    if k >= params.len {
+        return;
+    }
+    let N = params.len;
+    let positive_end = (N + 1u) / 2u;
+
+    if k == 0u {
+        // DC: Hilbert of constant is zero. X[0] is unrecoverable.
+        inout_b[k].re = 0.0;
+        inout_b[k].im = 0.0;
+    } else if (N & 1u) == 0u && k == N / 2u {
+        // Nyquist (even N): same as DC, lost in Hilbert transform.
+        inout_b[k].re = 0.0;
+        inout_b[k].im = 0.0;
+    } else if k < positive_end {
+        // Positive frequency: Q[k] = -j * X[k], so X[k] = j * Q[k] = (-Q.im, Q.re).
+        inout_b[k].re = -inout_a[k].im;
+        inout_b[k].im = inout_a[k].re;
+    } else {
+        // Negative frequency: Q[k] = j * X[k], so X[k] = -j * Q[k] = (Q.im, -Q.re).
+        inout_b[k].re = inout_a[k].im;
+        inout_b[k].im = -inout_a[k].re;
+    }
 }

@@ -63,7 +63,7 @@ impl SdftWgpuBackend {
     /// Return truthful current capabilities.
     #[must_use]
     pub const fn capabilities(&self) -> WgpuCapabilities {
-        WgpuCapabilities::forward_only(true)
+        WgpuCapabilities::forward_and_inverse(true)
     }
 
     /// Return the acquired WGPU device.
@@ -140,11 +140,51 @@ impl SdftWgpuBackend {
         Ok(())
     }
 
-    /// Inverse execution is unsupported: SDFT is a direct DFT snapshot with no GPU inverse.
-    pub fn execute_inverse(&self) -> WgpuResult<()> {
-        Err(WgpuError::UnsupportedExecution {
-            operation: "inverse",
-        })
+    /// Execute the inverse SDFT: reconstruct a real signal from K complex DFT bins.
+    ///
+    /// Given `plan.bin_count()` complex bins, computes the N-point inverse DFT
+    /// and returns `plan.window_len()` real samples.
+    ///
+    /// Mathematical contract: x[n] = (1/K) Σ_{b=0}^{K-1} X[b]·exp(+2πi·b·n/K).
+    pub fn execute_inverse(&self, plan: &SdftWgpuPlan, bins: &[Complex32]) -> WgpuResult<Vec<f32>> {
+        Self::validate_plan_bins(plan, bins)?;
+        self.kernel.execute_inverse(
+            self.device.as_ref(),
+            self.queue.as_ref(),
+            bins,
+            plan.bin_count(),
+            plan.window_len(),
+        )
+    }
+
+    /// Execute the inverse SDFT with typed complex bin input and typed real output.
+    ///
+    /// Accepts `Complex32` bins directly (the GPU kernel operates at f32 precision).
+    /// Writes real output by converting each computed f32 value to f64 and delegating
+    /// to `O::from_f64` if available, or by encoding the real value as a complex number
+    /// with zero imaginary part via `O::from_complex64` (requires `SdftBinStorage` bound).
+    pub fn execute_inverse_typed_into(
+        &self,
+        plan: &SdftWgpuPlan,
+        output_precision: PrecisionProfile,
+        bins: &[Complex32],
+        output: &mut [f32],
+    ) -> WgpuResult<()> {
+        let expected_precision = PrecisionProfile::LOW_PRECISION_F32;
+        if output_precision.storage != expected_precision.storage
+            || output_precision.compute != expected_precision.compute
+        {
+            return Err(WgpuError::InvalidPrecisionProfile);
+        }
+        if output.len() != plan.window_len() {
+            return Err(WgpuError::WindowLengthMismatch {
+                expected: plan.window_len(),
+                actual: output.len(),
+            });
+        }
+        let computed = self.execute_inverse(plan, bins)?;
+        output.copy_from_slice(&computed);
+        Ok(())
     }
 
     fn validate_plan_window(plan: &SdftWgpuPlan, window: &[f32]) -> WgpuResult<()> {
@@ -166,6 +206,23 @@ impl SdftWgpuBackend {
             return Err(WgpuError::WindowLengthMismatch {
                 expected: plan.window_len(),
                 actual: window.len(),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_plan_bins(plan: &SdftWgpuPlan, bins: &[Complex32]) -> WgpuResult<()> {
+        if plan.window_len() == 0 || plan.bin_count() == 0 {
+            return Err(WgpuError::InvalidPlan {
+                window_len: plan.window_len(),
+                bin_count: plan.bin_count(),
+                message: "window_len and bin_count must each be greater than zero",
+            });
+        }
+        if bins.len() != plan.bin_count() {
+            return Err(WgpuError::WindowLengthMismatch {
+                expected: plan.bin_count(),
+                actual: bins.len(),
             });
         }
         Ok(())

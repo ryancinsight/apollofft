@@ -19,6 +19,19 @@ mod tests {
     }
 
     #[test]
+    fn capabilities_reflect_forward_and_inverse_surface() {
+        let capabilities = WgpuCapabilities::forward_and_inverse(true);
+        assert!(capabilities.device_available);
+        assert!(capabilities.supports_forward);
+        assert!(capabilities.supports_inverse);
+        assert!(capabilities.supports_mixed_precision);
+        assert_eq!(
+            capabilities.default_precision_profile,
+            apollo_fft::PrecisionProfile::LOW_PRECISION_F32
+        );
+    }
+
+    #[test]
     fn plan_preserves_logical_length() {
         let plan = HilbertWgpuPlan::new(64);
         assert_eq!(plan.len(), 64);
@@ -38,14 +51,14 @@ mod tests {
     }
 
     #[test]
-    fn backend_reports_forward_only_when_device_exists() {
+    fn backend_reports_forward_and_inverse_when_device_exists() {
         let Ok(backend) = HilbertWgpuBackend::try_default() else {
             return;
         };
         let capabilities = backend.capabilities();
         assert!(capabilities.device_available);
         assert!(capabilities.supports_forward);
-        assert!(!capabilities.supports_inverse);
+        assert!(capabilities.supports_inverse);
     }
 
     #[test]
@@ -157,6 +170,135 @@ mod tests {
         for (actual, expected) in typed_fwd.iter().zip(expected_fwd.iter()) {
             let expected_f16 = f16::from_f32(*expected);
             assert_eq!(actual.to_bits(), expected_f16.to_bits());
+        }
+    }
+
+    #[test]
+    fn inverse_roundtrip_recovers_zero_mean_signal_when_device_exists() {
+        let Ok(backend) = HilbertWgpuBackend::try_default() else {
+            return;
+        };
+        let original = vec![1.0_f32, -2.0, 0.5, 2.25, -4.0, 1.5, 0.0, -0.75];
+        // The Hilbert transform of a constant is zero, so the DC component is
+        // irretrievably lost in the forward path. The inverse recovers the
+        // zero-mean version of the original signal.
+        let plan = backend.plan(original.len());
+        let quadrature = backend
+            .execute_forward(&plan, &original)
+            .expect("forward hilbert");
+        let recovered = backend
+            .execute_inverse(&plan, &quadrature)
+            .expect("inverse hilbert");
+        assert_eq!(recovered.len(), original.len());
+        // The Hilbert transform loses both DC and Nyquist (even N):
+        // H{k=0} = 0 (DC), H{k=N/2} = 0 (Nyquist). The inverse recovers
+        // the original signal minus DC and Nyquist contributions.
+        // DC contribution: (sum of original) / N
+        // Nyquist contribution: X[N/2] * (-1)^n / N where X[N/2] is the
+        // DFT Nyquist bin (real for real signals).
+        let n = original.len();
+        let dc: f64 = original.iter().map(|&x| f64::from(x)).sum::<f64>() / n as f64;
+        // Compute X[N/2] via DFT
+        let tau = std::f64::consts::TAU;
+        let mut nyquist_re = 0.0_f64;
+        for j in 0..n {
+            let angle = -tau * (n as f64) / 2.0 * (j as f64) / (n as f64);
+            nyquist_re += f64::from(original[j]) * angle.cos();
+        }
+        let nyquist_contrib = |idx: usize| -> f64 {
+            if n % 2 == 0 {
+                nyquist_re * if idx % 2 == 0 { 1.0 } else { -1.0 } / n as f64
+            } else {
+                0.0 // No Nyquist bin for odd N
+            }
+        };
+        let expected: Vec<f64> = original
+            .iter()
+            .enumerate()
+            .map(|(idx, &x)| f64::from(x) - dc - nyquist_contrib(idx))
+            .collect();
+        const TOL: f64 = 5.0e-3;
+        for (index, (actual, exp)) in recovered.iter().zip(expected.iter()).enumerate() {
+            let error = (f64::from(*actual) - *exp).abs();
+            assert!(
+                error < TOL,
+                "roundtrip mismatch at index {index}: actual={actual}, expected={exp}, error={error}"
+            );
+        }
+    }
+
+    #[test]
+    fn inverse_matches_cpu_frequency_domain_reference_when_device_exists() {
+        let Ok(backend) = HilbertWgpuBackend::try_default() else {
+            return;
+        };
+        let original_f32 = [1.0_f32, -2.0, 0.5, 2.25, -4.0, 1.5, 0.0, -0.75];
+        let original_f64: Vec<f64> = original_f32.iter().map(|&x| f64::from(x)).collect();
+        let plan = backend.plan(original_f32.len());
+
+        // Compute CPU Hilbert transform to get quadrature
+        let cpu_plan = HilbertPlan::new(original_f32.len()).expect("cpu plan");
+        let cpu_quadrature = cpu_plan
+            .transform(&original_f64)
+            .expect("cpu forward hilbert");
+
+        // GPU inverse from the CPU quadrature (promoted to f32)
+        let gpu_quadrature_f32: Vec<f32> = cpu_quadrature.iter().map(|&x| x as f32).collect();
+        let gpu_recovered = backend
+            .execute_inverse(&plan, &gpu_quadrature_f32)
+            .expect("inverse hilbert");
+
+        // CPU reference: frequency-domain inverse Hilbert.
+        // Q[k] = -j * sgn(k) * X[k], so X[k] = Q[k] * j / sgn(k).
+        // Positive: X[k] = j * Q[k]; Negative: X[k] = -j * Q[k];
+        // DC and Nyquist: unrecoverable (zero).
+        let n = cpu_quadrature.len();
+        let positive_end = (n + 1) / 2;
+        let tau = std::f64::consts::TAU;
+        // DFT of quadrature
+        let mut q_dft = vec![num_complex::Complex64::new(0.0, 0.0); n];
+        for k in 0..n {
+            let mut re = 0.0_f64;
+            let mut im = 0.0_f64;
+            for j in 0..n {
+                let angle = -tau * (k as f64) * (j as f64) / (n as f64);
+                re += cpu_quadrature[j] * angle.cos();
+                im += cpu_quadrature[j] * angle.sin();
+            }
+            q_dft[k] = num_complex::Complex64::new(re, im);
+        }
+        // Inverse mask: X[k] = j * Q[k] for positive, -j * Q[k] for negative
+        let mut x_dft = vec![num_complex::Complex64::new(0.0, 0.0); n];
+        for k in 0..n {
+            if k == 0 || (n % 2 == 0 && k == n / 2) {
+                x_dft[k] = num_complex::Complex64::new(0.0, 0.0); // DC/Nyquist lost
+            } else if k < positive_end {
+                // Q[k] = -j * X[k], so X[k] = j * Q[k] = (-Q.im, Q.re)
+                x_dft[k] = num_complex::Complex64::new(-q_dft[k].im, q_dft[k].re);
+            } else {
+                // Q[k] = j * X[k], so X[k] = -j * Q[k] = (Q.im, -Q.re)
+                x_dft[k] = num_complex::Complex64::new(q_dft[k].im, -q_dft[k].re);
+            }
+        }
+        // IDFT of recovered X
+        let mut cpu_recovered = vec![0.0_f64; n];
+        for j in 0..n {
+            let mut re = 0.0_f64;
+            for k in 0..n {
+                let angle = tau * (k as f64) * (j as f64) / (n as f64);
+                re += x_dft[k].re * angle.cos() - x_dft[k].im * angle.sin();
+            }
+            cpu_recovered[j] = re / (n as f64);
+        }
+
+        for (index, (actual, expected)) in
+            gpu_recovered.iter().zip(cpu_recovered.iter()).enumerate()
+        {
+            let error = (f64::from(*actual) - *expected).abs();
+            assert!(
+                error < 5.0e-3,
+                "inverse mismatch at index {index}: gpu={actual}, cpu={expected}, error={error}"
+            );
         }
     }
 

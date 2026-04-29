@@ -2,10 +2,9 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::{SdftWgpuBackend, SdftWgpuPlan, WgpuCapabilities, WgpuError};
     use apollo_fft::{f16, PrecisionProfile};
     use apollo_sdft::SdftPlan;
-
-    use crate::{SdftWgpuBackend, SdftWgpuPlan, WgpuCapabilities, WgpuError};
 
     #[test]
     fn capabilities_reflect_forward_only_surface() {
@@ -43,14 +42,27 @@ mod tests {
     }
 
     #[test]
-    fn backend_reports_forward_only_when_device_exists() {
+    fn backend_reports_forward_and_inverse_when_device_exists() {
         let Ok(backend) = SdftWgpuBackend::try_default() else {
             return;
         };
         let capabilities = backend.capabilities();
         assert!(capabilities.device_available);
         assert!(capabilities.supports_forward);
-        assert!(!capabilities.supports_inverse);
+        assert!(capabilities.supports_inverse);
+    }
+
+    #[test]
+    fn capabilities_reflect_forward_and_inverse_surface() {
+        let capabilities = WgpuCapabilities::forward_and_inverse(true);
+        assert!(capabilities.device_available);
+        assert!(capabilities.supports_forward);
+        assert!(capabilities.supports_inverse);
+        assert!(capabilities.supports_mixed_precision);
+        assert_eq!(
+            capabilities.default_precision_profile,
+            apollo_fft::PrecisionProfile::LOW_PRECISION_F32
+        );
     }
 
     #[test]
@@ -60,15 +72,12 @@ mod tests {
         };
         let window_f32: [f32; 8] = [1.0, 0.5, -0.5, -1.0, 0.5, 1.0, -0.25, 0.75];
         let window_f64: Vec<f64> = window_f32.iter().map(|&x| f64::from(x)).collect();
-
         let plan = backend.plan(window_f32.len(), 4);
         let gpu = backend
             .execute_forward(&plan, &window_f32)
             .expect("wgpu sdft forward execution");
-
         let cpu_plan = SdftPlan::new(8, 4).expect("cpu sdft plan");
         let cpu = cpu_plan.direct_bins(&window_f64).expect("cpu direct bins");
-
         assert_eq!(gpu.len(), cpu.len(), "output bin count must match");
         for (index, (actual, expected)) in gpu.iter().zip(cpu.iter()).enumerate() {
             let real_error = (f64::from(actual.re) - expected.re).abs();
@@ -76,7 +85,10 @@ mod tests {
             assert!(
                 real_error < 1.0e-3 && imag_error < 1.0e-3,
                 "sdft mismatch at bin {index}: gpu=({},{}) cpu=({},{}) re_err={real_error} im_err={imag_error}",
-                actual.re, actual.im, expected.re, expected.im,
+                actual.re,
+                actual.im,
+                expected.re,
+                expected.im,
             );
         }
     }
@@ -86,8 +98,6 @@ mod tests {
         let Ok(backend) = SdftWgpuBackend::try_default() else {
             return;
         };
-
-        // Zero window_len must fail with InvalidPlan.
         let empty_err = backend
             .execute_forward(&SdftWgpuPlan::new(0, 4), &[])
             .expect_err("zero window_len must fail");
@@ -99,8 +109,6 @@ mod tests {
                 message: "window_len and bin_count must each be greater than zero",
             }
         );
-
-        // Window length mismatch must fail with WindowLengthMismatch.
         let mismatch_err = backend
             .execute_forward(&SdftWgpuPlan::new(8, 4), &[0.0_f32; 4])
             .expect_err("window length mismatch must fail");
@@ -162,7 +170,6 @@ mod tests {
         let window_f16: Vec<f16> = vec![f16::from_f32(1.0); 8];
         let mut out: Vec<[f16; 2]> = vec![[f16::from_f32(0.0), f16::from_f32(0.0)]; 4];
         let plan = backend.plan(window_f16.len(), 4);
-        // f16 input requires MIXED_PRECISION_F16_F32; passing LOW_PRECISION_F32 must fail.
         let error = backend
             .execute_forward_typed_into(
                 &plan,
@@ -173,5 +180,92 @@ mod tests {
             )
             .expect_err("profile mismatch must fail");
         assert_eq!(error, WgpuError::InvalidPrecisionProfile);
+    }
+
+    // --- Inverse tests ---
+
+    #[test]
+    fn inverse_roundtrip_matches_original_signal_when_device_exists() {
+        let Ok(backend) = SdftWgpuBackend::try_default() else {
+            return;
+        };
+        let original: [f32; 8] = [1.0, 0.5, -0.5, -1.0, 0.5, 1.0, -0.25, 0.75];
+        let plan = backend.plan(original.len(), original.len());
+        let bins = backend.execute_forward(&plan, &original).expect("forward");
+        let reconstructed = backend.execute_inverse(&plan, &bins).expect("inverse");
+        assert_eq!(reconstructed.len(), original.len());
+        for (index, (actual, expected)) in reconstructed.iter().zip(original.iter()).enumerate() {
+            let error = (f64::from(*actual) - f64::from(*expected)).abs();
+            assert!(
+                error < 5.0e-4,
+                "roundtrip mismatch at index {index}: actual={actual}, expected={expected}, error={error}"
+            );
+        }
+    }
+
+    #[test]
+    fn inverse_matches_cpu_reference_when_device_exists() {
+        let Ok(backend) = SdftWgpuBackend::try_default() else {
+            return;
+        };
+        // Use a 2-point signal where the DFT ordering is trivial:
+        // Forward: X[0] = x[0]+x[1], X[1] = x[0]-x[1]
+        // Inverse with K=N=2: x[n] = (1/2) * (X[0] + X[1]*exp(+2*pi*i*n/2))
+        //   n=0: x[0] = (X[0] + X[1])/2
+        //   n=1: x[1] = (X[0] - X[1])/2
+        let original: [f32; 2] = [3.0, 1.0];
+        let plan = backend.plan(original.len(), original.len());
+        let bins = backend.execute_forward(&plan, &original).expect("forward");
+
+        // Verify forward bins match the analytical 2-point DFT.
+        // X[0] = x[0] + x[1] = 4.0
+        // X[1] = x[0] - x[1] = 2.0
+        assert!(
+            (bins[0].re - 4.0_f32).abs() < 1.0e-3 && bins[0].im.abs() < 1.0e-3,
+            "DC bin mismatch: re={} im={}",
+            bins[0].re,
+            bins[0].im,
+        );
+        assert!(
+            (bins[1].re - 2.0_f32).abs() < 1.0e-3 && bins[1].im.abs() < 1.0e-3,
+            "Nyquist bin mismatch: re={} im={}",
+            bins[1].re,
+            bins[1].im,
+        );
+
+        // Compute inverse on GPU and verify against analytical inverse.
+        let gpu_inverse = backend.execute_inverse(&plan, &bins).expect("inverse");
+
+        // Analytical inverse: x[0] = (4+2)/2 = 3, x[1] = (4-2)/2 = 1
+        assert!(
+            (gpu_inverse[0] - 3.0_f32).abs() < 5.0e-4,
+            "inverse[0] mismatch: actual={}",
+            gpu_inverse[0],
+        );
+        assert!(
+            (gpu_inverse[1] - 1.0_f32).abs() < 5.0e-4,
+            "inverse[1] mismatch: actual={}",
+            gpu_inverse[1],
+        );
+    }
+
+    #[test]
+    fn inverse_rejects_bin_count_mismatch() {
+        let Ok(backend) = SdftWgpuBackend::try_default() else {
+            return;
+        };
+        use num_complex::Complex32;
+        let bins: Vec<Complex32> = vec![Complex32::new(0.0, 0.0); 4];
+        let plan = backend.plan(8, 8);
+        let error = backend
+            .execute_inverse(&plan, &bins)
+            .expect_err("bin count mismatch must fail");
+        assert_eq!(
+            error,
+            WgpuError::WindowLengthMismatch {
+                expected: 8,
+                actual: 4,
+            }
+        );
     }
 }

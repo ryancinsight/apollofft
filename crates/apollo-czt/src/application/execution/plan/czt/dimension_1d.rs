@@ -543,8 +543,26 @@ mod proptest_suite {
     proptest! {
         /// Bluestein (1970) convolution equivalence: for any n, m, a, w the
         /// fast path (FFT-based Bluestein convolution) and the direct O(nm)
-        /// evaluation must agree to within O(p·ε_machine) ≈ 1e-9, where p is
-        /// the Bluestein convolution length and ε_machine ≈ 2.2e-16.
+        /// evaluation must agree to within a relative tolerance of 1e-9.
+        ///
+        /// # Mathematical justification
+        ///
+        /// The Bluestein algorithm decomposes the CZT into three FFTs of
+        /// length p = 2^⌈log₂(n+m-1)⌉.  Standard FFT rounding-error analysis
+        /// (Higham, "Accuracy and Stability", §3.10) gives relative error
+        ///
+        ///   |fast[k] - exact[k]| / |exact[k]| ≤ C · log₂(p) · ε_machine
+        ///
+        /// where C is a small implementation constant and ε_machine = 2.2e-16.
+        /// For p ≤ 16 (n, m ≤ 8): C · log₂(16) · ε_machine ≈ 12 · 2.2e-16 ≈
+        /// 2.6e-15.  The 1e-9 relative threshold provides a ×3.8e5 safety
+        /// margin over that bound.
+        ///
+        /// An absolute threshold is inappropriate when |w| > 1: the chirp
+        /// factors w^(n²/2) amplify output magnitudes by up to |w|^((N-1)²/2),
+        /// so a fixed 1e-9 absolute tolerance is violated at 3×10⁻⁹ relative
+        /// error when |w| ≈ 1.28 and |a| = 0.5.  Scaling by max(|direct[k]|, 1)
+        /// restores the invariant for all spiral parameters.
         #[test]
         fn bluestein_equals_direct_for_arbitrary_parameters(
             n in 1_usize..=8,
@@ -567,9 +585,16 @@ mod proptest_suite {
             prop_assert_eq!(fast.len(), direct.len());
             for k in 0..m {
                 let diff = (fast[k] - direct[k]).norm();
+                // Scale tolerance by max(|direct[k]|, 1.0) to convert the
+                // absolute threshold to a relative one.  When the output is
+                // amplified by chirp factors (|w|>1), both fast and direct
+                // accumulate proportional floating-point error, so the
+                // meaningful invariant is a relative error bound.
+                let scale = direct[k].norm().max(1.0_f64);
                 prop_assert!(
-                    diff < 1e-9,
-                    "k={k}: |fast - direct| = {diff} >= 1e-9 (a={a}, w={w})"
+                    diff < 1e-9 * scale,
+                    "k={k}: |fast - direct| / |direct| = {} >= 1e-9 (a={a}, w={w}, diff={diff}, scale={scale})",
+                    diff / scale,
                 );
             }
         }

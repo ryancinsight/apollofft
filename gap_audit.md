@@ -4,7 +4,7 @@
 
 - `GpuFft3dF16Native` Bluestein path on production hardware with non-power-of-two sizes: current test passes on dev hardware; production validation on adapters that expose `wgpu::Features::SHADER_F16` is pending.
 - Criterion buffer-reuse bench results on representative GPU hardware: allocation-vs-reuse speedup ratios for 1D and 3D NUFFT fast paths are not yet recorded; requires a GPU runner.
-- WGPU inverse operations: `apollo-czt-wgpu`, `apollo-hilbert-wgpu`, `apollo-mellin-wgpu`, `apollo-radon-wgpu`, `apollo-sdft-wgpu`, and `apollo-stft-wgpu` all return `UnsupportedExecution` from `execute_inverse`. CPU inverse paths are implemented; GPU inverse requires a separate shader per transform and is deferred pending demand.
+- WGPU inverse operations: `apollo-czt-wgpu`, `apollo-mellin-wgpu`, `apollo-radon-wgpu`, and `apollo-stft-wgpu` return `UnsupportedExecution` from `execute_inverse`. CPU inverse paths are implemented; GPU inverse requires a separate shader per transform and is deferred pending demand. (`apollo-hilbert-wgpu` and `apollo-sdft-wgpu` inverse GPU paths are now implemented.)
 
 Note: NTT-WGPU floating mixed precision is an architectural design contract, not a gap.
 Residue-field arithmetic requires exact modular integers; the WGPU surface uses exact `u32`
@@ -14,6 +14,13 @@ by design and will not be implemented.
 ## Closed Gaps
 
 All items below are implemented, tested, and verified in completed sprints.
+
+### Closure VIII Phase
+
+- GPU inverse Hilbert gap (`apollo-hilbert-wgpu`): implemented `hilbert_inverse_mask` WGSL entry point. Algorithm: H(H(x))=-x (Bracewell 1965), so x[n]=-H{H{x}[n]}. In the frequency domain: Q[k] = H[k]·X[k] where H[k] = -j·sgn(k), so X[k] = Q[k]·j/sgn(k). DC (k=0) and Nyquist (even N: k=N/2) are unrecoverable (Hilbert of constant is zero). Implemented as: DC/Nyquist → zero; positive bins → X[k]=(-Q[k].im, Q[k].re); negative bins → X[k]=(Q[k].im, -Q[k].re). Separate `spectrum_buffer` and `recovered_buffer` prevent in-place data races. Fixed pre-existing bug in `hilbert_inverse_dft`: stale `inout_b[n].re = original` self-assign replaced with correct `acc.x * scale`. Single-encoder 3-pass execution. 3 value-semantic tests (capabilities, roundtrip DC+Nyquist loss contract, CPU frequency-domain reference).
+- GPU inverse SDFT gap (`apollo-sdft-wgpu`): implemented `sdft_inverse_bins` WGSL entry point. Mathematical contract: x[n] = (1/K)·Σ_{b=0}^{K-1} X[b]·exp(+2πi·b·n/K). Complex bins packed as interleaved f32 pairs in binding 0 (`window_data[2b]`=Re, `window_data[2b+1]`=Im). Split `pipeline` field into `forward_pipeline`+`inverse_pipeline`. 4 value-semantic tests (capabilities, full-K IDFT roundtrip tol 5e-4, analytical 2-point DFT/IDFT CPU reference, bin-count mismatch rejection).
+- CZT proptest absolute-tolerance defect: `bluestein_equals_direct_for_arbitrary_parameters` used fixed 1e-9 absolute threshold. Violated when |w|>1 amplifies output magnitude by |w|^((N-1)²/2) (observed: error 3e-9 for |w|≈1.28, N=M=7, output magnitude ≂42,900). Fix: threshold changed to `1e-9·max(|direct[k]|,1.0)` (relative bound). Formal basis: Bluestein relative error ≤ C·log₂(p)·ε_machine ≈12·2.2e-16≈2.6e-15 (Higham §3.10); 1e-9 relative threshold provides ×3.8e5 safety margin.
+
 
 ### Closure VII Phase
 

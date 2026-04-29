@@ -1,5 +1,23 @@
 # Apollo Checklist
 
+## Closure VIII phase (GPU inverse Hilbert and SDFT, CZT proptest tolerance fix)
+- [x] Add `WgpuCapabilities::forward_and_inverse(device_available)` constructor to `apollo-hilbert-wgpu/src/domain/capabilities.rs`.
+- [x] Add `hilbert_inverse_mask` WGSL entry point to `apollo-hilbert-wgpu/src/infrastructure/shaders/hilbert.wgsl`: reads DFT(quadrature) from `inout_a`, writes recovered spectrum `X[k]` to `inout_b`. DC (k=0) and Nyquist (even-N: k=N/2) bins are set to zero (lost in forward Hilbert); positive bins: X[k] = j·Q[k]; negative: X[k] = -j·Q[k]. Fix pre-existing bug in `hilbert_inverse_dft`: was writing `inout_b[n].re = original` (stale self-assign) and `inout_b[n].im = acc.y * scale` (missing real accumulation); corrected to `re = acc.x * scale`, `im = acc.y * scale`.
+- [x] Add `inverse_mask_pipeline` field to `HilbertGpuKernel`; compile from `hilbert_inverse_mask` entry point in `apollo-hilbert-wgpu/src/infrastructure/kernel.rs`.
+- [x] Add `HilbertGpuKernel::execute_inverse` method: 3 sequential passes in one encoder (DFT of quadrature, inverse mask, IDFT of recovered spectrum), with separate `spectrum_buffer` and `recovered_buffer` to avoid in-place data races. Single `queue.submit` + `device.poll(Wait)`. Returns `Vec<f32>` real samples.
+- [x] Add `HilbertWgpuBackend::execute_inverse(plan, quadrature)` and `execute_inverse_typed_into(plan, precision, quadrature, output)` methods to `apollo-hilbert-wgpu/src/infrastructure/device.rs`; update `capabilities()` to report `forward_and_inverse`.
+- [x] Add 3 verification tests to `apollo-hilbert-wgpu/src/verification.rs`: `capabilities_reflect_forward_and_inverse_surface`, `inverse_roundtrip_recovers_zero_mean_signal_when_device_exists` (validates DC+Nyquist loss contract with analytically derived expected values), `inverse_matches_cpu_frequency_domain_reference_when_device_exists` (CPU O(N²) reference for inverse mask).
+- [x] Add `WgpuCapabilities::forward_and_inverse(device_available)` constructor to `apollo-sdft-wgpu/src/domain/capabilities.rs`.
+- [x] Add `sdft_inverse_bins` WGSL entry point to `apollo-sdft-wgpu/src/infrastructure/shaders/sdft.wgsl`: `x[n] = (1/K)·Σ_{b=0}^{K-1} X[b]·exp(+2πi·b·n/K)`; reads complex bins as interleaved f32 pairs from binding 0 (`window_data[2b]` = Re, `window_data[2b+1]` = Im); writes real signal to `output_data[n].re`.
+- [x] Add `forward_pipeline` + `inverse_pipeline` fields to `SdftGpuKernel`; update `execute` to use `forward_pipeline`; add `SdftGpuKernel::execute_inverse` method in `apollo-sdft-wgpu/src/infrastructure/kernel.rs`.
+- [x] Add `SdftWgpuBackend::execute_inverse(plan, bins)`, `execute_inverse_typed_into(plan, precision, bins, output)`, and `validate_plan_bins(plan, bins)` methods to `apollo-sdft-wgpu/src/infrastructure/device.rs`; update `capabilities()` to report `forward_and_inverse`.
+- [x] Add 4 verification tests to `apollo-sdft-wgpu/src/verification.rs`: `capabilities_reflect_forward_and_inverse_surface`, `inverse_roundtrip_matches_original_signal_when_device_exists` (full K=N IDFT roundtrip, tol 5e-4), `inverse_matches_cpu_reference_when_device_exists` (analytical 2-point DFT/IDFT verification), `inverse_rejects_bin_count_mismatch`.
+- [x] Fix pre-existing CZT proptest tolerance defect in `apollo-czt`: `bluestein_equals_direct_for_arbitrary_parameters` used absolute threshold 1e-9, violated when `|w|>1` amplifies output magnitude (observed error 3e-9 for |w|≈1.28, N=M=7). Fix: replace `diff < 1e-9` with `diff < 1e-9 * max(|direct[k]|, 1.0)` (relative bound). Formal justification: Bluestein relative error ≤ C·log₂(p)·ε_machine ≈ 2.6e-15; 1e-9 relative threshold provides ×3.8e5 margin. Absolute threshold fails for large outputs from chirp amplification.
+- [x] Verify `cargo check --workspace --all-targets` clean.
+- [x] Verify `cargo clippy --workspace --all-targets -- -D warnings` zero warnings.
+- [x] Verify `cargo test --workspace --all-targets` zero failures (39 test suites).
+
+
 ## Closure VII phase (single-submission FrFT GPU, 6 new fixtures, 4 proptest crates, docs)
 - [x] Update README.md line 84: fixture count 10 → 22 with complete fixture list.
 - [x] Create CHANGELOG.md with version history from 0.1.0 to Unreleased Closure VII.

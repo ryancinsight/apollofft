@@ -1,7 +1,10 @@
-//! GPU execution for direct SDFT bin computation.
+//! GPU execution for direct SDFT bin computation (forward and inverse).
 //!
-//! X[b] = sum_{n=0}^{N-1} x[n] * exp(-2*pi*i*b*n/N) for b = 0..K.
+//! Forward: X[b] = sum_{n=0}^{N-1} x[n] * exp(-2*pi*i*b*n/N) for b = 0..K.
 //! Matches SdftPlan::direct_bins on the CPU.
+//!
+//! Inverse: x[n] = (1/K) * sum_{b=0}^{K-1} X[b] * exp(+2*pi*i*b*n/K) for n = 0..N.
+//! Reconstructs the real signal from K complex DFT bins.
 
 use std::sync::mpsc;
 
@@ -33,7 +36,8 @@ struct SdftParams {
 pub struct SdftGpuKernel {
     bind_group_layout: wgpu::BindGroupLayout,
     params_buffer: wgpu::Buffer,
-    pipeline: wgpu::ComputePipeline,
+    forward_pipeline: wgpu::ComputePipeline,
+    inverse_pipeline: wgpu::ComputePipeline,
 }
 
 impl SdftGpuKernel {
@@ -57,11 +61,20 @@ impl SdftGpuKernel {
             bind_group_layouts: &[&bind_group_layout],
             push_constant_ranges: &[],
         });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("apollo-sdft-wgpu pipeline"),
+        let forward_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("apollo-sdft-wgpu forward pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader,
             entry_point: Some("sdft_direct_bins"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        let inverse_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("apollo-sdft-wgpu inverse pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("sdft_inverse_bins"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         });
@@ -77,7 +90,8 @@ impl SdftGpuKernel {
         Self {
             bind_group_layout,
             params_buffer,
-            pipeline,
+            forward_pipeline,
+            inverse_pipeline,
         }
     }
 
@@ -144,7 +158,7 @@ impl SdftGpuKernel {
                 label: Some("apollo-sdft-wgpu direct bins pass"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(&self.forward_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(dispatch_count(bin_count as u32), 1, 1);
         }
@@ -181,6 +195,128 @@ impl SdftGpuKernel {
             let pods: &[ComplexPod] = bytemuck::cast_slice(&mapped);
             pods.iter().map(|v| Complex32::new(v.re, v.im)).collect()
         };
+        staging.unmap();
+        Ok(output)
+    }
+
+    /// Execute the inverse SDFT: reconstruct real signal from complex bins.
+    ///
+    /// Input `bins` has `bin_count` complex values (interleaved as flat f32 pairs).
+    /// Output has `window_len` real values extracted from the real part of each ComplexPod.
+    pub fn execute_inverse(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        bins: &[Complex32],
+        bin_count: usize,
+        window_len: usize,
+    ) -> WgpuResult<Vec<f32>> {
+        // Pack complex bins as interleaved f32 pairs for the read-only binding 0.
+        let flat_bins: Vec<f32> = bins.iter().flat_map(|c| [c.re, c.im]).collect();
+
+        let input_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("apollo-sdft-wgpu inverse input"),
+            contents: bytemuck::cast_slice(&flat_bins),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-sdft-wgpu inverse output"),
+            size: (window_len * std::mem::size_of::<ComplexPod>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-sdft-wgpu inverse staging"),
+            size: (window_len * std::mem::size_of::<ComplexPod>()) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        queue.write_buffer(
+            &self.params_buffer,
+            0,
+            bytemuck::bytes_of(&SdftParams {
+                window_len: window_len as u32,
+                bin_count: bin_count as u32,
+                _padding: [0; 2],
+            }),
+        );
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("apollo-sdft-wgpu inverse bind group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: input_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: output_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("apollo-sdft-wgpu inverse encoder"),
+        });
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollo-sdft-wgpu inverse bins pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.inverse_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(dispatch_count(window_len as u32), 1, 1);
+        }
+
+        encoder.copy_buffer_to_buffer(
+            &output_buffer,
+            0,
+            &staging,
+            0,
+            (window_len * std::mem::size_of::<ComplexPod>()) as u64,
+        );
+
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = staging.slice(..);
+        let (sender, receiver) = mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+
+        let _ = device.poll(wgpu::PollType::Wait);
+
+        match receiver.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                return Err(WgpuError::BufferMapFailed {
+                    message: error.to_string(),
+                })
+            }
+            Err(error) => {
+                return Err(WgpuError::BufferMapFailed {
+                    message: error.to_string(),
+                })
+            }
+        }
+
+        let output: Vec<f32> = {
+            let mapped = slice.get_mapped_range();
+            let pods: &[ComplexPod] = bytemuck::cast_slice(&mapped);
+            pods.iter().map(|v| v.re).collect()
+        };
+
         staging.unmap();
         Ok(output)
     }
