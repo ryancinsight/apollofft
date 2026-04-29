@@ -26,6 +26,12 @@ apollo-wavelet = { path = "../apollo-wavelet" }
 apollo-fwht = { path = "../apollo-fwht" }
 apollo-qft = { path = "../apollo-qft" }
 apollo-gft = { path = "../apollo-gft" }
+apollo-hilbert = { path = "../apollo-hilbert" }
+apollo-mellin = { path = "../apollo-mellin" }
+apollo-radon = { path = "../apollo-radon" }
+apollo-sft = { path = "../apollo-sft" }
+apollo-sht = { path = "../apollo-sht" }
+apollo-stft = { path = "../apollo-stft" }
 nalgebra = "0.33"
 ndarray = { version = "0.16", features = ["rayon"] }
 num-complex = "0.4"

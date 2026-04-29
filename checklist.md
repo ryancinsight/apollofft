@@ -1,5 +1,20 @@
 # Apollo Checklist
 
+## Closure VII phase (single-submission FrFT GPU, 6 new fixtures, 4 proptest crates, docs)
+- [x] Update README.md line 84: fixture count 10 → 22 with complete fixture list.
+- [x] Create CHANGELOG.md with version history from 0.1.0 to Unreleased Closure VII.
+- [x] Delete `design_history_file/backlog.md`, `design_history_file/checklist.md`, `design_history_file/gap_audit.md` (stale root-artifact copies).
+- [x] Refactor `apollo-frft-wgpu/src/infrastructure/unitary_kernel.rs`: single encoder + 3 sequential compute passes + copy + 1 submit + 2 polls; update doc comment; remove per-step encoder loop.
+- [x] Add `apollo-sft`, `apollo-sht`, `apollo-stft`, `apollo-hilbert`, `apollo-mellin`, `apollo-radon` to `apollo-validation/Cargo.toml` dependencies.
+- [x] Add 6 fixture imports and 6 fixture functions to `apollo-validation/src/application/suite.rs`; add Array2 to ndarray import; register fixtures in `run_published_reference_suite`; update count assertions 22 → 28.
+- [x] Add proptest block to `apollo-czt` plan tests: Bluestein-vs-direct, spiral-collapse, linearity.
+- [x] Add proptest block to `apollo-frft` unitary.rs tests: roundtrip, additivity, linearity.
+- [x] Add proptest block to `apollo-nufft` plan tests: DC invariant, fast-tracks-exact, linearity.
+- [x] Add proptest block to `apollo-sft` transform tests: K-sparse roundtrip, Parseval top-K, retained = DFT.
+- [x] Verify `cargo check --workspace --all-targets` clean.
+- [x] Verify `cargo clippy --workspace --all-targets -- -D warnings` zero warnings.
+- [x] Verify `cargo test --workspace --all-targets` zero failures.
+
 ## Closure VI phase (workspace unblock, O(N log N) NTT WGPU, expanded fixtures, cleanup)
 - [x] Fix `apollo-fft/Cargo.toml`: `name = "apollo"` → `name = "apollo-fft"` (workspace-blocking patch).
 - [x] Fix `apollo-fft-wgpu/Cargo.toml`: dep key `apollo` → `apollo-fft` (workspace-blocking patch).

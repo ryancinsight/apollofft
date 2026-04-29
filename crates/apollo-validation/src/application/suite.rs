@@ -25,16 +25,22 @@ use apollo_fft::{
 use apollo_frft::UnitaryFrftPlan;
 use apollo_fwht::FwhtPlan;
 use apollo_gft::GftPlan;
+use apollo_hilbert::HilbertPlan;
+use apollo_mellin::MellinPlan;
 use apollo_ntt::{intt, ntt, NttPlan, DEFAULT_MODULUS};
 use apollo_nufft::{
     nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type1_3d_fast, nufft_type2_1d,
     nufft_type2_1d_fast, UniformDomain1D, UniformGrid3D, DEFAULT_NUFFT_KERNEL_WIDTH,
 };
 use apollo_qft::qft as qft_transform;
+use apollo_radon::RadonPlan;
 use apollo_sdft::SdftPlan;
+use apollo_sft::SparseFftPlan;
+use apollo_sht::ShtPlan;
+use apollo_stft::StftPlan;
 use apollo_wavelet::{DiscreteWavelet, DwtPlan};
 use nalgebra::DMatrix;
-use ndarray::{Array1, Array3};
+use ndarray::{Array1, Array2, Array3};
 use num_complex::{Complex32, Complex64};
 use std::error::Error;
 use std::path::Path;
@@ -441,6 +447,12 @@ pub fn run_published_reference_suite() -> SuiteResult<PublishedReferenceReport> 
         sdft_bin_zero_unit_impulse_fixture()?,
         ntt_n16_impulse_fixture()?,
         ntt_n16_polynomial_product_fixture()?,
+        sft_one_sparse_alternating_tone_fixture()?,
+        sht_monopole_y00_coefficient_fixture()?,
+        stft_rectangular_window_impulse_frame_fixture()?,
+        hilbert_cosine_to_sine_fixture()?,
+        mellin_constant_function_first_moment_fixture()?,
+        radon_theta0_column_impulse_projection_fixture()?,
     ];
     let passed = fixtures.iter().all(|fixture| fixture.passed);
     Ok(PublishedReferenceReport {
@@ -1284,6 +1296,168 @@ fn sdft_bin_zero_unit_impulse_fixture() -> SuiteResult<PublishedFixtureReport> {
     ))
 }
 
+fn sft_one_sparse_alternating_tone_fixture() -> SuiteResult<PublishedFixtureReport> {
+    // x[n] = (-1)^n for N=4 is a single-frequency pure tone.
+    // DFT: X[k] = N·δ(k - N/2) = 4·δ(k-2) (Parseval shift theorem).
+    // SparseFftPlan::new(4,1) retains the 1 largest-magnitude coefficient.
+    // Exact recovery theorem: top-1 heap finds bin 2 with value 4+0i;
+    // all other bins have magnitude 0 and cannot displace the winner.
+    // to_dense() expands to [0+0i, 0+0i, 4+0i, 0+0i].
+    // Reference: Cooley-Tukey (1965) DFT[(−1)^n]=N·δ[k−N/2];
+    //            Hassanieh et al. (2012) sFFT exact K-sparse recovery theorem.
+    let plan = SparseFftPlan::new(4, 1)?;
+    let signal = [
+        Complex64::new(1.0, 0.0),
+        Complex64::new(-1.0, 0.0),
+        Complex64::new(1.0, 0.0),
+        Complex64::new(-1.0, 0.0),
+    ];
+    let spectrum = plan.forward(&signal)?;
+    let dense = spectrum.to_dense();
+    let expected = [
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(4.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ];
+    Ok(published_complex_fixture(
+        "SFT",
+        "SFT-1-sparse-alternating-tone(N=4,K=1)",
+        "Cooley-Tukey (1965): DFT[(−1)^n]=4·δ[k−2] for N=4; Hassanieh et al. (2012) sFFT exact K-sparse recovery",
+        dense.iter(),
+        expected.iter(),
+    ))
+}
+
+fn sht_monopole_y00_coefficient_fixture() -> SuiteResult<PublishedFixtureReport> {
+    // f(θ,φ) = Y_0^0(θ,φ) = 1/√(4π) is the spherical harmonic of degree 0.
+    // By orthonormality of spherical harmonics Y_l^m:
+    //   a_{lm} = ∫_S² f · Y_{lm}^* dΩ = δ_{l,0}δ_{m,0}
+    // Therefore a_{00} = 1.0 exactly; all higher-degree coefficients are zero.
+    // Gauss-Legendre quadrature with n_lat=12 integrates degree-0 polynomials
+    // exactly; the uniform longitude sum with n_lon=25 integrates the constant exactly.
+    // Reference: Varshalovich, Moskalev & Khersonskii (1988) §4.1: Y_0^0 = 1/√(4π);
+    //            Driscoll & Healy (1994) sampling theorem on S².
+    let plan = ShtPlan::new(12, 25, 1)?;
+    let constant = 1.0_f64 / (4.0 * std::f64::consts::PI).sqrt();
+    let samples = Array2::from_elem(
+        (plan.grid().latitudes(), plan.grid().longitudes()),
+        constant,
+    );
+    let coefficients = plan.forward_real(&samples)?;
+    let a00 = coefficients.get(0, 0);
+    let actual = [a00];
+    let expected = [Complex64::new(1.0, 0.0)];
+    Ok(published_complex_fixture(
+        "SHT",
+        "SHT-monopole-Y00-maps-to-unit-coefficient",
+        "Varshalovich et al. (1988) §4.1; Driscoll & Healy (1994): Y_0^0=1/sqrt(4π), orthonormality gives a_{00}=1",
+        actual.iter(),
+        expected.iter(),
+    ))
+}
+
+fn stft_rectangular_window_impulse_frame_fixture() -> SuiteResult<PublishedFixtureReport> {
+    // Signal: unit impulse at position 0, frame_len=4, hop_len=4, rectangular window.
+    // Centered framing: frame 0 center at 0, starts at index -2.
+    // Frame 0 reads signal indices [-2,-1,0,1]: out-of-bounds pad to 0.
+    //   Windowed frame 0 = [0, 0, x[0], x[1]] = [0, 0, 1, 0].
+    // DFT([0,0,1,0]): X[k] = exp(-2πi·2·k/4) = exp(-πik) = (-1)^k.
+    //   X[0]=1, X[1]=-1, X[2]=1, X[3]=-1.
+    // Frame 1 reads signal indices [2,3,4,5]: indices 4,5 out of bounds.
+    //   Windowed frame 1 = [x[2],x[3],0,0] = [0,0,0,0]; DFT = [0,0,0,0].
+    // Full output: [1,-1,1,-1, 0,0,0,0].
+    // Reference: Cooley-Tukey (1965) DFT shift theorem X[k]=exp(-2πikn₀/N) for δ[n-n₀];
+    //            Allen & Rabiner (1977) STFT centered-frame analysis.
+    let plan = StftPlan::new(4, 4)?;
+    let signal = Array1::from_vec(vec![1.0_f64, 0.0, 0.0, 0.0]);
+    let window = [1.0_f64, 1.0, 1.0, 1.0];
+    let output = plan.forward_with_window(&signal, &window)?;
+    let actual: Vec<Complex64> = output.iter().copied().collect();
+    let expected = [
+        Complex64::new(1.0, 0.0),
+        Complex64::new(-1.0, 0.0),
+        Complex64::new(1.0, 0.0),
+        Complex64::new(-1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ];
+    Ok(published_complex_fixture(
+        "STFT",
+        "STFT-rect-window-impulse-centered-frame(N=4)",
+        "Cooley-Tukey (1965) DFT shift: X[k]=(-1)^k for δ[n-2] in 4-point frame; Allen & Rabiner (1977) STFT centered framing",
+        actual.iter(),
+        expected.iter(),
+    ))
+}
+
+fn hilbert_cosine_to_sine_fixture() -> SuiteResult<PublishedFixtureReport> {
+    // H{cos(2πn/N)} = sin(2πn/N) for bin-frequency f₀=1, N=4.
+    // Input: x[n] = cos(2πn/4) = [1, 0, -1, 0].
+    // DFT mask: multiply positive bins by -i, DC/Nyquist by 0, negative bins by +i.
+    // DFT(x) = [0, 2, 0, 2]; after mask: [0, -2i, 0, 2i].
+    // IDFT([0,-2i,0,2i]) = [0, 1, 0, -1] = sin(2πn/4). ✓
+    // Reference: Bracewell (1965) §12: H{cos(ω₀n)} = sin(ω₀n) for single-bin frequency;
+    //            Oppenheim & Schafer (1999) §12.1 discrete Hilbert via DFT mask.
+    let plan = HilbertPlan::new(4)?;
+    let signal = [1.0_f64, 0.0, -1.0, 0.0];
+    let quadrature = plan.transform(&signal)?;
+    let expected = [0.0_f64, 1.0, 0.0, -1.0];
+    Ok(published_real_fixture(
+        "Hilbert",
+        "Hilbert-cosine-to-sine-4point",
+        "Bracewell (1965) §12: H{cos(2πn/N)}=sin(2πn/N); Oppenheim-Schafer (1999) §12.1 discrete Hilbert via DFT mask",
+        &quadrature,
+        &expected,
+    ))
+}
+
+fn mellin_constant_function_first_moment_fixture() -> SuiteResult<PublishedFixtureReport> {
+    // Mellin moment M(s) = ∫_a^b f(r) r^{s-1} dr for f(r)=1, s=1, a=1, b=3.
+    // M(1) = ∫_1^3 1·r^0 dr = ∫_1^3 1 dr = b - a = 2.0.
+    // Trapezoid rule on 3 equidistant points r=[1,2,3], h=1:
+    //   (h/2)·[f(1)·1 + 2·f(2)·1 + f(3)·1] = (1/2)·[1+2+1] = 2.0 — exact.
+    // Reference: Mellin (1897) transform definition M(s)=∫_a^b f(r)r^{s-1}dr;
+    //            Titchmarsh (1937) §1.1: M(1)=b-a=2 for f(r)=1 on [1,3].
+    let plan = MellinPlan::new(3, 1.0, 3.0)?;
+    let signal = [1.0_f64, 1.0, 1.0];
+    let moment = plan.moment(&signal, 1.0, 3.0, 1.0)?;
+    let actual = [moment];
+    let expected = [2.0_f64];
+    Ok(published_real_fixture(
+        "Mellin",
+        "Mellin-constant-function-first-moment([1,3],s=1)",
+        "Mellin (1897) transform definition; Titchmarsh (1937) §1.1: M(1)=b-a=2 for f(r)=1 on [1,3]",
+        &actual,
+        &expected,
+    ))
+}
+
+fn radon_theta0_column_impulse_projection_fixture() -> SuiteResult<PublishedFixtureReport> {
+    // Theorem: parallel-beam Radon projection at θ=0 equals column sums.
+    // Image: unit impulse at pixel (row=0, col=0), all other pixels zero.
+    //   Column 0 sum = 1.0, column 1 sum = 0.0, column 2 sum = 0.0.
+    // Sinogram[θ=0] = [1.0, 0.0, 0.0] (3 detectors, spacing=1.0, column-aligned).
+    // Reference: Radon (1917) parallel-beam projection definition (Über die Bestimmung
+    //            von Funktionen durch ihre Integralwerte);
+    //            Natterer (1986) §I.2: discrete projection at θ=0 equals column sums.
+    let mut image = Array2::<f64>::zeros((3, 3));
+    image[[0, 0]] = 1.0;
+    let plan = RadonPlan::new(3, 3, vec![0.0], 3, 1.0)?;
+    let sinogram = plan.forward(&image)?;
+    let row: Vec<f64> = sinogram.values().row(0).iter().copied().collect();
+    let expected = vec![1.0_f64, 0.0, 0.0];
+    Ok(published_real_fixture(
+        "Radon",
+        "Radon-theta0-column0-impulse-projection(3x3)",
+        "Radon (1917): parallel-beam θ=0 projection = column sums; Natterer (1986) §I.2",
+        &row,
+        &expected,
+    ))
+}
+
 fn representative_signal_1d(len: usize) -> Array1<f64> {
     Array1::from_vec(
         (0..len)
@@ -1360,7 +1534,7 @@ mod tests {
         assert!(report.fft_cpu.parseval_relative_error <= CPU_PARSEVAL_LIMIT);
         assert!(report.nufft.passed);
         assert!(report.external.published_references.passed);
-        assert_eq!(report.external.published_references.attempted, 22);
+        assert_eq!(report.external.published_references.attempted, 28);
         assert_eq!(report.external.rustfft.backend, "rustfft");
         assert_eq!(report.external.numpy.backend, "numpy");
     }
@@ -1368,7 +1542,7 @@ mod tests {
     #[test]
     fn published_reference_suite_checks_computed_fixture_values() {
         let report = run_published_reference_suite().expect("published references");
-        assert_eq!(report.attempted, 22);
+        assert_eq!(report.attempted, 28);
         assert!(report.passed);
         for fixture in &report.fixtures {
             assert!(

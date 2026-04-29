@@ -4,6 +4,7 @@
 
 - `GpuFft3dF16Native` Bluestein path on production hardware with non-power-of-two sizes: current test passes on dev hardware; production validation on adapters that expose `wgpu::Features::SHADER_F16` is pending.
 - Criterion buffer-reuse bench results on representative GPU hardware: allocation-vs-reuse speedup ratios for 1D and 3D NUFFT fast paths are not yet recorded; requires a GPU runner.
+- WGPU inverse operations: `apollo-czt-wgpu`, `apollo-hilbert-wgpu`, `apollo-mellin-wgpu`, `apollo-radon-wgpu`, `apollo-sdft-wgpu`, and `apollo-stft-wgpu` all return `UnsupportedExecution` from `execute_inverse`. CPU inverse paths are implemented; GPU inverse requires a separate shader per transform and is deferred pending demand.
 
 Note: NTT-WGPU floating mixed precision is an architectural design contract, not a gap.
 Residue-field arithmetic requires exact modular integers; the WGPU surface uses exact `u32`
@@ -13,6 +14,15 @@ by design and will not be implemented.
 ## Closed Gaps
 
 All items below are implemented, tested, and verified in completed sprints.
+
+### Closure VII Phase
+
+- README fixture count drift: updated README.md line 84 from "10 published-reference fixtures" to "22 published-reference fixtures" with complete 22-fixture inventory. Drift was introduced by sprints Closure III (+7), V (+3), VI (+2) without README sync.
+- CHANGELOG.md absent: created `CHANGELOG.md` with full sprint-by-sprint version history from 0.1.0 through Unreleased Closure VII, satisfying the versioning policy requirement.
+- Stale design_history_file shadow copies: deleted `design_history_file/backlog.md`, `design_history_file/checklist.md`, `design_history_file/gap_audit.md`; root artifacts are the SSOT. `adr_unitary_frft.md` retained.
+- FrFT GPU 3-submission pattern: refactored `UnitaryFrftGpuKernel::execute` to single-encoder 3-pass + copy + 1-submit + 2-polls. CPU–GPU round-trips reduced from 4 submits + 5 polls to 1 submit + 2 polls. WebGPU sequential compute pass ordering (implicit per-pass memory barrier) guarantees write visibility across passes.
+- Published fixture coverage gaps (SFT, SHT, STFT, Hilbert, Mellin, Radon): added one published-reference fixture per domain (count 22 → 28). All six fixtures are analytically exact, reference-cited, and verified at PUBLISHED_FIXTURE_LIMIT = 1e-12 (except STFT which is verified at the same limit against exact DFT values).
+- Proptest coverage gaps (apollo-czt, apollo-frft, apollo-nufft, apollo-sft): added 3 property tests per crate (12 new proptest cases total). All 4 crates already had `proptest = "1.6"` in dev-dependencies; no Cargo.toml changes required.
 
 ### Closure VI Phase
 

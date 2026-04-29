@@ -1,5 +1,19 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure VII phase)
+- [x] [patch] Fix README.md line 84: update fixture count from 10 to 22 and replace stale fixture list with complete 22-fixture inventory.
+- [x] [patch] Create CHANGELOG.md with full sprint-by-sprint version history from 0.1.0 through the current unreleased Closure VII increment.
+- [x] [patch] Remove stale shadow copies `design_history_file/backlog.md`, `design_history_file/checklist.md`, `design_history_file/gap_audit.md`; root artifacts are the SSOT. Retain `design_history_file/adr_unitary_frft.md`.
+- [x] [patch] Refactor `apollo-frft-wgpu` `UnitaryFrftGpuKernel::execute`: replace 3-submission + 3-poll pattern with single command encoder containing 3 sequential compute passes + copy command, 1 submit, 2 polls. Reduces CPU-GPU round-trips. Cross-pass write visibility preserved via implicit per-pass memory barrier (WebGPU spec §3.4).
+- [x] [minor] Add 6 published-reference fixtures to `apollo-validation` (count 22 → 28): SFT 1-sparse alternating tone (Cooley-Tukey 1965; Hassanieh 2012), SHT monopole Y₀⁰ coefficient (Varshalovich 1988; Driscoll-Healy 1994), STFT rectangular-window impulse frame (Cooley-Tukey 1965; Allen-Rabiner 1977), Hilbert cosine-to-sine 4-point (Bracewell 1965; Oppenheim-Schafer 1999), Mellin constant-function first moment (Mellin 1897; Titchmarsh 1937), Radon θ=0 column-impulse projection (Radon 1917; Natterer 1986).
+- [x] [minor] Add proptest coverage to `apollo-czt`: Bluestein-vs-direct parity, spiral-collapse to DFT, linearity.
+- [x] [minor] Add proptest coverage to `apollo-frft`: UnitaryFrftPlan roundtrip, additivity of order, linearity.
+- [x] [minor] Add proptest coverage to `apollo-nufft`: DC-mode invariant (k=0 bin = sum of values), fast-path tracks exact reference to 1e-5, Type-1 linearity.
+- [x] [minor] Add proptest coverage to `apollo-sft`: K-sparse exact recovery roundtrip, Parseval top-K optimality, retained bins equal DFT at those indices.
+- [x] Verify `cargo check --workspace --all-targets` clean.
+- [x] Verify `cargo clippy --workspace --all-targets -- -D warnings` zero warnings.
+- [x] Verify `cargo test --workspace --all-targets` zero failures.
+
 ## Closed in this sprint (Closure VI phase)
 - [x] [patch] Fix workspace-wide compilation: revert `apollo-fft/Cargo.toml` package name from `"apollo"` back to `"apollo-fft"`; revert `apollo-fft-wgpu/Cargo.toml` dep key from `apollo` back to `apollo-fft`. Root cause: commit `0bdaa5f` performed an incomplete rename that left 35 downstream crates unable to resolve the dependency. Zero tests ran before this fix; all pass after.
 - [x] [major] Replace O(N²) DFT WGSL shader in `apollo-ntt-wgpu` with O(N log N) Cooley-Tukey DIT butterfly: `ntt.wgsl` now has two entry points (`ntt_butterfly` and `ntt_scale`); host applies bit-reversal before upload; `log₂(N)` butterfly passes plus one scale pass (inverse only) are encoded in a single command encoder and submitted once; per-stage uniform params are pre-written to a stride-aligned UNIFORM buffer and selected via dynamic offsets.

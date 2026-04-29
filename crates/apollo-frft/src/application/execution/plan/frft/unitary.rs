@@ -290,6 +290,7 @@ fn apply_unitary_frft(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn unitary_order_zero_is_identity() {
@@ -464,5 +465,112 @@ mod tests {
             plan.forward_into(&input, &mut output),
             Err(FrftError::LengthMismatch { .. })
         ));
+    }
+
+    proptest! {
+        /// UnitaryFrftPlan forward followed by inverse recovers the input signal.
+        ///
+        /// DFrFT_{-a}(DFrFT_a(x)) = x for all real a and all x ∈ ℂ^N.
+        /// Proof: V·diag(e^{iakπ/2})·V^T·(V·diag(e^{-iakπ/2})·V^T·x)
+        ///      = V·diag(e^{iakπ/2})·diag(e^{-iakπ/2})·V^T·x
+        ///      = V·I·V^T·x = x (since V^T V = I).
+        #[test]
+        fn unitary_frft_roundtrip_for_arbitrary_order_and_signal(
+            n_and_re in (2_usize..=12).prop_flat_map(|n| {
+                prop::collection::vec(-2.0_f64..2.0_f64, n)
+                    .prop_map(move |v| (n, v))
+            }),
+            // Fractional order: 10 steps of 0.1 offset by 0.05 to avoid integers
+            order_step in 0_u32..40_u32,
+        ) {
+            let (n, re_parts) = n_and_re;
+            let order = order_step as f64 * 0.1 + 0.05;
+            let input = ndarray::Array1::from_vec(
+                re_parts.iter().map(|&r| num_complex::Complex64::new(r, 0.0)).collect()
+            );
+            let plan = UnitaryFrftPlan::new(n, order).expect("plan");
+            let forward = plan.forward(&input).expect("forward");
+            let recovered = plan.inverse(&forward).expect("inverse");
+            for (expected, actual) in input.iter().zip(recovered.iter()) {
+                prop_assert!(
+                    (expected - actual).norm() < 1.0e-9,
+                    "roundtrip failed at order={order}: |expected-actual|={} for n={n}",
+                    (expected - actual).norm()
+                );
+            }
+        }
+
+        /// UnitaryFrftPlan satisfies the semigroup (additivity) law: FrFT_{a+b} = FrFT_a ∘ FrFT_b.
+        ///
+        /// Proof: V·diag(e^{-i(a+b)kπ/2})·V^T·x
+        ///      = V·diag(e^{-iakπ/2})·diag(e^{-ibkπ/2})·V^T·x
+        ///      = DFrFT_a(DFrFT_b(x)).
+        #[test]
+        fn unitary_frft_additivity_of_order(
+            n_and_re in (2_usize..=10).prop_flat_map(|n| {
+                prop::collection::vec(-2.0_f64..2.0_f64, n)
+                    .prop_map(move |v| (n, v))
+            }),
+            // Two non-integer orders whose sum is also non-integer
+            a_step in 1_u32..18_u32,
+            b_step in 1_u32..18_u32,
+        ) {
+            let (n, re_parts) = n_and_re;
+            let a = a_step as f64 * 0.1 + 0.05;
+            let b = b_step as f64 * 0.1 + 0.05;
+            let input = ndarray::Array1::from_vec(
+                re_parts.iter().map(|&r| num_complex::Complex64::new(r, 0.0)).collect()
+            );
+            let plan_ab = UnitaryFrftPlan::new(n, a + b).expect("plan_ab");
+            let plan_b = UnitaryFrftPlan::new(n, b).expect("plan_b");
+            let plan_a = UnitaryFrftPlan::new(n, a).expect("plan_a");
+            let direct = plan_ab.forward(&input).expect("direct");
+            let composed = plan_a.forward(&plan_b.forward(&input).expect("step_b")).expect("step_a");
+            for (d, c) in direct.iter().zip(composed.iter()) {
+                prop_assert!(
+                    (d - c).norm() < 1.0e-9,
+                    "additivity failed: a={a}, b={b}, |d-c|={} for n={n}",
+                    (d - c).norm()
+                );
+            }
+        }
+
+        /// UnitaryFrftPlan is linear: FrFT_a(c·x) = c·FrFT_a(x) for real scalar c.
+        ///
+        /// Proof: The DFrFT sum is linear in the input vector; the Grünbaum
+        /// eigenvector matrix V and diagonal phase factor are both independent of x.
+        #[test]
+        fn unitary_frft_scalar_linearity(
+            n_and_re in (2_usize..=10).prop_flat_map(|n| {
+                prop::collection::vec(-2.0_f64..2.0_f64, n)
+                    .prop_map(move |v| (n, v))
+            }),
+            order_step in 1_u32..38_u32,
+            scalar in -3.0_f64..3.0_f64,
+        ) {
+            let (n, re_parts) = n_and_re;
+            let order = order_step as f64 * 0.1 + 0.05;
+            let input = ndarray::Array1::from_vec(
+                re_parts.iter().map(|&r| num_complex::Complex64::new(r, 0.0)).collect()
+            );
+            let scaled = ndarray::Array1::from_vec(
+                re_parts.iter().map(|&r| num_complex::Complex64::new(r * scalar, 0.0)).collect()
+            );
+            let plan = UnitaryFrftPlan::new(n, order).expect("plan");
+            let frft_scaled = plan.forward(&scaled).expect("frft_scaled");
+            let frft_then_scale: Vec<num_complex::Complex64> = plan
+                .forward(&input)
+                .expect("frft_x")
+                .iter()
+                .map(|&v| v * scalar)
+                .collect();
+            for (a, b) in frft_scaled.iter().zip(frft_then_scale.iter()) {
+                prop_assert!(
+                    (a - b).norm() < 1.0e-9,
+                    "linearity failed: scalar={scalar}, |a-b|={} for n={n}",
+                    (a - b).norm()
+                );
+            }
+        }
     }
 }
