@@ -17,12 +17,12 @@ All items below are implemented, tested, and verified in completed sprints.
 
 ### Closure VII Phase
 
-- README fixture count drift: updated README.md line 84 from "10 published-reference fixtures" to "22 published-reference fixtures" with complete 22-fixture inventory. Drift was introduced by sprints Closure III (+7), V (+3), VI (+2) without README sync.
+- README fixture count drift: updated README.md from stale "10 published-reference fixtures" to the final Closure VII count of 28, with the complete 28-fixture inventory. Drift accumulated across sprints Closure III (+7), V (+3), VI (+2), and VII (+6).
 - CHANGELOG.md absent: created `CHANGELOG.md` with full sprint-by-sprint version history from 0.1.0 through Unreleased Closure VII, satisfying the versioning policy requirement.
 - Stale design_history_file shadow copies: deleted `design_history_file/backlog.md`, `design_history_file/checklist.md`, `design_history_file/gap_audit.md`; root artifacts are the SSOT. `adr_unitary_frft.md` retained.
 - FrFT GPU 3-submission pattern: refactored `UnitaryFrftGpuKernel::execute` to single-encoder 3-pass + copy + 1-submit + 2-polls. CPU–GPU round-trips reduced from 4 submits + 5 polls to 1 submit + 2 polls. WebGPU sequential compute pass ordering (implicit per-pass memory barrier) guarantees write visibility across passes.
-- Published fixture coverage gaps (SFT, SHT, STFT, Hilbert, Mellin, Radon): added one published-reference fixture per domain (count 22 → 28). All six fixtures are analytically exact, reference-cited, and verified at PUBLISHED_FIXTURE_LIMIT = 1e-12 (except STFT which is verified at the same limit against exact DFT values).
-- Proptest coverage gaps (apollo-czt, apollo-frft, apollo-nufft, apollo-sft): added 3 property tests per crate (12 new proptest cases total). All 4 crates already had `proptest = "1.6"` in dev-dependencies; no Cargo.toml changes required.
+- Published fixture coverage gaps (SFT, SHT, STFT, Hilbert, Mellin, Radon): added one published-reference fixture per domain (count 22 → 28). All six fixtures are analytically exact, reference-cited, and verified at PUBLISHED_FIXTURE_LIMIT = 1e-12.
+- Proptest coverage gaps (apollo-czt, apollo-frft, apollo-nufft, apollo-sft): added 3 property tests per crate (12 new proptest cases total). All 4 crates had `proptest = "1.6"` in dev-dependencies. CZT: Bluestein-vs-direct, spiral-collapse, linearity. FrFT: roundtrip, additivity, linearity. NUFFT: DC invariant, fast-tracks-exact, Type-1 linearity. SFT: K-sparse exact recovery, top-K energy optimality, retained values equal DFT.
 
 ### Closure VI Phase
 
