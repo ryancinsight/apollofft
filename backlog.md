@@ -1,5 +1,12 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure XIV phase)
+- [x] [patch] Dead-code removal in `apollo-stft-wgpu`: remove deprecated O(N²) forward
+  pipeline (`StftGpuKernel::execute`, `forward_pipeline` field, `stft.wgsl` shader).
+  Remove dead `stft_inverse_frames` entry point from `stft_inverse.wgsl` (superseded by
+  Closure XI FFT inverse path). Update kernel module docstring, `WORKGROUP_SIZE` comment,
+  struct doc, and `dispatch_count`/`fft_dispatch_count` comments. -244 net lines removed.
+
 ## Closed in this sprint (Closure XIII phase)
 - [x] [patch] Criterion benchmark suite for `apollo-stft-wgpu`: new `benches/stft_bench.rs`
   with `bench_forward_fft` and `bench_inverse_fft` groups across three COLA-valid

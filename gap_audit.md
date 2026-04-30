@@ -15,6 +15,15 @@ by design and will not be implemented.
 
 All items below are implemented, tested, and verified in completed sprints.
 
+### Closure XIV — Dead-Code Removal: O(N²) Forward Pipeline
+**Status:** Closed.
+**Items removed:**
+- `StftGpuKernel::execute()` — 112-line O(N²) direct DFT forward method (superseded by Closure XII).
+- `forward_pipeline` field and creation code — dead since Closure XII routed to `execute_forward_fft`.
+- `shaders/stft.wgsl` — O(N²) forward DFT shader (superseded by `stft_forward_fft.wgsl`).
+- `stft_inverse_frames` entry point in `stft_inverse.wgsl` — O(N²) IDFT per frame (superseded by Closure XI).
+**Verified:** `cargo check`, `cargo clippy`, `cargo test` all clean after removal.
+
 ### Closure XIII — STFT GPU Criterion Benchmarks
 **Status:** Closed (benchmark infrastructure complete; hardware results pending GPU runner availability).
 **Contract:** `benches/stft_bench.rs` provides `stft_forward_fft/frame_len/{256,512,1024}` and

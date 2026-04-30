@@ -6,7 +6,26 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
-## [Unreleased] — Closure XIII
+## [Unreleased]
+*(no unreleased changes)*
+
+---
+
+## [0.8.2] — Closure XIV
+
+### Closure XIV — Dead-Code Removal: O(N²) Forward Pipeline
+#### Removed
+- `StftGpuKernel::execute()`: O(N²) direct DFT forward method (superseded by Closure XII FFT path).
+- `forward_pipeline` field and shader creation code from `StftGpuKernel::new()`.
+- `shaders/stft.wgsl`: O(N²) forward DFT WGSL shader (superseded by `stft_forward_fft.wgsl`).
+- `stft_inverse_frames` entry point from `stft_inverse.wgsl` (superseded by Closure XI FFT inverse).
+#### Changed
+- `stft_inverse.wgsl` file header updated to reflect single-pass OLA role.
+- `kernel.rs` module docstring, `WORKGROUP_SIZE` comment, struct docs updated.
+
+---
+
+## [0.8.1] — Closure XIII
 
 ### Closure XIII — STFT GPU Criterion Benchmarks
 #### Added
@@ -18,7 +37,7 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
-## [Unreleased] — Closure XII
+## [0.8.0] — Closure XII
 
 ### Closure XII — STFT Forward-Path GPU FFT Acceleration
 #### Added
@@ -37,7 +56,7 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
-## [Unreleased] — Closure XI
+## [0.7.0] — Closure XI
 
 ### Added
 - `apollo-stft-wgpu`: GPU STFT inverse O(N log N) acceleration. New `stft_inverse_fft.wgsl` with four entry points implementing a batched Cooley-Tukey Radix-2 DIT IFFT: `stft_deinterleave` (interleaved complex f32 → split re/im scratch), `stft_bitrev` (bit-reversal permutation, batched), `stft_butterfly` (one Radix-2 DIT stage per dispatch; IDFT twiddle exp(+2πi·k/N)), `stft_scale_and_window` (1/N scale + Hann synthesis window → frame_data). Two-bind-group architecture: group 0 = 4 data bindings (shared), group 1 = per-stage `FftStageParams` uniform (pre-allocated, one per butterfly pass). All passes in one `CommandEncoder`; implicit per-pass memory barriers ensure write visibility. OLA pass unchanged. Replaces the O(N²) `stft_inverse_frames` pipeline. Formal basis: Cooley & Tukey (1965); Allen & Rabiner (1977) Theorem 1. [minor]
@@ -47,7 +66,7 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
-## [Unreleased] — Closure X
+## [0.6.0] — Closure X
 
 ### Added
 - `apollo-radon-wgpu`: GPU ramp-filtered backprojection (FBP). New `radon_fbp_filter.wgsl` entry point `radon_fbp_filter` applies the Ram-Lak ramp filter to each sinogram projection row via circular convolution with the impulse response `h = IFFT(R)`, `R[k] = 2π·|signed_k|/(N·Δ)` (Bracewell & Riddle 1967; Shepp & Logan 1974). Filter kernel computed host-side from `apollo_radon::ramp_filter_projection([1,0,...], Δ)` and cast to f32. Two-pass single `CommandEncoder` (filter → backproject). Host-side `π/angle_count` normalization. `RadonWgpuBackend::execute_filtered_backproject`. `supports_filtered_backprojection: bool` field added to `WgpuCapabilities`. `WgpuCapabilities::forward_inverse_and_fbp` constructor added. [minor]
@@ -60,7 +79,7 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
-## [Unreleased] — Closure IX
+## [0.5.0] — Closure IX
 
 ### Added
 - `apollo-stft-wgpu`: GPU inverse STFT via two-pass Weighted Overlap-Add (WOLA). New WGSL file `stft_inverse.wgsl` with entry points `stft_inverse_frames` (per-(frame, local_j) windowed IDFT: `frame_data[m·N+j] = (1/N)·Re{Σ_k X[m,k]·exp(+2πi·k·j/N)}·hann(j)`, spectrum as interleaved f32 pairs) and `stft_inverse_ola` (per-sample `y[n] = Σ_m frame_data[m·N+(n−start_m)] / Σ_m hann(n−start_m)²`, `start_m = m·hop−N/2`). Both passes share the existing 3-binding layout in one `CommandEncoder`. `StftGpuKernel::execute_inverse` (2-pass single encoder). `StftWgpuBackend::execute_inverse(plan, spectrum, signal_len)` + `execute_inverse_typed_into`. `WgpuCapabilities::forward_and_inverse` constructor added. Basis: WOLA identity (Allen–Rabiner 1977, Theorem 1). [minor]
@@ -71,7 +90,7 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
-## [Unreleased] — Closure VIII
+## [0.4.0] — Closure VIII
 
 ### Added
 - `apollo-hilbert-wgpu`: GPU inverse Hilbert transform. New WGSL entry point `hilbert_inverse_mask` recovers the original real-signal DFT spectrum from the DFT of the quadrature signal: positive bins X[k]=j·Q[k], negative bins X[k]=-j·Q[k], DC and Nyquist zeroed (unrecoverable; Bracewell 1965). New `HilbertGpuKernel::execute_inverse` runs 3 sequential passes in one command encoder (DFT of quadrature → inverse mask → IDFT of recovered spectrum). Exposed via `HilbertWgpuBackend::execute_inverse` and `execute_inverse_typed_into`. `WgpuCapabilities::forward_and_inverse` constructor added. [minor]
@@ -83,7 +102,7 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
-## [Unreleased] — Closure VII
+## [0.3.0] — Closure VII
 
 
 ### Added

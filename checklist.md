@@ -1,5 +1,19 @@
 # Apollo Checklist
 
+## Closure XIV — Dead-Code Removal: O(N²) Forward Pipeline + stft_inverse_frames [patch]
+Sprint target version: 0.3.0
+
+- [x] Remove `forward_pipeline: wgpu::ComputePipeline` field from `StftGpuKernel`.
+- [x] Remove forward shader module creation and `forward_pipeline` construction from `new()`.
+- [x] Remove `StftGpuKernel::execute()` method (112 lines of O(N²) GPU forward path).
+- [x] Delete `crates/apollo-stft-wgpu/src/infrastructure/shaders/stft.wgsl`.
+- [x] Remove `stft_inverse_frames` entry point from `stft_inverse.wgsl` (~40 lines).
+- [x] Update `stft_inverse.wgsl` file comment to reflect single-pass OLA role.
+- [x] Update kernel.rs module docstring, `WORKGROUP_SIZE` comment, struct doc.
+- [x] Update `dispatch_count` and `fft_dispatch_count` doc comments.
+- [x] `cargo clippy -p apollo-stft-wgpu -- -D warnings` clean.
+- [x] `cargo test -p apollo-stft-wgpu` 14 passed; 2 ignored.
+
 ## Closure XIII — STFT GPU Criterion Benchmarks [patch]
 Sprint target version: 0.3.0 (patch within the next minor)
 
