@@ -6,7 +6,7 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
-## [Unreleased] — Closure XII
+## [Unreleased] — Closure XIII
 
 ### Closure XIII — STFT GPU Criterion Benchmarks
 #### Added
@@ -15,6 +15,10 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 - `criterion = { version = "0.5", features = ["html_reports"] }` in `apollo-stft-wgpu`
   dev-dependencies.
 - `[[bench]] name = "stft_bench" harness = false` in `apollo-stft-wgpu/Cargo.toml`.
+
+---
+
+## [Unreleased] — Closure XII
 
 ### Closure XII — STFT Forward-Path GPU FFT Acceleration
 #### Added
