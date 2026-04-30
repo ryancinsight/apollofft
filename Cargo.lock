@@ -405,6 +405,7 @@ dependencies = [
  "apollo-fft",
  "apollo-radon",
  "bytemuck",
+ "criterion",
  "ndarray",
  "pollster",
  "thiserror 1.0.69",

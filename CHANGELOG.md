@@ -11,6 +11,17 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.8.3] — Closure XV
+
+### Closure XV — Radon FBP GPU Criterion Benchmarks
+#### Added
+- `crates/apollo-radon-wgpu/benches/radon_wgpu_bench.rs`: criterion benchmark suite with
+  `radon_wgpu_forward` and `radon_wgpu_fbp` groups.
+- `criterion = "0.5"` in `apollo-radon-wgpu` dev-dependencies.
+- `[[bench]] name = "radon_wgpu_bench" harness = false` in `apollo-radon-wgpu/Cargo.toml`.
+
+---
+
 ## [0.8.2] — Closure XIV
 
 ### Closure XIV — Dead-Code Removal: O(N²) Forward Pipeline

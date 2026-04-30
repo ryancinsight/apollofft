@@ -15,6 +15,15 @@ by design and will not be implemented.
 
 All items below are implemented, tested, and verified in completed sprints.
 
+### Closure XV — Radon FBP GPU Criterion Benchmarks
+**Status:** Closed (benchmark infrastructure complete; hardware results pending GPU runner availability).
+**Contract:** `benches/radon_wgpu_bench.rs` provides `radon_wgpu_forward/image_size/{64,128,256}` and
+`radon_wgpu_fbp/image_size/{64,128,256}` criterion benchmark groups.
+**Signal workload:** Gaussian disk phantom `f(x,y) = exp(−(x²+y²)/(2σ²))`, σ=0.25; analytical
+Radon transform `(Rf)(θ,s) = σ√(2π)·exp(−s²/(2σ²))` rotationally symmetric.
+**Gap addressed:** Open gap #2 — Criterion benchmark infrastructure delivered for both STFT
+(Closure XIII) and Radon FBP (Closure XV); numeric results require a GPU CI runner.
+
 ### Closure XIV — Dead-Code Removal: O(N²) Forward Pipeline
 **Status:** Closed.
 **Items removed:**

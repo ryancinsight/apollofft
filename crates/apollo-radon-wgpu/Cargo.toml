@@ -17,6 +17,12 @@ thiserror = "1.0"
 wgpu = { version = "26.0", features = ["wgsl"] }
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "radon_wgpu_bench"
+harness = false
+
 
 [lints]
 workspace = true

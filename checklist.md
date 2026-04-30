@@ -1,5 +1,16 @@
 # Apollo Checklist
 
+## Closure XV — Radon FBP GPU Criterion Benchmarks [patch]
+Sprint target version: 0.8.3
+
+- [x] Add `criterion = "0.5"` to `apollo-radon-wgpu` dev-deps.
+- [x] Add `[[bench]] name = "radon_wgpu_bench" harness = false` to `apollo-radon-wgpu/Cargo.toml`.
+- [x] Create `crates/apollo-radon-wgpu/benches/radon_wgpu_bench.rs` with `radon_wgpu_forward`
+      and `radon_wgpu_fbp` criterion groups, each covering image_size ∈ {64, 128, 256}.
+- [x] Gaussian disk phantom (σ=0.25); uniform angles on `[0,π)`.
+- [x] `cargo check -p apollo-radon-wgpu --benches` clean.
+- [x] Artifact sync: backlog.md, checklist.md, gap_audit.md, CHANGELOG.md updated.
+
 ## Closure XIV — Dead-Code Removal: O(N²) Forward Pipeline + stft_inverse_frames [patch]
 Sprint target version: 0.3.0
 

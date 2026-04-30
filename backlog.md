@@ -1,5 +1,14 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure XV phase)
+- [x] [patch] Criterion benchmark suite for `apollo-radon-wgpu`: new `benches/radon_wgpu_bench.rs`
+  with `radon_wgpu_forward` and `radon_wgpu_fbp` groups across three image sizes (64², 128², 256²).
+  Gaussian disk phantom (σ=0.25) provides non-trivial frequency content; analytical Radon transform
+  is `(Rf)(θ,s) = σ√(2π)·exp(−s²/(2σ²))`. Angles uniform on `[0,π)` (Fourier slice theorem
+  sampling). Addresses open gap #2 from `gap_audit.md` (Criterion GPU benchmark infrastructure).
+- [x] [patch] Add `criterion = "0.5"` to `apollo-radon-wgpu` dev-deps;
+  add `[[bench]] name = "radon_wgpu_bench" harness = false`.
+
 ## Closed in this sprint (Closure XIV phase)
 - [x] [patch] Dead-code removal in `apollo-stft-wgpu`: remove deprecated O(N²) forward
   pipeline (`StftGpuKernel::execute`, `forward_pipeline` field, `stft.wgsl` shader).
