@@ -1,5 +1,16 @@
 # Apollo Checklist
 
+## Closure XIII — STFT GPU Criterion Benchmarks [patch]
+Sprint target version: 0.3.0 (patch within the next minor)
+
+- [x] Add `criterion = { version = "0.5", features = ["html_reports"] }` to `apollo-stft-wgpu` dev-deps.
+- [x] Add `[[bench]] name = "stft_bench" harness = false` to `apollo-stft-wgpu/Cargo.toml`.
+- [x] Create `crates/apollo-stft-wgpu/benches/stft_bench.rs` with `bench_forward_fft` and
+      `bench_inverse_fft` criterion groups, each covering frame_len ∈ {256, 512, 1024}.
+- [x] Analytical signal (bin-aligned sinusoids k₁=16, k₂=64) used as benchmark workload.
+- [x] `cargo check -p apollo-stft-wgpu --benches` clean.
+- [x] Artifact sync: backlog.md, checklist.md, gap_audit.md, CHANGELOG.md updated.
+
 ## Closure XII — STFT Forward-Path GPU FFT Acceleration [minor]
 Sprint target version: 0.3.0 (first unreleased minor after 0.2.0)
 

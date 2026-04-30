@@ -512,6 +512,7 @@ dependencies = [
  "apollo-fft",
  "apollo-stft",
  "bytemuck",
+ "criterion",
  "ndarray",
  "num-complex",
  "pollster",

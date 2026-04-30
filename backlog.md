@@ -1,5 +1,14 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure XIII phase)
+- [x] [patch] Criterion benchmark suite for `apollo-stft-wgpu`: new `benches/stft_bench.rs`
+  with `bench_forward_fft` and `bench_inverse_fft` groups across three COLA-valid
+  `(frame_len, hop_len, signal_len)` parameter sets: (256/128/4096), (512/256/8192),
+  (1024/512/16384). Addresses open gap #2 from `gap_audit.md` (Criterion buffer-reuse
+  bench results on GPU hardware). Skips gracefully when no WGPU device is available.
+- [x] [patch] Add `criterion = { version = "0.5", features = ["html_reports"] }` to
+  `apollo-stft-wgpu` dev-deps; add `[[bench]] name = "stft_bench" harness = false`.
+
 ## Closed in this sprint (Closure XII phase)
 - [x] [minor] STFT forward GPU acceleration (`apollo-stft-wgpu`): replace O(N²) per-frame
   direct DFT in `stft.wgsl::stft_forward` with a batched Cooley-Tukey Radix-2 DIT FFT

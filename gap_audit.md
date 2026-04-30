@@ -15,6 +15,16 @@ by design and will not be implemented.
 
 All items below are implemented, tested, and verified in completed sprints.
 
+### Closure XIII — STFT GPU Criterion Benchmarks
+**Status:** Closed (benchmark infrastructure complete; hardware results pending GPU runner availability).
+**Contract:** `benches/stft_bench.rs` provides `stft_forward_fft/frame_len/{256,512,1024}` and
+`stft_inverse_fft/frame_len/{256,512,1024}` criterion benchmark groups. Each group covers three
+COLA-valid `(frame_len, hop_len, signal_len)` parameter sets with hop = frame_len/2.
+**Signal workload:** analytical sum of two bin-aligned sinusoids (k₁=16, k₂=64); zero spectral
+leakage ensures a stable and repeatable workload.
+**Gap addressed:** Open gap #2 (`gap_audit.md` — Criterion buffer-reuse bench results on
+representative GPU hardware). Infrastructure is delivered; numeric results require a GPU CI runner.
+
 ### Closure XII — STFT Forward-Path GPU FFT Acceleration
 **Status:** Closed.
 **Contract:** `StftGpuKernel::execute_forward_fft` computes

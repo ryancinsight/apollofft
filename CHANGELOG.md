@@ -8,6 +8,14 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ## [Unreleased] — Closure XII
 
+### Closure XIII — STFT GPU Criterion Benchmarks
+#### Added
+- `crates/apollo-stft-wgpu/benches/stft_bench.rs`: criterion benchmark suite with
+  `bench_forward_fft` and `bench_inverse_fft` groups.
+- `criterion = { version = "0.5", features = ["html_reports"] }` in `apollo-stft-wgpu`
+  dev-dependencies.
+- `[[bench]] name = "stft_bench" harness = false` in `apollo-stft-wgpu/Cargo.toml`.
+
 ### Closure XII — STFT Forward-Path GPU FFT Acceleration
 #### Added
 - `stft_forward_fft.wgsl`: new GPU shader with `stft_fwd_pack_window`, `stft_fwd_bitrev`,
