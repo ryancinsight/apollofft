@@ -353,4 +353,81 @@ mod tests {
             .expect_err("profile mismatch must fail");
         assert_eq!(error, WgpuError::InvalidPrecisionProfile);
     }
+
+    /// GPU inverse STFT WOLA roundtrip for three COLA-compliant parameter sets.
+    ///
+    /// COLA (Constant Overlap-Add) condition for Hann window: hop_len <= frame_len / 2.
+    /// Exact COLA at 50% overlap: hop_len = frame_len / 2.
+    ///
+    /// For each parameter set, the test:
+    /// 1. Computes the CPU STFT spectrum of the analytical signal (f64 reference).
+    /// 2. Downcasts the spectrum to f32 for GPU inverse dispatch.
+    /// 3. Asserts that GPU inverse output matches CPU inverse within TOL = 5e-3.
+    ///    Tolerance: 5e-3 accounts for f64→f32 spectrum downcast (ε_f32 ≈ 1.2e-7 per
+    ///    coefficient, amplified by the N-term IDFT sum).
+    #[test]
+    fn inverse_roundtrip_for_multiple_cola_parameter_sets() {
+        let Ok(backend) = StftWgpuBackend::try_default() else {
+            return;
+        };
+
+        fn run_roundtrip(
+            backend: &StftWgpuBackend,
+            frame_len: usize,
+            hop_len: usize,
+            signal: &[f32],
+        ) {
+            let signal_len = signal.len();
+            let plan = StftWgpuPlan::new(frame_len, hop_len);
+            let cpu_plan = apollo_stft::StftPlan::new(frame_len, hop_len).expect("cpu plan");
+            let signal_f64 = Array1::from_vec(signal.iter().map(|&x| x as f64).collect());
+            let cpu_spectrum = cpu_plan.forward(&signal_f64).expect("cpu forward");
+            let gpu_spectrum: Vec<Complex32> = cpu_spectrum
+                .iter()
+                .map(|c| Complex32::new(c.re as f32, c.im as f32))
+                .collect();
+            let recovered = backend
+                .execute_inverse(&plan, &gpu_spectrum, signal_len)
+                .unwrap_or_else(|e| {
+                    panic!("GPU inverse failed for frame_len={frame_len}, hop_len={hop_len}: {e}")
+                });
+            let cpu_recovered = cpu_plan
+                .inverse(&cpu_spectrum, signal_len)
+                .expect("cpu inverse");
+            assert_eq!(
+                recovered.len(),
+                signal_len,
+                "length mismatch (frame={frame_len}, hop={hop_len})"
+            );
+            const TOL: f32 = 5e-3;
+            for (i, (g, c)) in recovered.iter().zip(cpu_recovered.iter()).enumerate() {
+                let err = (g - *c as f32).abs();
+                assert!(
+                    err < TOL,
+                    "mismatch at sample {i} (frame={frame_len}, hop={hop_len}): \
+                     gpu={g:.6}, cpu={c:.6}, err={err:.2e}"
+                );
+            }
+        }
+
+        // Case 1: frame_len=8, hop_len=4 — canonical 50% overlap, single frame.
+        run_roundtrip(
+            &backend,
+            8,
+            4,
+            &[0.5_f32, -0.5, 0.5, -0.5, 0.5, -0.5, 0.5, -0.5],
+        );
+
+        // Case 2: frame_len=16, hop_len=8 — 50% overlap, sine wave reference signal.
+        let sig16: Vec<f32> = (0..16)
+            .map(|i| ((i as f32) * std::f32::consts::FRAC_PI_4).sin())
+            .collect();
+        run_roundtrip(&backend, 16, 8, &sig16);
+
+        // Case 3: frame_len=32, hop_len=16 — 50% overlap, cosine reference signal.
+        let sig32: Vec<f32> = (0..32)
+            .map(|i| ((i as f32) * std::f32::consts::PI / 8.0).cos())
+            .collect();
+        run_roundtrip(&backend, 32, 16, &sig32);
+    }
 }

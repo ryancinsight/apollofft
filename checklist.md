@@ -1,5 +1,18 @@
 # Apollo Checklist
 
+## Closure X phase (GPU Radon FBP, adjoint identity test, STFT parameterized roundtrip, documentation sync)
+- [x] Add `supports_filtered_backprojection: bool` field and `forward_inverse_and_fbp(device_available)` constructor to `apollo-radon-wgpu/src/domain/capabilities.rs`.
+- [x] Create `apollo-radon-wgpu/src/infrastructure/shaders/radon_fbp_filter.wgsl`: entry `radon_fbp_filter` — per-(angle, detector) circular convolution with the ramp filter impulse response `h`: `filtered[a*D+d] = Σ_{d'} sinogram[a*D+d'] * h[(d-d'+D)%D]`. Reuses existing 4-binding layout (read, read, read_write, uniform). Basis: Ram-Lak ramp filter (Bracewell & Riddle 1967; Shepp & Logan 1974).
+- [x] Add `fbp_filter_pipeline: wgpu::ComputePipeline` to `RadonGpuKernel`; add `compute_ramp_kernel_f32(detector_count, detector_spacing) -> Vec<f32>` (= `ramp_filter_projection([1,0,...], spacing)` cast to f32); add `RadonGpuKernel::execute_filtered_backproject(device, queue, plan, sinogram, angles) -> WgpuResult<Array2<f32>>` (2-pass single encoder: filter → backproject; host-side `* π/angle_count` normalization) in `apollo-radon-wgpu/src/infrastructure/kernel.rs`.
+- [x] Add `RadonWgpuBackend::execute_filtered_backproject(plan, sinogram, angles)` to `apollo-radon-wgpu/src/infrastructure/device.rs`; update `capabilities()` to return `forward_inverse_and_fbp(true)`.
+- [x] Add 4 new tests to `apollo-radon-wgpu/src/verification.rs`: `backproject_satisfies_adjoint_identity_when_device_exists` (⟨Af,g⟩ = ⟨f,A†g⟩, rel_tol=5e-3), `capabilities_include_filtered_backprojection`, `filtered_backproject_matches_cpu_reference_when_device_exists` (single-center-pixel reference, TOL=5e-2), `filtered_backproject_rejects_sinogram_shape_mismatch`.
+- [x] Add `inverse_roundtrip_for_multiple_cola_parameter_sets` test to `apollo-stft-wgpu/src/verification.rs`: 3 COLA-compliant (frame_len, hop_len) pairs at 50% overlap (8/4, 16/8, 32/16); CPU forward → GPU inverse roundtrip; TOL=5e-3.
+- [x] Update `README.md`: fix stale WGPU descriptions for `apollo-radon-wgpu` (add FBP), `apollo-stft-wgpu` (add inverse), `apollo-hilbert-wgpu` (add inverse), `apollo-sdft-wgpu` (add inverse).
+- [x] Update `ARCHITECTURE.md`: fix capability table notes for `apollo-radon-wgpu`, `apollo-stft-wgpu`, `apollo-hilbert-wgpu`, `apollo-sdft-wgpu` rows.
+- [x] Verify `cargo check --workspace --all-targets` clean.
+- [x] Verify `cargo clippy --workspace --all-targets -- -D warnings` zero warnings.
+- [x] Verify `cargo test --workspace --all-targets` zero failures.
+
 ## Closure IX phase (GPU inverse STFT WOLA, GPU Radon backprojection, artifact corrections)
 - [x] Add `WgpuCapabilities::forward_and_inverse(device_available)` constructor to `apollo-stft-wgpu/src/domain/capabilities.rs`.
 - [x] Create `apollo-stft-wgpu/src/infrastructure/shaders/stft_inverse.wgsl`: two entry points sharing `@binding(0) array<f32>` (read), `@binding(1) array<f32>` (read_write), `@binding(2)` uniform. `stft_inverse_frames`: per-(frame, local_j) windowed IDFT — `frame_data[m·N+j] = (1/N)·Re{Σ_k X[m,k]·exp(+2πi·k·j/N)}·hann(j)`. `stft_inverse_ola`: per-output-sample WOLA — `y[n] = Σ_m frame_data[m·N+(n−start_m)] / Σ_m hann(n−start_m)²`, `start_m = m·hop − N/2`. Basis: WOLA identity (Allen–Rabiner 1977, Theorem 1).

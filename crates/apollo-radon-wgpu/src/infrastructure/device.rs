@@ -62,7 +62,7 @@ impl RadonWgpuBackend {
     /// Return truthful current capabilities.
     #[must_use]
     pub const fn capabilities(&self) -> WgpuCapabilities {
-        WgpuCapabilities::forward_and_inverse(true)
+        WgpuCapabilities::forward_inverse_and_fbp(true)
     }
 
     /// Return the acquired WGPU device.
@@ -171,6 +171,31 @@ impl RadonWgpuBackend {
                 },
             )?;
         self.execute_inverse(plan, &sinogram_2d, angles)
+    }
+
+    /// Execute GPU ramp-filtered backprojection (FBP).
+    ///
+    /// Two-pass GPU execution:
+    /// 1. Ram-Lak ramp filter applied to each sinogram projection row (circular convolution
+    ///    with h = IFFT(R), R[k] = 2π·|signed_k|/(N·Δ); Bracewell & Riddle 1967).
+    /// 2. Adjoint backprojection of the filtered sinogram (Natterer 2001, §II.2).
+    ///
+    /// Result is scaled by π / angle_count to approximate the continuous FBP integral
+    /// under uniform angular sampling (Fourier slice theorem limit).
+    pub fn execute_filtered_backproject(
+        &self,
+        plan: &RadonWgpuPlan,
+        sinogram: &Array2<f32>,
+        angles: &[f32],
+    ) -> WgpuResult<Array2<f32>> {
+        Self::validate_sinogram_inputs(plan, sinogram, angles)?;
+        self.kernel.execute_filtered_backproject(
+            self.device.as_ref(),
+            self.queue.as_ref(),
+            plan,
+            sinogram,
+            angles,
+        )
     }
 
     /// Execute the forward Radon projection from a flat typed image slice.
