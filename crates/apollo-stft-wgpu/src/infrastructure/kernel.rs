@@ -1,22 +1,21 @@
 //! GPU compute kernels for the forward and inverse Short-Time Fourier Transform.
 //!
-//! Forward kernel: each invocation computes one complex output element X[frame_m, bin_k]
-//! via a direct DFT sum over the Hann-windowed frame.
+//! Both paths are FFT-accelerated (O(N log N) per frame), requiring power-of-two `frame_len`.
 //!
-//! Inverse kernel: FFT-accelerated two-stage WOLA reconstruction.
+//! ## Forward dispatch sequence (stft_forward_fft.wgsl)
+//! 1. `stft_fwd_pack_window`: Hann analysis window + pack to split re/im scratch.
+//! 2. `stft_fwd_bitrev`:      Cooley-Tukey bit-reversal permutation (batched).
+//! 3. `stft_fwd_butterfly`:   one Radix-2 DIT stage; dispatched `log₂(N)` times (DFT twiddle).
+//! 4. `stft_fwd_interleave`:  split re/im → interleaved ComplexValue output.
 //!
-//! ## Inverse dispatch sequence
-//! The following passes are all encoded in one `CommandEncoder`, exploiting
-//! the implicit per-pass memory barrier in WebGPU (§3.4 sequential pass ordering):
+//! ## Inverse dispatch sequence (stft_inverse_fft.wgsl + stft_inverse.wgsl)
+//! All passes are encoded in one `CommandEncoder` (implicit per-pass barriers):
+//! 1. `stft_deinterleave`:    interleaved spectrum f32 → split re/im scratch.
+//! 2. `stft_bitrev`:          bit-reversal permutation (batched).
+//! 3. `stft_butterfly`:       one Radix-2 DIT stage; dispatched `log₂(N)` times (IDFT twiddle).
+//! 4. `stft_scale_and_window`: scale by 1/N, Hann synthesis window → frame_data.
+//! 5. `stft_inverse_ola`:     weighted overlap-add reconstruction → output signal.
 //!
-//! 1. `stft_deinterleave`: interleaved complex spectrum f32 → split re/im scratch buffers.
-//! 2. `stft_bitrev`:       Cooley-Tukey bit-reversal permutation (in-place, batched).
-//! 3. `stft_butterfly`:    one Radix-2 DIT butterfly stage; dispatched `log₂(N)` times,
-//!    each time with a distinct params bind group (group 1) carrying the stage index.
-//! 4. `stft_scale_and_window`: scale by 1/N and apply Hann synthesis window → frame_data.
-//! 5. `stft_inverse_ola`:  weighted overlap-add reconstruction → output signal.
-//!
-//! Complexity reduction: O(N²) per frame → O(N log N) per frame.
 //! Formal basis: Cooley & Tukey (1965); Allen & Rabiner (1977) Theorem 1.
 
 use std::sync::mpsc;
@@ -27,8 +26,8 @@ use wgpu::util::DeviceExt;
 
 use crate::domain::error::{WgpuError, WgpuResult};
 
-/// Workgroup size for the forward pass and OLA pass (matches `@workgroup_size(64)` in
-/// `stft.wgsl` and `stft_inverse.wgsl`).
+/// Workgroup size for the OLA reconstruction pass (matches `@workgroup_size(64)` in
+/// `stft_inverse.wgsl`).
 const WORKGROUP_SIZE: u32 = 64;
 
 /// Workgroup size for the four FFT inverse passes (matches `@workgroup_size(256)` in
@@ -83,23 +82,21 @@ struct FwdFftStageParams {
     stage: u32,
 }
 
-/// GPU compute kernel encapsulating the forward and inverse STFT pipelines.
+/// GPU compute kernel encapsulating the forward and inverse FFT-accelerated STFT pipelines.
 ///
 /// ## Bind group layouts
 /// - `bind_group_layout`: 3-binding layout (read-only, read_write, uniform).
-///   Used by the forward pass and the OLA inverse pass.
-/// - `fft_data_bgl`: 4-binding layout for FFT inverse data buffers (group 0).
-///   Bindings: interleaved spectrum (read-only), re scratch (read_write),
-///   im scratch (read_write), frame_data (read_write).
+///   Used exclusively by the OLA inverse reconstruction pass.
+/// - `fft_data_bgl`: 4-binding layout shared by all FFT forward and inverse data passes (group 0).
+///   Bindings: spectrum/signal (read-only), re scratch (read_write),
+///   im scratch (read_write), frame_data/output (read_write).
 /// - `fft_params_bgl`: 1-binding layout for per-stage FFT parameters (group 1).
 #[derive(Debug)]
 pub struct StftGpuKernel {
-    /// 3-binding layout shared by forward and OLA passes.
+    /// 3-binding layout used by the OLA reconstruction pass.
     bind_group_layout: wgpu::BindGroupLayout,
-    /// Uniform params buffer for forward and OLA passes (StftParams).
+    /// Uniform params buffer for the OLA pass (StftParams).
     params_buffer: wgpu::Buffer,
-    /// Pipeline for the direct-DFT forward pass.
-    forward_pipeline: wgpu::ComputePipeline,
     /// Pipeline for the weighted overlap-add OLA reconstruction pass.
     inverse_ola_pipeline: wgpu::ComputePipeline,
     /// Data bind group layout for the FFT inverse passes (group 0, 4 bindings).
@@ -171,20 +168,6 @@ impl StftGpuKernel {
             label: Some("apollo-stft-wgpu pipeline layout"),
             bind_group_layouts: &[&bind_group_layout],
             push_constant_ranges: &[],
-        });
-
-        // ── Forward shader & pipeline ─────────────────────────────────────────
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("apollo-stft-wgpu forward shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/stft.wgsl").into()),
-        });
-        let forward_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("apollo-stft-wgpu forward pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &shader,
-            entry_point: Some("stft_forward"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
         });
 
         // ── OLA inverse shader & pipeline (3-binding layout) ──────────────────
@@ -373,7 +356,6 @@ impl StftGpuKernel {
         Self {
             bind_group_layout,
             params_buffer,
-            forward_pipeline,
             inverse_ola_pipeline,
             fft_data_bgl,
             fft_params_bgl,
@@ -386,110 +368,6 @@ impl StftGpuKernel {
             fwd_butterfly_pipeline,
             fwd_interleave_pipeline,
         }
-    }
-
-    /// Execute the forward STFT. Returns interleaved complex values.
-    pub fn execute(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        signal: &[f32],
-        frame_len: usize,
-        hop_len: usize,
-        frame_count: usize,
-    ) -> WgpuResult<Vec<Complex32>> {
-        let total = frame_count * frame_len;
-        let out_b = (total * std::mem::size_of::<ComplexPod>()) as u64;
-        let sig_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("apollo-stft-wgpu signal"),
-            contents: bytemuck::cast_slice(signal),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
-        let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("apollo-stft-wgpu output"),
-            size: out_b,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let stg_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("apollo-stft-wgpu staging"),
-            size: out_b,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(
-            &self.params_buffer,
-            0,
-            bytemuck::bytes_of(&StftParams {
-                signal_len: signal.len() as u32,
-                frame_len: frame_len as u32,
-                hop_len: hop_len as u32,
-                frame_count: frame_count as u32,
-            }),
-        );
-        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("apollo-stft-wgpu bind group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: sig_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: out_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: self.params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("apollo-stft-wgpu encoder"),
-        });
-        {
-            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("apollo-stft-wgpu forward pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.forward_pipeline);
-            pass.set_bind_group(0, &bg, &[]);
-            pass.dispatch_workgroups(dispatch_count(total as u32), 1, 1);
-        }
-        enc.copy_buffer_to_buffer(&out_buf, 0, &stg_buf, 0, out_b);
-        queue.submit(std::iter::once(enc.finish()));
-
-        let slice = stg_buf.slice(..out_b);
-        let (tx, rx) = mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        let _ = device.poll(wgpu::PollType::Wait);
-        match rx.recv() {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                return Err(WgpuError::BufferMapFailed {
-                    message: e.to_string(),
-                })
-            }
-            Err(e) => {
-                return Err(WgpuError::BufferMapFailed {
-                    message: e.to_string(),
-                })
-            }
-        }
-        let output = {
-            let m = slice.get_mapped_range();
-            bytemuck::cast_slice::<_, ComplexPod>(&m)
-                .iter()
-                .map(|p| Complex32::new(p.re, p.im))
-                .collect()
-        };
-        stg_buf.unmap();
-        Ok(output)
     }
 
     /// Execute the inverse STFT via FFT-accelerated WOLA reconstruction.
@@ -1002,14 +880,15 @@ impl StftGpuKernel {
     }
 }
 
-/// Returns the number of workgroups for the forward and OLA passes
-/// (workgroup_size = 64, matching `stft.wgsl` and `stft_inverse.wgsl`).
+/// Returns the number of workgroups for the OLA reconstruction pass
+/// (workgroup_size = 64, matching `@workgroup_size(64)` in `stft_inverse.wgsl`).
 fn dispatch_count(total: u32) -> u32 {
     total.div_ceil(WORKGROUP_SIZE)
 }
 
-/// Returns the number of workgroups for the FFT inverse passes
-/// (workgroup_size = 256, matching `stft_inverse_fft.wgsl`).
+/// Returns the number of workgroups for the FFT forward and inverse passes
+/// (workgroup_size = 256, matching `@workgroup_size(256)` in `stft_forward_fft.wgsl`
+/// and `stft_inverse_fft.wgsl`).
 fn fft_dispatch_count(total: u32) -> u32 {
     total.div_ceil(FFT_WORKGROUP_SIZE)
 }
