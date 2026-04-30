@@ -84,7 +84,7 @@ The table below is the authoritative record of per-crate precision support. "Adv
 | apollo-sdft-wgpu | WGPU | LOW_PRECISION_F32 | f32, [f16;2] host (mixed) | f32 | forward + inverse direct-bins IDFT; f16 promoted at host boundary |
 | apollo-sft-wgpu | WGPU | LOW_PRECISION_F32 | Complex32, [f16;2] host (mixed) | f32 | f16 promoted at host boundary |
 | apollo-sht-wgpu | WGPU | LOW_PRECISION_F32 | Complex32, [f16;2] host (mixed) | f32 | f16 promoted at host boundary |
-| apollo-stft-wgpu | WGPU | LOW_PRECISION_F32 | Complex32, [f16;2] host (mixed) | f32 | forward + inverse WOLA; f16 promoted at host boundary |
+| apollo-stft-wgpu | WGPU | LOW_PRECISION_F32 | Complex32, [f16;2] host (mixed) | f32 | forward + inverse FFT-accelerated (Radix-2 DIT, O(N log N)); PoT frame_len required; f16 promoted at host boundary |
 | apollo-wavelet-wgpu | WGPU | LOW_PRECISION_F32 | f32, half::f16 host (mixed) | f32 | f16 promoted at host boundary |
 
 ### Key: native-f16 GPU (apollo-fft-wgpu)
