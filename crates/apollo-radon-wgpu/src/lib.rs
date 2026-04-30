@@ -2,6 +2,8 @@
 //! WGPU backend boundary for Apollo Radon.
 //!
 //! This crate owns GPU capability and plan descriptors for this transform domain.
+//! It implements both forward parallel-beam Radon projection and adjoint
+//! backprojection on the GPU via WGSL compute shaders.
 //! Mathematical contracts remain in `apollo-radon`.
 
 /// Application-layer WGPU plan descriptors.

@@ -1,7 +1,7 @@
 #![warn(missing_docs)]
 //! WGPU backend boundary for Apollo STFT.
 //!
-//! Provides GPU-accelerated forward STFT execution on f32 signals.
+//! Provides GPU-accelerated forward and inverse STFT execution on f32 signals.
 //! CPU reference implementation and domain contracts live in `apollo-stft`.
 
 /// Application-layer WGPU plan descriptors.

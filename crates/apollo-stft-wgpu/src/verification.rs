@@ -4,6 +4,8 @@
 mod tests {
     use crate::{StftWgpuBackend, StftWgpuPlan, WgpuCapabilities, WgpuError};
     use apollo_fft::{f16, PrecisionProfile};
+    use ndarray::Array1;
+    use num_complex::Complex32;
 
     // -----------------------------------------------------------------------
     // Structural / plan tests (no GPU required)
@@ -29,6 +31,19 @@ mod tests {
             caps_off.default_precision_profile,
             apollo_fft::PrecisionProfile::LOW_PRECISION_F32
         );
+    }
+
+    #[test]
+    fn capabilities_reflect_forward_and_inverse_surface() {
+        let caps = WgpuCapabilities::forward_and_inverse(true);
+        assert!(caps.device_available);
+        assert!(caps.supports_forward);
+        assert!(caps.supports_inverse);
+        assert!(caps.supports_mixed_precision);
+        let caps_off = WgpuCapabilities::forward_and_inverse(false);
+        assert!(!caps_off.device_available);
+        assert!(!caps_off.supports_forward);
+        assert!(!caps_off.supports_inverse);
     }
 
     #[test]
@@ -78,32 +93,14 @@ mod tests {
     }
 
     #[test]
-    fn backend_reports_forward_only_when_device_exists() {
+    fn backend_reports_forward_and_inverse_when_device_exists() {
         let Ok(backend) = StftWgpuBackend::try_default() else {
             return;
         };
         let caps = backend.capabilities();
         assert!(caps.device_available);
         assert!(caps.supports_forward);
-        assert!(!caps.supports_inverse);
-    }
-
-    #[test]
-    fn execute_inverse_returns_unsupported() {
-        let Ok(backend) = StftWgpuBackend::try_default() else {
-            return;
-        };
-        let plan = StftWgpuPlan::new(8, 4);
-        let result = backend.execute_inverse(&plan, &[]);
-        assert!(
-            matches!(
-                result,
-                Err(WgpuError::UnsupportedExecution {
-                    operation: "inverse"
-                })
-            ),
-            "{result:?}"
-        );
+        assert!(caps.supports_inverse);
     }
 
     // -----------------------------------------------------------------------
@@ -112,7 +109,6 @@ mod tests {
 
     #[test]
     fn forward_matches_cpu_reference_when_device_exists() {
-        use ndarray::Array1;
         let Ok(backend) = StftWgpuBackend::try_default() else {
             return;
         };
@@ -158,6 +154,119 @@ mod tests {
                 g.im,
                 c.im,
                 im_err
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // GPU inverse: WOLA roundtrip tests
+    // -----------------------------------------------------------------------
+
+    /// frame_len=8, hop_len=4 (Hann COLA condition: hop = frame_len/2).
+    /// CPU forward spectrum → GPU inverse → compare against CPU inverse as reference.
+    #[test]
+    fn inverse_roundtrip_recovers_cola_signal_when_device_exists() {
+        let Ok(backend) = StftWgpuBackend::try_default() else {
+            return;
+        };
+
+        // Alternating signal, smooth, non-trivial, well inside f32 dynamic range.
+        let signal_f32: Vec<f32> = vec![0.0, 1.0, 0.0, -1.0, 0.0, 1.0, 0.0, -1.0];
+        let signal_f64: Array1<f64> =
+            Array1::from_vec(signal_f32.iter().map(|&x| x as f64).collect());
+        let signal_len = 8usize;
+
+        let plan = StftWgpuPlan::new(8, 4);
+
+        // Compute spectrum on CPU (f64) as the authoritative input.
+        // frame_count = 1 + 8.div_ceil(4) = 3; spectrum_len = 3 * 8 = 24.
+        let cpu_plan = apollo_stft::StftPlan::new(8, 4).expect("CPU plan");
+        let cpu_spectrum = cpu_plan.forward(&signal_f64).expect("CPU forward");
+
+        // Downcast spectrum to f32 for GPU inverse.
+        let gpu_spectrum: Vec<Complex32> = cpu_spectrum
+            .iter()
+            .map(|c| Complex32::new(c.re as f32, c.im as f32))
+            .collect();
+
+        let recovered = backend
+            .execute_inverse(&plan, &gpu_spectrum, signal_len)
+            .expect("GPU inverse STFT");
+
+        // CPU inverse as reference for value-semantic comparison.
+        let cpu_recovered = cpu_plan
+            .inverse(&cpu_spectrum, signal_len)
+            .expect("CPU inverse");
+
+        assert_eq!(
+            recovered.len(),
+            signal_len,
+            "recovered length mismatch: got {}, expected {signal_len}",
+            recovered.len()
+        );
+        assert_eq!(
+            cpu_recovered.len(),
+            signal_len,
+            "cpu_recovered length mismatch"
+        );
+
+        // Tolerance accounts for f64→f32 downcast of spectrum and f32 GPU arithmetic.
+        const TOL: f32 = 5e-4;
+        for (i, (gpu_val, cpu_val)) in recovered.iter().zip(cpu_recovered.iter()).enumerate() {
+            let err = (gpu_val - *cpu_val as f32).abs();
+            assert!(
+                err < TOL,
+                "mismatch at {i}: gpu={gpu_val:.6}, cpu={cpu_val:.6}, err={err:.2e}"
+            );
+        }
+    }
+
+    /// Similar WOLA roundtrip test with a 16-sample signal and frame_len=8, hop_len=4.
+    #[test]
+    fn inverse_matches_cpu_reference_for_16sample_signal() {
+        let Ok(backend) = StftWgpuBackend::try_default() else {
+            return;
+        };
+
+        let signal_f32: Vec<f32> = vec![
+            0.0, 1.0, 0.0, -1.0, 0.0, 1.0, 0.0, -1.0, 0.0, 1.0, 0.0, -1.0, 0.0, 1.0, 0.0, -1.0,
+        ];
+        let signal_f64: Array1<f64> =
+            Array1::from_vec(signal_f32.iter().map(|&x| x as f64).collect());
+        let signal_len = 16usize;
+
+        let plan = StftWgpuPlan::new(8, 4);
+
+        // frame_count = 1 + 16.div_ceil(4) = 5; spectrum_len = 5 * 8 = 40.
+        let cpu_plan = apollo_stft::StftPlan::new(8, 4).expect("CPU plan");
+        let cpu_spectrum = cpu_plan.forward(&signal_f64).expect("CPU forward");
+
+        let gpu_spectrum: Vec<Complex32> = cpu_spectrum
+            .iter()
+            .map(|c| Complex32::new(c.re as f32, c.im as f32))
+            .collect();
+
+        let recovered = backend
+            .execute_inverse(&plan, &gpu_spectrum, signal_len)
+            .expect("GPU inverse STFT");
+
+        let cpu_recovered = cpu_plan
+            .inverse(&cpu_spectrum, signal_len)
+            .expect("CPU inverse");
+
+        assert_eq!(
+            recovered.len(),
+            signal_len,
+            "recovered length mismatch: got {}, expected {signal_len}",
+            recovered.len()
+        );
+
+        const TOL: f32 = 5e-4;
+        for (i, (gpu_val, cpu_val)) in recovered.iter().zip(cpu_recovered.iter()).enumerate() {
+            let err = (gpu_val - *cpu_val as f32).abs();
+            assert!(
+                err < TOL,
+                "mismatch at {i}: gpu={gpu_val:.6}, cpu={cpu_val:.6}, err={err:.2e}"
             );
         }
     }

@@ -4,7 +4,7 @@
 
 - `GpuFft3dF16Native` Bluestein path on production hardware with non-power-of-two sizes: current test passes on dev hardware; production validation on adapters that expose `wgpu::Features::SHADER_F16` is pending.
 - Criterion buffer-reuse bench results on representative GPU hardware: allocation-vs-reuse speedup ratios for 1D and 3D NUFFT fast paths are not yet recorded; requires a GPU runner.
-- WGPU inverse operations: `apollo-czt-wgpu`, `apollo-mellin-wgpu`, `apollo-radon-wgpu`, and `apollo-stft-wgpu` return `UnsupportedExecution` from `execute_inverse`. CPU inverse paths are implemented; GPU inverse requires a separate shader per transform and is deferred pending demand. (`apollo-hilbert-wgpu` and `apollo-sdft-wgpu` inverse GPU paths are now implemented.)
+- WGPU inverse operations (2 remaining): `apollo-czt-wgpu` and `apollo-mellin-wgpu` return `UnsupportedExecution` from `execute_inverse`. These two crates have **no CPU inverse defined** (`apollo-czt` exposes only `forward`; `apollo-mellin` exposes `forward_resample`/`moment`/`forward_spectrum` only). GPU inverse for CZT and Mellin is `UnsupportedExecution` by **architectural design**, not by deferral. (`apollo-hilbert-wgpu`, `apollo-sdft-wgpu`, `apollo-stft-wgpu`, and `apollo-radon-wgpu` inverse/backproject GPU paths are now implemented.)
 
 Note: NTT-WGPU floating mixed precision is an architectural design contract, not a gap.
 Residue-field arithmetic requires exact modular integers; the WGPU surface uses exact `u32`
@@ -14,6 +14,12 @@ by design and will not be implemented.
 ## Closed Gaps
 
 All items below are implemented, tested, and verified in completed sprints.
+
+### Closure IX Phase
+
+- GPU inverse STFT gap (`apollo-stft-wgpu`): implemented two-pass Weighted Overlap-Add (WOLA) reconstruction. Pass 1 (`stft_inverse_frames`): per-(frame, local_j) windowed IDFT — `frame_data[m·N+j] = (1/N)·Re{Σ_k X[m,k]·exp(+2πi·k·j/N)}·hann(j)`, spectrum read as interleaved f32 pairs. Pass 2 (`stft_inverse_ola`): per-output-sample OLA — `y[n] = Σ_m frame_data[m·N+(n−start_m)] / Σ_m hann(n−start_m)²`. Both passes share the existing 3-binding layout (read-only, read_write, uniform), encoded in one `CommandEncoder`. `stft_inverse.wgsl` is a separate file to avoid WGSL binding-type conflicts with the forward shader. Basis: WOLA identity (Allen–Rabiner 1977, Theorem 1). 3 new value-semantic tests (capabilities, COLA roundtrip tol 5e-4, 16-sample CPU reference).
+- GPU Radon backprojection gap (`apollo-radon-wgpu`): implemented `radon_backproject.wgsl` entry point. Per pixel (r, c): `bp[r,c] = Σ_θ interp(sinogram[θ,·], x·cosθ + y·sinθ)` with linear interpolation and out-of-range clamping to 0. Mirrors CPU `adjoint_backproject_into`. Reuses forward bind group layout (read, read, read_write, uniform). Added `SinogramShapeMismatch` error variant. Basis: Radon adjoint operator (Natterer 2001, §II.2). 3 new value-semantic tests (capabilities, CPU backproject reference tol 5e-3, sinogram shape mismatch rejection).
+- Artifact correctness: `gap_audit.md` open-gap note incorrectly claimed "CPU inverse paths are implemented" for CZT and Mellin. Corrected: those two crates have no CPU inverse. Their GPU `execute_inverse` returns `UnsupportedExecution` by architectural design.
 
 ### Closure VIII Phase
 

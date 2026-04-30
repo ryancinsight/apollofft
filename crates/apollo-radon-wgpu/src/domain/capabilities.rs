@@ -41,4 +41,16 @@ impl WgpuCapabilities {
             default_precision_profile: PrecisionProfile::LOW_PRECISION_F32,
         }
     }
+
+    /// Construct capabilities for a forward-and-inverse (backprojection) implementation.
+    #[must_use]
+    pub const fn forward_and_inverse(device_available: bool) -> Self {
+        Self {
+            device_available,
+            supports_forward: device_available,
+            supports_inverse: device_available,
+            supports_mixed_precision: true,
+            default_precision_profile: PrecisionProfile::LOW_PRECISION_F32,
+        }
+    }
 }

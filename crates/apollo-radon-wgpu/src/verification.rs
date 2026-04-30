@@ -22,6 +22,23 @@ mod tests {
     }
 
     #[test]
+    fn capabilities_reflect_forward_and_inverse_surface() {
+        let caps = WgpuCapabilities::forward_and_inverse(true);
+        assert!(caps.device_available);
+        assert!(caps.supports_forward);
+        assert!(caps.supports_inverse);
+        assert!(caps.supports_mixed_precision);
+        assert_eq!(
+            caps.default_precision_profile,
+            apollo_fft::PrecisionProfile::LOW_PRECISION_F32
+        );
+        let caps_off = WgpuCapabilities::forward_and_inverse(false);
+        assert!(!caps_off.device_available);
+        assert!(!caps_off.supports_forward);
+        assert!(!caps_off.supports_inverse);
+    }
+
+    #[test]
     fn plan_preserves_geometry_configuration() {
         let plan = RadonWgpuPlan::new(8, 9, 3, 11, 0.5_f64.to_bits());
         assert_eq!(plan.rows(), 8);
@@ -45,14 +62,14 @@ mod tests {
     }
 
     #[test]
-    fn backend_reports_forward_only_when_device_exists() {
+    fn backend_reports_forward_and_backproject_when_device_exists() {
         let Ok(backend) = RadonWgpuBackend::try_default() else {
             return;
         };
         let capabilities = backend.capabilities();
         assert!(capabilities.device_available);
         assert!(capabilities.supports_forward);
-        assert!(!capabilities.supports_inverse);
+        assert!(capabilities.supports_inverse);
     }
 
     #[test]
@@ -89,6 +106,64 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn backproject_matches_cpu_reference_when_device_exists() {
+        let Ok(backend) = RadonWgpuBackend::try_default() else {
+            return;
+        };
+        let image_f64 = array![[1.0_f64, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]];
+        let angles_f64: Vec<f64> = vec![
+            0.0,
+            std::f64::consts::FRAC_PI_4,
+            std::f64::consts::FRAC_PI_2,
+        ];
+        let angles_f32: Vec<f32> = angles_f64.iter().map(|&a| a as f32).collect();
+        // CPU forward then backproject (f64 reference path).
+        let cpu_plan = RadonPlan::new(3, 3, angles_f64.clone(), 7, 1.0).expect("cpu plan");
+        let sinogram_cpu = cpu_plan.forward(&image_f64).expect("cpu forward");
+        let cpu_bp = cpu_plan
+            .backproject(&sinogram_cpu)
+            .expect("cpu backproject");
+        // GPU backproject using f32 sinogram derived from the f64 CPU result.
+        let sinogram_f32 = sinogram_cpu.values().mapv(|v| v as f32);
+        let gpu_plan = backend.plan(3, 3, angles_f32.len(), 7, 1.0);
+        let gpu_bp = backend
+            .execute_inverse(&gpu_plan, &sinogram_f32, &angles_f32)
+            .expect("gpu backproject");
+        assert_eq!(gpu_bp.dim(), (3, 3));
+        for ((r, c), gpu_val) in gpu_bp.indexed_iter() {
+            let cpu_val = cpu_bp[(r, c)] as f32;
+            let err = (gpu_val - cpu_val).abs();
+            assert!(
+                err < 5e-3,
+                "mismatch at ({r},{c}): gpu={gpu_val:.6}, cpu={cpu_val:.6}, err={err:.2e}"
+            );
+        }
+    }
+
+    #[test]
+    fn execute_inverse_rejects_sinogram_shape_mismatch() {
+        let Ok(backend) = RadonWgpuBackend::try_default() else {
+            return;
+        };
+        // Plan expects 2 angles × 5 detectors; supply 3 × 5.
+        let plan = backend.plan(3, 3, 2, 5, 1.0);
+        let wrong_sinogram = Array2::<f32>::zeros((3, 5));
+        let angles = vec![0.0_f32, std::f32::consts::FRAC_PI_2];
+        let err = backend
+            .execute_inverse(&plan, &wrong_sinogram, &angles)
+            .expect_err("sinogram shape mismatch must fail");
+        assert_eq!(
+            err,
+            WgpuError::SinogramShapeMismatch {
+                expected_angles: 2,
+                expected_detectors: 5,
+                actual_angles: 3,
+                actual_detectors: 5,
+            }
+        );
     }
 
     #[test]

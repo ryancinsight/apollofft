@@ -62,7 +62,7 @@ impl RadonWgpuBackend {
     /// Return truthful current capabilities.
     #[must_use]
     pub const fn capabilities(&self) -> WgpuCapabilities {
-        WgpuCapabilities::forward_only(true)
+        WgpuCapabilities::forward_and_inverse(true)
     }
 
     /// Return the acquired WGPU device.
@@ -113,11 +113,64 @@ impl RadonWgpuBackend {
         )
     }
 
-    /// Inverse or adjoint execution is unsupported until the owning Radon crate defines the WGPU surface.
-    pub fn execute_inverse(&self) -> WgpuResult<()> {
-        Err(WgpuError::UnsupportedExecution {
-            operation: "inverse",
-        })
+    /// Execute the GPU adjoint backprojection (Radon adjoint operator).
+    ///
+    /// Returns the backprojected image as `Array2<f32>` of shape `(rows, cols)`.
+    /// This is the adjoint of `execute_forward`, not an exact inversion.
+    /// For approximate CT reconstruction, apply filtered backprojection via the CPU plan.
+    pub fn execute_inverse(
+        &self,
+        plan: &RadonWgpuPlan,
+        sinogram: &Array2<f32>,
+        angles: &[f32],
+    ) -> WgpuResult<Array2<f32>> {
+        Self::validate_sinogram_inputs(plan, sinogram, angles)?;
+        self.kernel.execute_backproject(
+            self.device.as_ref(),
+            self.queue.as_ref(),
+            plan,
+            sinogram,
+            angles,
+        )
+    }
+
+    /// Execute GPU adjoint backprojection from a flat typed sinogram slice.
+    ///
+    /// `flat_sinogram` must have exactly `plan.angle_count() * plan.detector_count()`
+    /// elements in row-major order. Promotes represented input once to `f32`.
+    pub fn execute_inverse_flat_typed<T: RadonStorage>(
+        &self,
+        plan: &RadonWgpuPlan,
+        precision: PrecisionProfile,
+        flat_sinogram: &[T],
+        angles: &[f32],
+    ) -> WgpuResult<Array2<f32>> {
+        let expected = T::PROFILE;
+        if precision.storage != expected.storage || precision.compute != expected.compute {
+            return Err(WgpuError::InvalidPrecisionProfile);
+        }
+        let expected_len = plan.angle_count() * plan.detector_count();
+        if flat_sinogram.len() != expected_len {
+            return Err(WgpuError::SinogramShapeMismatch {
+                expected_angles: plan.angle_count(),
+                expected_detectors: plan.detector_count(),
+                actual_angles: flat_sinogram.len(),
+                actual_detectors: 1,
+            });
+        }
+        let promoted: Vec<f32> = flat_sinogram.iter().map(|v| v.to_f64() as f32).collect();
+        let sinogram_2d =
+            Array2::from_shape_vec((plan.angle_count(), plan.detector_count()), promoted).map_err(
+                |_| WgpuError::InvalidPlan {
+                    rows: plan.rows(),
+                    cols: plan.cols(),
+                    angle_count: plan.angle_count(),
+                    detector_count: plan.detector_count(),
+                    detector_spacing: plan.detector_spacing(),
+                    message: "flat sinogram reshape failed",
+                },
+            )?;
+        self.execute_inverse(plan, &sinogram_2d, angles)
     }
 
     /// Execute the forward Radon projection from a flat typed image slice.
@@ -157,6 +210,53 @@ impl RadonWgpuBackend {
                 }
             })?;
         self.execute_forward(plan, &image_2d, angles)
+    }
+
+    fn validate_sinogram_inputs(
+        plan: &RadonWgpuPlan,
+        sinogram: &Array2<f32>,
+        angles: &[f32],
+    ) -> WgpuResult<()> {
+        if plan.rows() == 0
+            || plan.cols() == 0
+            || plan.angle_count() == 0
+            || plan.detector_count() == 0
+        {
+            return Err(WgpuError::InvalidPlan {
+                rows: plan.rows(),
+                cols: plan.cols(),
+                angle_count: plan.angle_count(),
+                detector_count: plan.detector_count(),
+                detector_spacing: plan.detector_spacing(),
+                message: "geometry dimensions must be greater than zero",
+            });
+        }
+        if !plan.detector_spacing().is_finite() || plan.detector_spacing() <= 0.0 {
+            return Err(WgpuError::InvalidPlan {
+                rows: plan.rows(),
+                cols: plan.cols(),
+                angle_count: plan.angle_count(),
+                detector_count: plan.detector_count(),
+                detector_spacing: plan.detector_spacing(),
+                message: "detector spacing must be finite and positive",
+            });
+        }
+        let (actual_angles, actual_detectors) = sinogram.dim();
+        if (actual_angles, actual_detectors) != (plan.angle_count(), plan.detector_count()) {
+            return Err(WgpuError::SinogramShapeMismatch {
+                expected_angles: plan.angle_count(),
+                expected_detectors: plan.detector_count(),
+                actual_angles,
+                actual_detectors,
+            });
+        }
+        if angles.len() != plan.angle_count() {
+            return Err(WgpuError::AngleCountMismatch {
+                expected: plan.angle_count(),
+                actual: angles.len(),
+            });
+        }
+        Ok(())
     }
 
     fn validate_inputs(

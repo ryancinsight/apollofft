@@ -68,6 +68,18 @@ pub enum WgpuError {
         /// Requested operation name.
         operation: &'static str,
     },
+    /// Sinogram shape does not match the plan.
+    #[error("sinogram shape mismatch: expected {expected_angles}\u{d7}{expected_detectors}, got {actual_angles}\u{d7}{actual_detectors}")]
+    SinogramShapeMismatch {
+        /// Expected angle count (rows).
+        expected_angles: usize,
+        /// Expected detector count (cols).
+        expected_detectors: usize,
+        /// Actual angle count.
+        actual_angles: usize,
+        /// Actual detector count.
+        actual_detectors: usize,
+    },
     /// Requested precision profile does not match the typed storage.
     #[error("precision profile does not match typed Radon WGPU storage")]
     InvalidPrecisionProfile,
