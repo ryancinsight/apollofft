@@ -1,5 +1,19 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure XII phase)
+- [x] [minor] STFT forward GPU acceleration (`apollo-stft-wgpu`): replace O(N²) per-frame
+  direct DFT in `stft.wgsl::stft_forward` with a batched Cooley-Tukey Radix-2 DIT FFT
+  (O(N log N) per frame). New `stft_forward_fft.wgsl` with four entry points:
+  `stft_fwd_pack_window` (Hann analysis window + pack to split re/im scratch),
+  `stft_fwd_bitrev` (bit-reversal permutation, batched), `stft_fwd_butterfly` (one Radix-2
+  DIT stage per dispatch, DFT twiddle exp(−2πi·k/N)), `stft_fwd_interleave` (split re/im →
+  interleaved ComplexValue output). Reuses `fft_data_bgl` and `fft_params_bgl` layouts
+  from the inverse FFT path. New `FwdFftStageParams` (16 bytes, 4×u32) carries `hop_len`
+  where `FftStageParams._pad` was. `FrameLenNotPowerOfTwo` enforced on forward path.
+  Formal basis: Cooley & Tukey (1965).
+- [x] [patch] New `forward_rejects_non_power_of_two_frame_len` test (CPU-only).
+- [x] [patch] New `forward_fft_roundtrip_large_frame_when_device_exists` test (GPU-gated).
+
 ## Closed in this sprint (Closure XI phase)
 - [x] [minor] STFT inverse GPU acceleration (`apollo-stft-wgpu`): replace O(N²) per-frame direct IDFT in `stft_inverse.wgsl::stft_inverse_frames` with a batched Cooley-Tukey Radix-2 DIT IFFT (O(N log N) per frame). New `stft_inverse_fft.wgsl` with four entry points: `stft_deinterleave` (interleaved f32 → split re/im scratch), `stft_bitrev` (bit-reversal permutation, batched), `stft_butterfly` (one Radix-2 DIT stage per dispatch, IDFT twiddle exp(+2πi·k/N)), `stft_scale_and_window` (1/N scale + Hann synthesis window → frame_data). Two-bind-group architecture: group 0 (4 data bindings, shared), group 1 (per-stage FftStageParams uniform, one bind group per butterfly pass). All passes encoded in one `CommandEncoder`; implicit per-pass memory barriers preserve write visibility. OLA pass unchanged. Formal basis: Cooley & Tukey (1965); Allen & Rabiner (1977) Theorem 1.
 - [x] [minor] New `WgpuError::FrameLenNotPowerOfTwo { frame_len: usize }` variant: returned by `execute_inverse` when `frame_len` is not a power of two (Radix-2 invariant). Checked in both `device.rs` (pre-dispatch) and `kernel.rs` (IFFT entry). [minor because it is an additive public API change to an existing error enum]

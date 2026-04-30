@@ -68,6 +68,21 @@ struct FftStageParams {
     _pad: u32,
 }
 
+/// Uniform parameter block for the FFT forward passes.
+///
+/// Layout: 4 × u32 = 16 bytes, satisfying WGPU uniform alignment.
+/// `hop_len` occupies the position that `_pad` occupies in `FftStageParams`;
+/// the same `fft_params_bgl` (min_binding_size = 16) is therefore reusable for both paths.
+/// Field order matches the WGSL `FwdFftParams` struct byte-for-byte.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct FwdFftStageParams {
+    frame_count: u32,
+    frame_len: u32,
+    hop_len: u32,
+    stage: u32,
+}
+
 /// GPU compute kernel encapsulating the forward and inverse STFT pipelines.
 ///
 /// ## Bind group layouts
@@ -99,6 +114,14 @@ pub struct StftGpuKernel {
     butterfly_pipeline: wgpu::ComputePipeline,
     /// Scale-by-1/N and Hann-window pipeline writing frame_data.
     scale_window_pipeline: wgpu::ComputePipeline,
+    /// Pack + Hann-analysis-window pipeline (pass 1 of forward FFT).
+    fwd_pack_window_pipeline: wgpu::ComputePipeline,
+    /// Bit-reversal permutation pipeline for the forward FFT path (pass 2).
+    fwd_bitrev_pipeline: wgpu::ComputePipeline,
+    /// Radix-2 DIT butterfly stage pipeline with DFT twiddle exp(−2πi) (pass 3).
+    fwd_butterfly_pipeline: wgpu::ComputePipeline,
+    /// Interleave split re/im → output ComplexValue pipeline (pass 4).
+    fwd_interleave_pipeline: wgpu::ComputePipeline,
 }
 
 impl StftGpuKernel {
@@ -305,6 +328,48 @@ impl StftGpuKernel {
                 cache: None,
             });
 
+        // ── Forward FFT shader & four pipelines ───────────────────────────────────────
+        let fft_fwd_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("apollo-stft-wgpu FFT forward shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/stft_forward_fft.wgsl").into()),
+        });
+        let fwd_pack_window_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("apollo-stft-wgpu fwd pack-window pipeline"),
+                layout: Some(&fft_pipeline_layout),
+                module: &fft_fwd_shader,
+                entry_point: Some("stft_fwd_pack_window"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+        let fwd_bitrev_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("apollo-stft-wgpu fwd bitrev pipeline"),
+                layout: Some(&fft_pipeline_layout),
+                module: &fft_fwd_shader,
+                entry_point: Some("stft_fwd_bitrev"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+        let fwd_butterfly_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("apollo-stft-wgpu fwd butterfly pipeline"),
+                layout: Some(&fft_pipeline_layout),
+                module: &fft_fwd_shader,
+                entry_point: Some("stft_fwd_butterfly"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+        let fwd_interleave_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("apollo-stft-wgpu fwd interleave pipeline"),
+                layout: Some(&fft_pipeline_layout),
+                module: &fft_fwd_shader,
+                entry_point: Some("stft_fwd_interleave"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+
         Self {
             bind_group_layout,
             params_buffer,
@@ -316,6 +381,10 @@ impl StftGpuKernel {
             bitrev_pipeline,
             butterfly_pipeline,
             scale_window_pipeline,
+            fwd_pack_window_pipeline,
+            fwd_bitrev_pipeline,
+            fwd_butterfly_pipeline,
+            fwd_interleave_pipeline,
         }
     }
 
@@ -707,6 +776,226 @@ impl StftGpuKernel {
         let output = {
             let m = slice.get_mapped_range();
             bytemuck::cast_slice::<_, f32>(&m).to_vec()
+        };
+        staging.unmap();
+        Ok(output)
+    }
+
+    /// Execute the forward STFT via FFT-accelerated batch DFT (O(N log N) per frame).
+    ///
+    /// ## Algorithm
+    /// 1. `stft_fwd_pack_window`: apply Hann analysis window to centred frames,
+    ///    pack real windowed samples into split re/im scratch.
+    /// 2. `stft_fwd_bitrev`: Cooley-Tukey bit-reversal permutation (in-place, batched).
+    /// 3. `stft_fwd_butterfly` × log₂(frame_len): Radix-2 DIT butterfly stages (DFT twiddle).
+    /// 4. `stft_fwd_interleave`: pack split re/im scratch → interleaved ComplexPod output.
+    ///
+    /// Complexity: O(N log N) per frame (reduced from O(N²)).
+    ///
+    /// ## Invariants
+    /// - `frame_len` must be a power of two (Radix-2 requirement).
+    pub fn execute_forward_fft(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        signal: &[f32],
+        frame_len: usize,
+        hop_len: usize,
+        frame_count: usize,
+    ) -> WgpuResult<Vec<Complex32>> {
+        if !frame_len.is_power_of_two() {
+            return Err(WgpuError::FrameLenNotPowerOfTwo { frame_len });
+        }
+        let log2_n = frame_len.trailing_zeros();
+
+        let signal_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("apollo-stft-wgpu fwd signal"),
+            contents: bytemuck::cast_slice(signal),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
+        let scratch_size = (frame_count * frame_len * std::mem::size_of::<f32>()) as u64;
+        let re_scratch_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-stft-wgpu fwd re scratch"),
+            size: scratch_size,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let im_scratch_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-stft-wgpu fwd im scratch"),
+            size: scratch_size,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+
+        let out_size = (frame_count * frame_len * std::mem::size_of::<ComplexPod>()) as u64;
+        let output_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-stft-wgpu fwd output"),
+            size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-stft-wgpu fwd staging"),
+            size: out_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Bind group 0: reuse fft_data_bgl (binding types are identical: ro, rw, rw, rw).
+        let fft_fwd_data_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("apollo-stft-wgpu fwd FFT data BG"),
+            layout: &self.fft_data_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: signal_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: re_scratch_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: im_scratch_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: output_buf.as_entire_binding(),
+                },
+            ],
+        });
+
+        // Base params bind group: stage=0, hop_len filled.
+        // Used for pack_window, bitrev, and interleave passes (stage field unused for these).
+        let base_params = FwdFftStageParams {
+            frame_count: frame_count as u32,
+            frame_len: frame_len as u32,
+            hop_len: hop_len as u32,
+            stage: 0,
+        };
+        let base_params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("apollo-stft-wgpu fwd base params"),
+            contents: bytemuck::bytes_of(&base_params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let base_params_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("apollo-stft-wgpu fwd base params BG"),
+            layout: &self.fft_params_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: base_params_buf.as_entire_binding(),
+            }],
+        });
+
+        // Per-butterfly-stage params bind groups (one per stage, stage index varies).
+        let mut butterfly_bufs: Vec<wgpu::Buffer> = Vec::with_capacity(log2_n as usize);
+        let mut butterfly_bgs: Vec<wgpu::BindGroup> = Vec::with_capacity(log2_n as usize);
+        for s in 0..log2_n {
+            let stage_params = FwdFftStageParams {
+                frame_count: frame_count as u32,
+                frame_len: frame_len as u32,
+                hop_len: hop_len as u32,
+                stage: s,
+            };
+            let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("apollo-stft-wgpu fwd butterfly stage params"),
+                contents: bytemuck::bytes_of(&stage_params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("apollo-stft-wgpu fwd butterfly stage params BG"),
+                layout: &self.fft_params_bgl,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buf.as_entire_binding(),
+                }],
+            });
+            butterfly_bufs.push(buf);
+            butterfly_bgs.push(bg);
+        }
+
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("apollo-stft-wgpu fwd encoder"),
+        });
+
+        // Pass 1: pack + Hann analysis window → split re/im scratch.
+        {
+            let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("stft_fwd_pack_window"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&self.fwd_pack_window_pipeline);
+            p.set_bind_group(0, &fft_fwd_data_bg, &[]);
+            p.set_bind_group(1, &base_params_bg, &[]);
+            p.dispatch_workgroups(fft_dispatch_count((frame_count * frame_len) as u32), 1, 1);
+        }
+        // Pass 2: bit-reversal permutation.
+        {
+            let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("stft_fwd_bitrev"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&self.fwd_bitrev_pipeline);
+            p.set_bind_group(0, &fft_fwd_data_bg, &[]);
+            p.set_bind_group(1, &base_params_bg, &[]);
+            p.dispatch_workgroups(fft_dispatch_count((frame_count * frame_len) as u32), 1, 1);
+        }
+        // Pass 3: Radix-2 DIT butterfly × log₂(frame_len).
+        for s in 0..log2_n as usize {
+            let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("stft_fwd_butterfly"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&self.fwd_butterfly_pipeline);
+            p.set_bind_group(0, &fft_fwd_data_bg, &[]);
+            p.set_bind_group(1, &butterfly_bgs[s], &[]);
+            p.dispatch_workgroups(
+                fft_dispatch_count((frame_count * frame_len / 2) as u32),
+                1,
+                1,
+            );
+        }
+        // Pass 4: interleave split re/im → output ComplexValue array.
+        {
+            let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("stft_fwd_interleave"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&self.fwd_interleave_pipeline);
+            p.set_bind_group(0, &fft_fwd_data_bg, &[]);
+            p.set_bind_group(1, &base_params_bg, &[]);
+            p.dispatch_workgroups(fft_dispatch_count((frame_count * frame_len) as u32), 1, 1);
+        }
+
+        enc.copy_buffer_to_buffer(&output_buf, 0, &staging, 0, out_size);
+        queue.submit(std::iter::once(enc.finish()));
+
+        let slice = staging.slice(..out_size);
+        let (tx, rx) = mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = device.poll(wgpu::PollType::Wait);
+        match rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                return Err(WgpuError::BufferMapFailed {
+                    message: e.to_string(),
+                })
+            }
+            Err(e) => {
+                return Err(WgpuError::BufferMapFailed {
+                    message: e.to_string(),
+                })
+            }
+        }
+        let output = {
+            let m = slice.get_mapped_range();
+            bytemuck::cast_slice::<_, ComplexPod>(&m)
+                .iter()
+                .map(|p| Complex32::new(p.re, p.im))
+                .collect()
         };
         staging.unmap();
         Ok(output)

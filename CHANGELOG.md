@@ -6,6 +6,25 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [Unreleased] — Closure XII
+
+### Closure XII — STFT Forward-Path GPU FFT Acceleration
+#### Added
+- `stft_forward_fft.wgsl`: new GPU shader with `stft_fwd_pack_window`, `stft_fwd_bitrev`,
+  `stft_fwd_butterfly`, `stft_fwd_interleave` entry points (DFT twiddle `exp(−2πi·k/N)`).
+- `FwdFftStageParams` struct (16 bytes, fields: frame_count, frame_len, hop_len, stage).
+- `StftGpuKernel::execute_forward_fft`: O(N log N) GPU forward STFT, PoT frame_len required.
+- `FrameLenNotPowerOfTwo` guard in `StftWgpuBackend::execute_forward`.
+- Tests: `forward_rejects_non_power_of_two_frame_len`, `forward_fft_roundtrip_large_frame_when_device_exists`.
+#### Changed
+- `StftWgpuBackend::execute_forward` now routes to the FFT-accelerated path and requires
+  power-of-two `frame_len` (previously accepted any `frame_len` via O(N²) direct DFT).
+#### Breaking
+- `execute_forward` with non-power-of-two `frame_len` now returns
+  `Err(WgpuError::FrameLenNotPowerOfTwo)` instead of computing a result.
+
+---
+
 ## [Unreleased] — Closure XI
 
 ### Added

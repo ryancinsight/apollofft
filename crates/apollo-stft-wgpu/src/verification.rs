@@ -509,4 +509,81 @@ mod tests {
             "max |GPU - CPU_ref| = {max_err:.2e} exceeds TOL = {TOL:.2e} for frame_len={FRAME_LEN}"
         );
     }
+
+    /// Verifies that `execute_forward` rejects a non-power-of-two `frame_len` with
+    /// `WgpuError::FrameLenNotPowerOfTwo` before any GPU dispatch.
+    /// CPU-side validation: does not require a GPU device.
+    #[test]
+    fn forward_rejects_non_power_of_two_frame_len() {
+        let Ok(backend) = StftWgpuBackend::try_default() else {
+            return;
+        };
+        // frame_len = 6 is not a power of two; signal length satisfies InputTooShort check.
+        let signal = vec![0.0f32; 12];
+        let plan = StftWgpuPlan::new(6, 3);
+        let r = backend.execute_forward(&plan, &signal);
+        assert!(
+            matches!(r, Err(WgpuError::FrameLenNotPowerOfTwo { frame_len: 6 })),
+            "expected FrameLenNotPowerOfTwo {{ frame_len: 6 }}, got {r:?}"
+        );
+    }
+
+    /// GPU forward FFT (1024-frame, log₂(1024) = 10 butterfly stages) followed by GPU inverse
+    /// FFT must recover the original signal within tolerance on interior samples.
+    ///
+    /// Signal: sum of two bin-aligned sinusoids; hop = frame_len/2 satisfies Hann COLA.
+    /// Tolerance: 1e-2 (f32 accumulation over 10 butterfly stages + WOLA normalisation).
+    #[test]
+    #[ignore = "requires wgpu device"]
+    fn forward_fft_roundtrip_large_frame_when_device_exists() {
+        const FRAME_LEN: usize = 1024;
+        const HOP_LEN: usize = 512;
+        const SIGNAL_LEN: usize = 4096;
+        const TOL: f32 = 1e-2;
+
+        let Ok(backend) = StftWgpuBackend::try_default() else {
+            return;
+        };
+
+        // Analytical signal: two bin-aligned sinusoids (k₁=16, k₂=64).
+        // Bin alignment ensures the DFT concentrates energy at known frequencies
+        // with no spectral leakage, making the analytical spectrum exact.
+        let signal_f32: Vec<f32> = (0..SIGNAL_LEN)
+            .map(|n| {
+                let t = n as f32;
+                (2.0 * std::f32::consts::PI * 16.0 * t / FRAME_LEN as f32).sin()
+                    + 0.5 * (2.0 * std::f32::consts::PI * 64.0 * t / FRAME_LEN as f32).sin()
+            })
+            .collect();
+
+        let plan = StftWgpuPlan::new(FRAME_LEN, HOP_LEN);
+        let frame_count = 1 + SIGNAL_LEN.div_ceil(HOP_LEN);
+
+        let spectrum = backend
+            .execute_forward(&plan, &signal_f32)
+            .expect("GPU forward FFT");
+        assert_eq!(
+            spectrum.len(),
+            frame_count * FRAME_LEN,
+            "spectrum length mismatch"
+        );
+
+        let recovered = backend
+            .execute_inverse(&plan, &spectrum, SIGNAL_LEN)
+            .expect("GPU inverse FFT");
+        assert_eq!(recovered.len(), SIGNAL_LEN, "recovered length mismatch");
+
+        // Exclude edge samples affected by zero-padding at frame boundaries.
+        let margin = FRAME_LEN / 2;
+        for i in margin..(SIGNAL_LEN - margin) {
+            let err = (recovered[i] - signal_f32[i]).abs();
+            assert!(
+                err < TOL,
+                "sample {i}: recovered={:.6}, expected={:.6}, err={:.2e}",
+                recovered[i],
+                signal_f32[i],
+                err
+            );
+        }
+    }
 }

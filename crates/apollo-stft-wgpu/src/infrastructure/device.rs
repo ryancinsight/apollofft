@@ -120,7 +120,12 @@ impl StftWgpuBackend {
         // Mirror the CPU StftPlan::frame_count formula exactly:
         //   1 + signal_len.div_ceil(hop_len)
         let frame_count = 1 + signal.len().div_ceil(plan.hop_len());
-        self.kernel.execute(
+        if !plan.frame_len().is_power_of_two() {
+            return Err(WgpuError::FrameLenNotPowerOfTwo {
+                frame_len: plan.frame_len(),
+            });
+        }
+        self.kernel.execute_forward_fft(
             &self.device,
             &self.queue,
             signal,

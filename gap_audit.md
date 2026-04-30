@@ -15,6 +15,19 @@ by design and will not be implemented.
 
 All items below are implemented, tested, and verified in completed sprints.
 
+### Closure XII — STFT Forward-Path GPU FFT Acceleration
+**Status:** Closed.
+**Contract:** `StftGpuKernel::execute_forward_fft` computes
+`X[m, k] = Σ_{n=0}^{N−1} w_a[n] · x[m·hop − N/2 + n] · exp(−2πi·k·n/N)` in O(N log N)
+per frame using a batched Radix-2 DIT FFT (frame_len must be a power of two).
+**Formal basis:** Cooley & Tukey (1965); DFT twiddle `W_N^k = exp(−2πi·k/N)` is the
+conjugate of the IDFT twiddle in Closure XI.
+**Error bound:** f32 accumulation error over log₂(N) butterfly stages; empirically verified
+to 1e-2 for FRAME_LEN=1024 vs. CPU reference.
+**Constraint enforced:** `frame_len` not a power of two → `WgpuError::FrameLenNotPowerOfTwo`.
+**Tests added:** `forward_rejects_non_power_of_two_frame_len` (CPU-only),
+`forward_fft_roundtrip_large_frame_when_device_exists` (GPU-gated, #[ignore]).
+
 ### Closure XI Phase
 
 - **STFT inverse GPU acceleration** (`apollo-stft-wgpu`): per-frame IDFT complexity reduced from O(N²) to O(N log N) by replacing the `stft_inverse_frames` direct-sum pass with a batched Cooley-Tukey Radix-2 DIT IFFT. New `stft_inverse_fft.wgsl` encodes four entry points per encoder: `stft_deinterleave` (interleaved complex f32 → split re/im scratch), `stft_bitrev` (in-place bit-reversal permutation, batched over frames), `stft_butterfly` (one Radix-2 DIT stage, dispatched `log₂(N)` times with distinct per-stage `FftStageParams` bind groups), `stft_scale_and_window` (1/N scale + Hann synthesis window → frame_data). Two-bind-group architecture: group 0 = 4 shared data bindings, group 1 = per-stage `FftStageParams` uniform (one pre-allocated `wgpu::Buffer` + `BindGroup` per stage). OLA pass (group 0 binding 0 = frame_data read-only, group 0 binding 1 = signal output) unchanged. `butterfly_bufs` Vec retains GPU buffer lifetimes until `queue.submit`. Dual workgroup-size constants: `WORKGROUP_SIZE = 64` (forward + OLA), `FFT_WORKGROUP_SIZE = 256` (FFT inverse passes). Basis: Cooley & Tukey (1965); Allen & Rabiner (1977) Theorem 1.

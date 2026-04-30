@@ -1,5 +1,27 @@
 # Apollo Checklist
 
+## Closure XII — STFT Forward-Path GPU FFT Acceleration [minor]
+Sprint target version: 0.3.0 (first unreleased minor after 0.2.0)
+
+- [x] Create `crates/apollo-stft-wgpu/src/infrastructure/shaders/stft_forward_fft.wgsl`
+      with entry points: `stft_fwd_pack_window`, `stft_fwd_bitrev`, `stft_fwd_butterfly`,
+      `stft_fwd_interleave`; DFT twiddle `exp(−2πi·k/N)`.
+- [x] Add `FwdFftStageParams` struct (16 bytes, 4×u32: frame_count, frame_len, hop_len, stage).
+- [x] Add 4 new pipeline fields to `StftGpuKernel`: `fwd_pack_window_pipeline`,
+      `fwd_bitrev_pipeline`, `fwd_butterfly_pipeline`, `fwd_interleave_pipeline`.
+- [x] Extend `StftGpuKernel::new()` to compile `stft_forward_fft.wgsl` and build 4 pipelines,
+      reusing `fft_pipeline_layout` (group 0: `fft_data_bgl`, group 1: `fft_params_bgl`).
+- [x] Implement `StftGpuKernel::execute_forward_fft()`:
+      dispatch sequence pack_window → bitrev → butterfly×log₂N → interleave.
+- [x] Add `FrameLenNotPowerOfTwo` guard in `StftWgpuBackend::execute_forward()`.
+- [x] Route `execute_forward` to `kernel.execute_forward_fft()`.
+- [x] Add test `forward_rejects_non_power_of_two_frame_len` (no GPU required).
+- [x] Add test `forward_fft_roundtrip_large_frame_when_device_exists` (#[ignore], FRAME_LEN=1024).
+- [x] `cargo check -p apollo-stft-wgpu` clean.
+- [x] `cargo clippy -p apollo-stft-wgpu -- -D warnings` clean.
+- [x] `cargo test -p apollo-stft-wgpu` passing.
+- [x] Artifact sync: backlog.md, checklist.md, gap_audit.md, CHANGELOG.md updated.
+
 ## Closure XI phase (STFT inverse GPU acceleration, FrameLenNotPowerOfTwo, large-frame verification)
 - [x] Create `apollo-stft-wgpu/src/infrastructure/shaders/stft_inverse_fft.wgsl` with four entry points: `stft_deinterleave`, `stft_bitrev`, `stft_butterfly`, `stft_scale_and_window`. Two bind groups: group 0 (4 data bindings), group 1 (per-stage `FftStageParams` uniform). IDFT twiddle: exp(+2πi·k/N). Formal basis: Cooley-Tukey Radix-2 DIT (Cooley & Tukey 1965); WOLA identity (Allen & Rabiner 1977 Theorem 1).
 - [x] Add `FftStageParams` struct (`frame_count, frame_len, stage, _pad`: 4×u32 = 16 bytes) to `kernel.rs`.
