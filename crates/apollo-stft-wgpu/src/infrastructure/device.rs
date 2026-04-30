@@ -168,6 +168,11 @@ impl StftWgpuBackend {
                 message: "signal_len must be non-zero",
             });
         }
+        if !plan.frame_len().is_power_of_two() {
+            return Err(WgpuError::FrameLenNotPowerOfTwo {
+                frame_len: plan.frame_len(),
+            });
+        }
         let frame_count = 1 + signal_len.div_ceil(plan.hop_len());
         let expected = frame_count * plan.frame_len();
         if spectrum.len() != expected {

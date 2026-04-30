@@ -430,4 +430,83 @@ mod tests {
             .collect();
         run_roundtrip(&backend, 32, 16, &sig32);
     }
+
+    #[test]
+    fn inverse_rejects_non_power_of_two_frame_len() {
+        // frame_len = 6 is not a power of two; the FFT-accelerated inverse path
+        // must return FrameLenNotPowerOfTwo without attempting GPU dispatch.
+        //
+        // frame_count = 1 + 6.div_ceil(3) = 3; spectrum_len = 3 * 6 = 18.
+        match StftWgpuBackend::try_default() {
+            Err(_) => return,
+            Ok(backend) => {
+                let plan = StftWgpuPlan::new(6, 3);
+                let dummy_spectrum = vec![Complex32::new(0.0, 0.0); 18];
+                let result = backend.execute_inverse(&plan, &dummy_spectrum, 6);
+                match result {
+                    Err(WgpuError::FrameLenNotPowerOfTwo { frame_len }) => {
+                        assert_eq!(frame_len, 6, "reported frame_len must equal 6");
+                    }
+                    other => panic!(
+                        "expected FrameLenNotPowerOfTwo for frame_len=6, got {:?}",
+                        other
+                    ),
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires wgpu device"]
+    fn inverse_roundtrip_large_frame_1024_samples_when_device_exists() {
+        // Verifies the FFT-accelerated inverse path for a large power-of-two
+        // frame_len (1024) that exercises multiple butterfly stages (log₂(1024) = 10).
+        //
+        // Reference signal: analytic sine x[n] = sin(2π·n/SIGNAL_LEN).
+        // Forward (CPU, f64) → Inverse (GPU, f32). Max absolute deviation ≤ 5e-3.
+        const FRAME_LEN: usize = 1024;
+        const HOP_LEN: usize = 512;
+        const SIGNAL_LEN: usize = 8192;
+        const TOL: f32 = 5e-3;
+
+        let Ok(backend) = StftWgpuBackend::try_default() else {
+            return;
+        };
+
+        let signal_f32: Vec<f32> = (0..SIGNAL_LEN)
+            .map(|n| (std::f32::consts::TAU * n as f32 / SIGNAL_LEN as f32).sin())
+            .collect();
+
+        let plan = StftWgpuPlan::new(FRAME_LEN, HOP_LEN);
+        let cpu_plan = apollo_stft::StftPlan::new(FRAME_LEN, HOP_LEN).expect("cpu plan");
+        let signal_f64 = Array1::from_vec(signal_f32.iter().map(|&x| x as f64).collect());
+        let cpu_spectrum = cpu_plan.forward(&signal_f64).expect("cpu forward");
+        let gpu_spectrum: Vec<Complex32> = cpu_spectrum
+            .iter()
+            .map(|c| Complex32::new(c.re as f32, c.im as f32))
+            .collect();
+
+        let gpu_result = backend
+            .execute_inverse(&plan, &gpu_spectrum, SIGNAL_LEN)
+            .expect("GPU inverse must succeed for power-of-two frame_len");
+
+        let cpu_reference = cpu_plan
+            .inverse(&cpu_spectrum, SIGNAL_LEN)
+            .expect("cpu inverse");
+
+        assert_eq!(
+            gpu_result.len(),
+            SIGNAL_LEN,
+            "output length must equal signal_len"
+        );
+        let max_err = gpu_result
+            .iter()
+            .zip(cpu_reference.iter())
+            .map(|(g, c)| (g - *c as f32).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            max_err <= TOL,
+            "max |GPU - CPU_ref| = {max_err:.2e} exceeds TOL = {TOL:.2e} for frame_len={FRAME_LEN}"
+        );
+    }
 }

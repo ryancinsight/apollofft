@@ -1,5 +1,18 @@
 # Apollo Checklist
 
+## Closure XI phase (STFT inverse GPU acceleration, FrameLenNotPowerOfTwo, large-frame verification)
+- [x] Create `apollo-stft-wgpu/src/infrastructure/shaders/stft_inverse_fft.wgsl` with four entry points: `stft_deinterleave`, `stft_bitrev`, `stft_butterfly`, `stft_scale_and_window`. Two bind groups: group 0 (4 data bindings), group 1 (per-stage `FftStageParams` uniform). IDFT twiddle: exp(+2πi·k/N). Formal basis: Cooley-Tukey Radix-2 DIT (Cooley & Tukey 1965); WOLA identity (Allen & Rabiner 1977 Theorem 1).
+- [x] Add `FftStageParams` struct (`frame_count, frame_len, stage, _pad`: 4×u32 = 16 bytes) to `kernel.rs`.
+- [x] Replace `inverse_frames_pipeline` in `StftGpuKernel` with `deinterleave_pipeline`, `bitrev_pipeline`, `butterfly_pipeline`, `scale_window_pipeline`; add `fft_data_bgl` (4-binding group-0 layout) and `fft_params_bgl` (1-uniform group-1 layout); keep `FFT_WORKGROUP_SIZE = 256` separate from `WORKGROUP_SIZE = 64` to avoid under-dispatching forward/OLA passes.
+- [x] Rewrite `StftGpuKernel::execute_inverse` to: validate `frame_len.is_power_of_two()`, allocate re/im scratch and frame_data buffers, pre-allocate `log₂(N)` per-stage uniform buffers and bind groups, encode deinterleave + bitrev + N butterfly passes + scale_window + OLA in one `CommandEncoder`.
+- [x] Add `WgpuError::FrameLenNotPowerOfTwo { frame_len: usize }` variant to `domain/error.rs`.
+- [x] Add power-of-two validation guard in `StftWgpuBackend::execute_inverse` (`device.rs`) before kernel dispatch.
+- [x] Add `inverse_rejects_non_power_of_two_frame_len` test: frame_len=6, expects `FrameLenNotPowerOfTwo { frame_len: 6 }`.
+- [x] Add `#[ignore = "requires wgpu device"] inverse_roundtrip_large_frame_1024_samples_when_device_exists` test: frame_len=1024, hop=512, signal_len=8192, analytic sine reference, TOL=5e-3.
+- [x] Verify `cargo check --workspace --all-targets` clean.
+- [x] Verify `cargo clippy --workspace --all-targets -- -D warnings` zero warnings.
+- [x] Verify `cargo test --workspace --all-targets` zero failures (1 GPU-gated test ignored).
+
 ## Closure X phase (GPU Radon FBP, adjoint identity test, STFT parameterized roundtrip, documentation sync)
 - [x] Add `supports_filtered_backprojection: bool` field and `forward_inverse_and_fbp(device_available)` constructor to `apollo-radon-wgpu/src/domain/capabilities.rs`.
 - [x] Create `apollo-radon-wgpu/src/infrastructure/shaders/radon_fbp_filter.wgsl`: entry `radon_fbp_filter` — per-(angle, detector) circular convolution with the ramp filter impulse response `h`: `filtered[a*D+d] = Σ_{d'} sinogram[a*D+d'] * h[(d-d'+D)%D]`. Reuses existing 4-binding layout (read, read, read_write, uniform). Basis: Ram-Lak ramp filter (Bracewell & Riddle 1967; Shepp & Logan 1974).

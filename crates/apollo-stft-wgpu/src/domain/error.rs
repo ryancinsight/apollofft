@@ -61,4 +61,10 @@ pub enum WgpuError {
     /// Requested precision profile does not match the typed storage.
     #[error("precision profile does not match typed STFT WGPU storage")]
     InvalidPrecisionProfile,
+    /// The inverse FFT path requires `frame_len` to be a power of two.
+    #[error("frame_len {frame_len} is not a power of two; the GPU inverse FFT path requires a power-of-two frame length")]
+    FrameLenNotPowerOfTwo {
+        /// The non-power-of-two frame length supplied by the caller.
+        frame_len: usize,
+    },
 }
