@@ -1,6 +1,8 @@
 //! GPU compute kernels for the forward and inverse Short-Time Fourier Transform.
 //!
-//! Both paths are FFT-accelerated (O(N log N) per frame), requiring power-of-two `frame_len`.
+//! Both paths are FFT-accelerated (O(N log N) per frame). Power-of-two `frame_len` uses the
+//! Cooley-Tukey Radix-2 path; non-power-of-two `frame_len` uses the Bluestein/Chirp-Z reduction
+//! (see `infrastructure::chirp::StftChirpData`).
 //!
 //! ## Forward dispatch sequence (stft_forward_fft.wgsl)
 //! 1. `stft_fwd_pack_window`: Hann analysis window + pack to split re/im scratch.
@@ -25,6 +27,7 @@ use num_complex::Complex32;
 use wgpu::util::DeviceExt;
 
 use crate::domain::error::{WgpuError, WgpuResult};
+use crate::infrastructure::chirp::{StftChirpData, chirp_padded_len};
 
 /// Workgroup size for the OLA reconstruction pass (matches `@workgroup_size(64)` in
 /// `stft_inverse.wgsl`).
@@ -394,9 +397,11 @@ impl StftGpuKernel {
         frame_count: usize,
         signal_len: usize,
     ) -> WgpuResult<Vec<f32>> {
-        // Radix-2 IFFT requires frame_len to be a power of two.
+        // Non-power-of-two frame_len: delegate to Bluestein/Chirp-Z path.
         if !frame_len.is_power_of_two() {
-            return Err(WgpuError::FrameLenNotPowerOfTwo { frame_len });
+            return self.execute_inverse_chirp(
+                device, queue, spectrum, frame_len, hop_len, frame_count, signal_len,
+            );
         }
         let log2_n = frame_len.trailing_zeros();
 
@@ -681,8 +686,11 @@ impl StftGpuKernel {
         hop_len: usize,
         frame_count: usize,
     ) -> WgpuResult<Vec<Complex32>> {
+        // Non-power-of-two frame_len: delegate to Bluestein/Chirp-Z path.
         if !frame_len.is_power_of_two() {
-            return Err(WgpuError::FrameLenNotPowerOfTwo { frame_len });
+            return self.execute_forward_fft_chirp(
+                device, queue, signal, frame_len, hop_len, frame_count,
+            );
         }
         let log2_n = frame_len.trailing_zeros();
 
@@ -1165,6 +1173,364 @@ impl StftGpuKernel {
 
         buffers.inv_staging_buf.unmap();
         Ok(())
+    }
+
+    // ── Bluestein/Chirp-Z forward dispatch ────────────────────────────────────
+
+    /// Execute the forward STFT for non-power-of-two `frame_len` via Bluestein's identity.
+    ///
+    /// Constructs `StftChirpData` once per call (allocates GPU resources for the
+    /// padded chirp sub-FFTs), dispatches all passes in one encoder, then reads back
+    /// the interleaved ComplexValue output.
+    ///
+    /// Complexity: O(N log N) per frame via Bluestein reduction to a padded Radix-2 FFT
+    /// of length M = 2^⌈log₂(2N−1)⌉.
+    ///
+    /// Formal basis: Rabiner, Schafer & Rader (1969); Bluestein (1970).
+    fn execute_forward_fft_chirp(
+        &self,
+        device:      &wgpu::Device,
+        queue:       &wgpu::Queue,
+        signal:      &[f32],
+        frame_len:   usize,
+        hop_len:     usize,
+        frame_count: usize,
+    ) -> WgpuResult<Vec<Complex32>> {
+        use wgpu::util::DeviceExt;
+
+        let signal_len = signal.len();
+        let m = chirp_padded_len(frame_len);
+        let log2_m = m.trailing_zeros();
+
+        // Build StftChirpData (precomputes chirp kernel and all pipeline objects).
+        let chirp = StftChirpData::new(device, queue, frame_len, frame_count, hop_len, signal_len);
+
+        // Upload signal to GPU.
+        let signal_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("apollo-stft-wgpu chirp fwd signal"),
+            contents: bytemuck::cast_slice(signal),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
+        // Output buffer: frame_count × frame_len × ComplexPod.
+        let out_size = (frame_count * frame_len * std::mem::size_of::<ComplexPod>()) as u64;
+        let output_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-stft-wgpu chirp fwd output"),
+            size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-stft-wgpu chirp fwd staging"),
+            size: out_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // IO bind group for premul_fwd (binding 0 = signal, binding 1 = output_data).
+        let io_bg_fwd = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("apollo-stft-wgpu chirp fwd IO BG"),
+            layout: &chirp.io_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: signal_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: output_buf.as_entire_binding() },
+            ],
+        });
+
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("apollo-stft-wgpu chirp fwd encoder"),
+        });
+
+        // Pass A: premul_fwd — Hann window + Bluestein exp(+πi·n²/N) premultiply.
+        {
+            let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("stft_chirp_premul_fwd"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&chirp.premul_fwd_pipeline);
+            p.set_bind_group(0, &chirp.chirp_data_bg, &[]);
+            p.set_bind_group(1, &chirp.chirp_params_bg, &[]);
+            p.set_bind_group(2, &io_bg_fwd, &[]);
+            p.dispatch_workgroups(fft_dispatch_count((frame_count * m) as u32), 1, 1);
+        }
+
+        // Pass B: Radix-2 forward sub-FFT over M on chirp working buffers.
+        self.dispatch_chirp_radix2(&mut enc, &chirp, frame_count, m, log2_m, false);
+
+        // Pass C: pointmul — pointwise multiply by precomputed H in DFT domain.
+        {
+            let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("stft_chirp_pointmul"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&chirp.pointmul_pipeline);
+            p.set_bind_group(0, &chirp.chirp_data_bg, &[]);
+            p.set_bind_group(1, &chirp.chirp_params_bg, &[]);
+            p.dispatch_workgroups(fft_dispatch_count((frame_count * m) as u32), 1, 1);
+        }
+
+        // Pass D: Radix-2 inverse sub-FFT over M (+ 1/M scale).
+        self.dispatch_chirp_radix2(&mut enc, &chirp, frame_count, m, log2_m, true);
+
+        // Pass E: postmul_fwd — Bluestein exp(+πi·k²/N) postmultiply + write output.
+        {
+            let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("stft_chirp_postmul_fwd"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&chirp.postmul_fwd_pipeline);
+            p.set_bind_group(0, &chirp.chirp_data_bg, &[]);
+            p.set_bind_group(1, &chirp.chirp_params_bg, &[]);
+            p.set_bind_group(2, &io_bg_fwd, &[]);
+            p.dispatch_workgroups(fft_dispatch_count((frame_count * frame_len) as u32), 1, 1);
+        }
+
+        enc.copy_buffer_to_buffer(&output_buf, 0, &staging, 0, out_size);
+        queue.submit(std::iter::once(enc.finish()));
+
+        let slice = staging.slice(..out_size);
+        let (tx, rx) = mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        let _ = device.poll(wgpu::PollType::Wait);
+        match rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(WgpuError::BufferMapFailed { message: e.to_string() }),
+            Err(e)     => return Err(WgpuError::BufferMapFailed { message: e.to_string() }),
+        }
+        let output = {
+            let mapped = slice.get_mapped_range();
+            bytemuck::cast_slice::<_, ComplexPod>(&mapped)
+                .iter()
+                .map(|p| Complex32::new(p.re, p.im))
+                .collect()
+        };
+        staging.unmap();
+        Ok(output)
+    }
+
+    /// Execute the inverse STFT for non-power-of-two `frame_len` via Bluestein's identity.
+    ///
+    /// Dispatches: premul_inv → Radix-2 forward → pointmul → Radix-2 inverse → postmul_inv → OLA.
+    fn execute_inverse_chirp(
+        &self,
+        device:      &wgpu::Device,
+        queue:       &wgpu::Queue,
+        spectrum:    &[Complex32],
+        frame_len:   usize,
+        hop_len:     usize,
+        frame_count: usize,
+        signal_len:  usize,
+    ) -> WgpuResult<Vec<f32>> {
+        use wgpu::util::DeviceExt;
+
+        let m = chirp_padded_len(frame_len);
+        let log2_m = m.trailing_zeros();
+
+        let chirp = StftChirpData::new(device, queue, frame_len, frame_count, hop_len, signal_len);
+
+        // Flat interleaved spectrum for GPU upload.
+        let spectrum_flat: Vec<f32> = spectrum.iter().flat_map(|c| [c.re, c.im]).collect();
+        let spectrum_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("apollo-stft-wgpu chirp inv spectrum"),
+            contents: bytemuck::cast_slice(&spectrum_flat),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
+        // frame_data buffer: written by postmul_inv, read by OLA pass.
+        let frame_data_size = (frame_count * frame_len * std::mem::size_of::<f32>()) as u64;
+        let frame_data_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-stft-wgpu chirp inv frame_data"),
+            size: frame_data_size,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+
+        // OLA signal output + staging.
+        let signal_size = (signal_len * std::mem::size_of::<f32>()) as u64;
+        let signal_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-stft-wgpu chirp inv signal out"),
+            size: signal_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-stft-wgpu chirp inv staging"),
+            size: signal_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // IO bind group for premul_inv (binding 0 = interleaved spectrum, binding 1 = frame_data).
+        let io_bg_inv = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("apollo-stft-wgpu chirp inv IO BG"),
+            layout: &chirp.io_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: spectrum_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: frame_data_buf.as_entire_binding() },
+            ],
+        });
+
+        // OLA bind group (3-binding layout: frame_data ro, signal rw, params uniform).
+        queue.write_buffer(
+            &self.params_buffer,
+            0,
+            bytemuck::bytes_of(&StftParams {
+                signal_len:  signal_len as u32,
+                frame_len:   frame_len as u32,
+                hop_len:     hop_len as u32,
+                frame_count: frame_count as u32,
+            }),
+        );
+        let ola_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("apollo-stft-wgpu chirp inv OLA BG"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: frame_data_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: signal_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: self.params_buffer.as_entire_binding() },
+            ],
+        });
+
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("apollo-stft-wgpu chirp inv encoder"),
+        });
+
+        // Pass A: premul_inv.
+        {
+            let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("stft_chirp_premul_inv"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&chirp.premul_inv_pipeline);
+            p.set_bind_group(0, &chirp.chirp_data_bg, &[]);
+            p.set_bind_group(1, &chirp.chirp_params_bg, &[]);
+            p.set_bind_group(2, &io_bg_inv, &[]);
+            p.dispatch_workgroups(fft_dispatch_count((frame_count * m) as u32), 1, 1);
+        }
+
+        // Pass B: Radix-2 forward sub-FFT over M.
+        self.dispatch_chirp_radix2(&mut enc, &chirp, frame_count, m, log2_m, false);
+
+        // Pass C: pointmul.
+        {
+            let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("stft_chirp_pointmul"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&chirp.pointmul_pipeline);
+            p.set_bind_group(0, &chirp.chirp_data_bg, &[]);
+            p.set_bind_group(1, &chirp.chirp_params_bg, &[]);
+            p.dispatch_workgroups(fft_dispatch_count((frame_count * m) as u32), 1, 1);
+        }
+
+        // Pass D: Radix-2 inverse sub-FFT over M (+ 1/M scale).
+        self.dispatch_chirp_radix2(&mut enc, &chirp, frame_count, m, log2_m, true);
+
+        // Pass E: postmul_inv — conjugate postmul + 1/N scale + Hann window → frame_data.
+        {
+            let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("stft_chirp_postmul_inv"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&chirp.postmul_inv_pipeline);
+            p.set_bind_group(0, &chirp.chirp_data_bg, &[]);
+            p.set_bind_group(1, &chirp.chirp_params_bg, &[]);
+            p.set_bind_group(2, &io_bg_inv, &[]);
+            p.dispatch_workgroups(fft_dispatch_count((frame_count * frame_len) as u32), 1, 1);
+        }
+
+        // Pass F: OLA reconstruction.
+        {
+            let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("stft_inverse_ola (chirp)"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&self.inverse_ola_pipeline);
+            p.set_bind_group(0, &ola_bg, &[]);
+            p.dispatch_workgroups(dispatch_count(signal_len as u32), 1, 1);
+        }
+
+        enc.copy_buffer_to_buffer(&signal_buf, 0, &staging, 0, signal_size);
+        queue.submit(std::iter::once(enc.finish()));
+
+        let slice = staging.slice(..signal_size);
+        let (tx, rx) = mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        let _ = device.poll(wgpu::PollType::Wait);
+        match rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(WgpuError::BufferMapFailed { message: e.to_string() }),
+            Err(e)     => return Err(WgpuError::BufferMapFailed { message: e.to_string() }),
+        }
+        let output = {
+            let mapped = slice.get_mapped_range();
+            bytemuck::cast_slice::<_, f32>(&mapped).to_vec()
+        };
+        staging.unmap();
+        Ok(output)
+    }
+
+    /// Dispatch the Radix-2 sub-FFT passes of the Chirp-Z path over the chirp working buffers.
+    ///
+    /// `forward = false` → inverse sub-FFT (IDFT twiddles + 1/M scale).
+    fn dispatch_chirp_radix2(
+        &self,
+        enc:         &mut wgpu::CommandEncoder,
+        chirp:       &StftChirpData,
+        frame_count: usize,
+        m:           usize,
+        log2_m:      u32,
+        inverse:     bool,
+    ) {
+        let bgs = if inverse { &chirp.radix2_inv_bgs } else { &chirp.radix2_fwd_bgs };
+        let bitrev_total     = (frame_count * m) as u32;
+        let butterfly_total  = (frame_count * m / 2) as u32;
+
+        // Bitrev pass (bgs[0]).
+        {
+            let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("chirp_fft_bitrev"),
+                timestamp_writes: None,
+            });
+            let pipeline = if inverse {
+                &chirp.chirp_bitrev_pipeline
+            } else {
+                &chirp.chirp_bitrev_pipeline
+            };
+            p.set_pipeline(pipeline);
+            p.set_bind_group(0, &chirp.chirp_data_bg, &[]);
+            p.set_bind_group(1, &bgs[0], &[]);
+            p.dispatch_workgroups(fft_dispatch_count(bitrev_total), 1, 1);
+        }
+
+        // Butterfly passes (bgs[1..=log2_m]).
+        for s in 0..log2_m as usize {
+            let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("chirp_fft_butterfly"),
+                timestamp_writes: None,
+            });
+            let pipeline = if inverse {
+                &chirp.chirp_inv_butterfly_pipeline
+            } else {
+                &chirp.chirp_fwd_butterfly_pipeline
+            };
+            p.set_pipeline(pipeline);
+            p.set_bind_group(0, &chirp.chirp_data_bg, &[]);
+            p.set_bind_group(1, &bgs[1 + s], &[]);
+            p.dispatch_workgroups(fft_dispatch_count(butterfly_total), 1, 1);
+        }
+
+        // Scale pass for inverse (bgs[log2_m + 1]).
+        if inverse {
+            let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("chirp_fft_scale"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&chirp.chirp_scale_pipeline);
+            p.set_bind_group(0, &chirp.chirp_data_bg, &[]);
+            p.set_bind_group(1, bgs.last().unwrap(), &[]);
+            p.dispatch_workgroups(fft_dispatch_count(bitrev_total), 1, 1);
+        }
     }
 }
 

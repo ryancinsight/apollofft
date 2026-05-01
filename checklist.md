@@ -1,5 +1,44 @@
 # Apollo Checklist
 
+## Closure XIX — StftGpuBuffers Non-PoT Scratch Sizing [minor]
+Sprint target version: 0.10.0
+
+- [x] Read `buffers.rs`: inspect current scratch sizing (frame_count × frame_len).
+- [x] Import `chirp_padded_len` from `super::chirp`.
+- [x] Update scratch_elem_count computation: use `chirp_padded_len(frame_len)` for non-PoT.
+- [x] Remove `assert!(frame_len.is_power_of_two())` in `StftGpuBuffers::new`.
+- [x] Update docstring in `buffers.rs`: remove PoT constraint; add Closure XIX note.
+- [x] Update `device.rs`: `make_buffers` docstring mentions non-PoT support + Closure XIX note.
+- [x] `cargo check -p apollo-stft-wgpu`: 0 warnings, 0 errors.
+- [x] Add `make_buffers_accepts_non_power_of_two_frame_len_structurally` test.
+- [x] Add GPU-gated test: `forward_buffers_non_pot_frame_len_400_when_device_exists`.
+- [x] Add GPU-gated test: `inverse_buffers_non_pot_frame_len_400_when_device_exists`.
+- [x] Fix unused variable warning in tests.
+- [x] `cargo test -p apollo-stft-wgpu`: 16 passed; 7 ignored (GPU-gated); 0 failed.
+- [x] Bump version: 0.9.0 → 0.10.0 in Cargo.toml.
+- [x] Artifact sync: CHANGELOG.md (0.10.0), backlog.md, checklist.md, gap_audit.md.
+
+## Closure XVIII — Non-Power-of-Two STFT GPU Path (Bluestein/Chirp-Z) [minor]
+Sprint target version: 0.9.0
+
+- [x] Write ADR: `design_history_file/adr_stft_wgpu_non_pot_chirpz.md` (required before [minor]).
+- [x] Create `stft_chirp.wgsl`: five-pass Bluestein WGSL shader (premul_fwd, premul_inv, pointmul, postmul_fwd, postmul_inv).
+- [x] Create `stft_chirp_fft.wgsl`: radix-2 sub-FFT shader (bitrev, butterfly_fwd, butterfly_inv, scale).
+- [x] Create `infrastructure/chirp.rs`: `StftChirpData` struct with GPU resource pre-allocation and `chirp_padded_len`.
+- [x] Update `infrastructure/mod.rs`: add `pub(crate) mod chirp;`.
+- [x] Update `Cargo.toml`: add `ndarray = "0.16"` to `[dependencies]`.
+- [x] Update `kernel.rs`: conditional dispatch (PoT → existing Radix-2, non-PoT → `execute_forward_fft_chirp` / `execute_inverse_chirp`); add `dispatch_chirp_radix2` helper.
+- [x] Update `device.rs`: remove `FrameLenNotPowerOfTwo` guard from `execute_forward` and `execute_inverse`.
+- [x] Update `error.rs`: update `FrameLenNotPowerOfTwo` doc to reflect deprecated-from-primary-path status.
+- [x] Fix all compile warnings: removed unused import `StftChirpParamsPod`, removed `mut` on closure, added `#[allow(dead_code)]` on GPU-lifetime fields.
+- [x] Update/rename old rejection tests → acceptance tests (`forward_accepts_non_power_of_two_frame_len_chirpz`, `inverse_accepts_non_power_of_two_frame_len_chirpz`).
+- [x] Add `forward_accepts_non_power_of_two_frame_len_structurally`.
+- [x] Add GPU-gated tests: `forward_chirpz_non_pot_frame_len_400_when_device_exists`, `inverse_chirpz_non_pot_frame_len_400_when_device_exists`.
+- [x] `cargo check -p apollo-stft-wgpu`: 0 warnings, 0 errors.
+- [x] `cargo test -p apollo-stft-wgpu`: 15 passed; 5 ignored (GPU-gated); 0 failed.
+- [x] Bump `apollo-stft-wgpu` version: 0.1.0 → 0.9.0.
+- [x] Artifact sync: CHANGELOG.md, backlog.md, checklist.md, gap_audit.md.
+
 ## Closure XVII — STFT GPU Buffer-Reuse Criterion Benchmarks + README Usage Documentation [patch]
 Sprint target version: 0.8.5
 

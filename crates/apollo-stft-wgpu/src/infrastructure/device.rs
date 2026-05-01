@@ -121,11 +121,6 @@ impl StftWgpuBackend {
         // Mirror the CPU StftPlan::frame_count formula exactly:
         //   1 + signal_len.div_ceil(hop_len)
         let frame_count = 1 + signal.len().div_ceil(plan.hop_len());
-        if !plan.frame_len().is_power_of_two() {
-            return Err(WgpuError::FrameLenNotPowerOfTwo {
-                frame_len: plan.frame_len(),
-            });
-        }
         self.kernel.execute_forward_fft(
             &self.device,
             &self.queue,
@@ -172,11 +167,6 @@ impl StftWgpuBackend {
                 frame_len: plan.frame_len(),
                 hop_len: plan.hop_len(),
                 message: "signal_len must be non-zero",
-            });
-        }
-        if !plan.frame_len().is_power_of_two() {
-            return Err(WgpuError::FrameLenNotPowerOfTwo {
-                frame_len: plan.frame_len(),
             });
         }
         let frame_count = 1 + signal_len.div_ceil(plan.hop_len());
@@ -291,9 +281,11 @@ impl StftWgpuBackend {
     /// `execute_forward_with_buffers`. `frame_count` is derived as
     /// `1 + signal_len.div_ceil(hop_len)`.
     ///
+    /// Closure XIX: `frame_len` may be arbitrary (power-of-two or non-power-of-two);
+    /// scratch buffers are automatically sized via `chirp_padded_len` when non-PoT.
+    ///
     /// ## Errors
     /// Returns `WgpuError::InvalidPlan` if plan parameters are invalid.
-    /// Returns `WgpuError::FrameLenNotPowerOfTwo` if `plan.frame_len()` is not a power of two.
     pub fn make_buffers(
         &self,
         plan: &StftWgpuPlan,
@@ -311,11 +303,6 @@ impl StftWgpuBackend {
                 frame_len: plan.frame_len(),
                 hop_len: plan.hop_len(),
                 message: "hop_len must be non-zero",
-            });
-        }
-        if !plan.frame_len().is_power_of_two() {
-            return Err(WgpuError::FrameLenNotPowerOfTwo {
-                frame_len: plan.frame_len(),
             });
         }
         let frame_count = 1 + signal_len.div_ceil(plan.hop_len());
@@ -354,11 +341,6 @@ impl StftWgpuBackend {
                 message: "hop_len must be non-zero",
             });
         }
-        if !plan.frame_len().is_power_of_two() {
-            return Err(WgpuError::FrameLenNotPowerOfTwo {
-                frame_len: plan.frame_len(),
-            });
-        }
         self.kernel
             .execute_forward_fft_with_buffers(&self.device, &self.queue, signal, buffers)
     }
@@ -388,11 +370,6 @@ impl StftWgpuBackend {
                 frame_len: plan.frame_len(),
                 hop_len: plan.hop_len(),
                 message: "hop_len must be non-zero",
-            });
-        }
-        if !plan.frame_len().is_power_of_two() {
-            return Err(WgpuError::FrameLenNotPowerOfTwo {
-                frame_len: plan.frame_len(),
             });
         }
         self.kernel.execute_inverse_with_buffers(

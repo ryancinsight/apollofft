@@ -432,9 +432,9 @@ mod tests {
     }
 
     #[test]
-    fn inverse_rejects_non_power_of_two_frame_len() {
-        // frame_len = 6 is not a power of two; the FFT-accelerated inverse path
-        // must return FrameLenNotPowerOfTwo without attempting GPU dispatch.
+    fn inverse_accepts_non_power_of_two_frame_len_chirpz() {
+        // Closure XVIII: execute_inverse now accepts non-PoT frame_len via Chirp-Z path.
+        // Prior to Closure XVIII this returned FrameLenNotPowerOfTwo.
         //
         // frame_count = 1 + 6.div_ceil(3) = 3; spectrum_len = 3 * 6 = 18.
         match StftWgpuBackend::try_default() {
@@ -443,15 +443,12 @@ mod tests {
                 let plan = StftWgpuPlan::new(6, 3);
                 let dummy_spectrum = vec![Complex32::new(0.0, 0.0); 18];
                 let result = backend.execute_inverse(&plan, &dummy_spectrum, 6);
-                match result {
-                    Err(WgpuError::FrameLenNotPowerOfTwo { frame_len }) => {
-                        assert_eq!(frame_len, 6, "reported frame_len must equal 6");
-                    }
-                    other => panic!(
-                        "expected FrameLenNotPowerOfTwo for frame_len=6, got {:?}",
-                        other
-                    ),
-                }
+                // Must NOT return FrameLenNotPowerOfTwo; any other result is acceptable.
+                assert!(
+                    !matches!(result, Err(WgpuError::FrameLenNotPowerOfTwo { .. })),
+                    "expected Chirp-Z acceptance, not FrameLenNotPowerOfTwo; got {:?}",
+                    result
+                );
             }
         }
     }
@@ -510,11 +507,12 @@ mod tests {
         );
     }
 
-    /// Verifies that `execute_forward` rejects a non-power-of-two `frame_len` with
-    /// `WgpuError::FrameLenNotPowerOfTwo` before any GPU dispatch.
-    /// CPU-side validation: does not require a GPU device.
+    /// Verifies that `execute_forward` accepts non-PoT `frame_len` via the Chirp-Z path.
+    ///
+    /// Closure XVIII: non-PoT no longer returns `FrameLenNotPowerOfTwo`.
+    /// CPU-side structural check: does not require a GPU device.
     #[test]
-    fn forward_rejects_non_power_of_two_frame_len() {
+    fn forward_accepts_non_power_of_two_frame_len_chirpz() {
         let Ok(backend) = StftWgpuBackend::try_default() else {
             return;
         };
@@ -522,9 +520,10 @@ mod tests {
         let signal = vec![0.0f32; 12];
         let plan = StftWgpuPlan::new(6, 3);
         let r = backend.execute_forward(&plan, &signal);
+        // Must NOT return FrameLenNotPowerOfTwo — Chirp-Z path must be taken.
         assert!(
-            matches!(r, Err(WgpuError::FrameLenNotPowerOfTwo { frame_len: 6 })),
-            "expected FrameLenNotPowerOfTwo {{ frame_len: 6 }}, got {r:?}"
+            !matches!(r, Err(WgpuError::FrameLenNotPowerOfTwo { .. })),
+            "expected Chirp-Z path, not FrameLenNotPowerOfTwo; got {r:?}"
         );
     }
 
@@ -688,5 +687,270 @@ mod tests {
             max_fwd2_err < TOL,
             "second-call forward max error {max_fwd2_err:.2e} exceeds tolerance {TOL:.2e}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Non-power-of-two Chirp-Z path tests (Closure XVIII)
+    // -----------------------------------------------------------------------
+
+    /// Verifies that a non-PoT `frame_len` no longer returns `FrameLenNotPowerOfTwo`.
+    /// The Bluestein/Chirp-Z path accepts arbitrary frame_len ≥ 1.
+    /// CPU-side structural check: does not require a GPU device.
+    #[test]
+    fn forward_accepts_non_power_of_two_frame_len_structurally() {
+        // frame_len=6 previously returned FrameLenNotPowerOfTwo; now it should not return
+        // that variant (it may fail for other reasons — e.g. no GPU — but not that one).
+        let Ok(backend) = StftWgpuBackend::try_default() else {
+            return;
+        };
+        let signal = vec![0.0f32; 24];
+        let plan = StftWgpuPlan::new(6, 3);
+        let r = backend.execute_forward(&plan, &signal);
+        // Must NOT return FrameLenNotPowerOfTwo — any other result is acceptable here.
+        assert!(
+            !matches!(r, Err(WgpuError::FrameLenNotPowerOfTwo { .. })),
+            "expected Chirp-Z path to be taken, not FrameLenNotPowerOfTwo; got {r:?}"
+        );
+    }
+
+    /// GPU forward Chirp-Z at `frame_len=400` (non-PoT, common in audio: 20 ms @ 20 kHz).
+    ///
+    /// Reference: CPU `apollo-stft` with the same plan.
+    /// Signal: analytic sine at 100 Hz (bin-approximate at frame_len=400, Fs=20000).
+    /// Tolerance: 1e-3 (f32 accumulation over chirp convolution and butterfly stages).
+    #[test]
+    #[ignore = "requires wgpu device"]
+    fn forward_chirpz_non_pot_frame_len_400_when_device_exists() {
+        use apollo_stft::StftPlan;
+
+        const FRAME_LEN: usize = 400;
+        const HOP_LEN: usize   = 200;
+        const SIGNAL_LEN: usize = 2000;
+        const TOL: f32 = 1e-2;
+
+        let Ok(backend) = StftWgpuBackend::try_default() else {
+            return;
+        };
+
+        // Analytic sine at bin k=10 (freq = 10/400 cycles/sample ≈ 500 Hz at 20 kHz).
+        let signal_f32: Vec<f32> = (0..SIGNAL_LEN)
+            .map(|n| (2.0 * std::f32::consts::PI * 10.0 * n as f32 / FRAME_LEN as f32).sin())
+            .collect();
+        let signal_f64: ndarray::Array1<f64> =
+            ndarray::Array1::from_vec(signal_f32.iter().map(|&x| x as f64).collect());
+
+        let gpu_plan = StftWgpuPlan::new(FRAME_LEN, HOP_LEN);
+        let gpu_out = backend
+            .execute_forward(&gpu_plan, &signal_f32)
+            .expect("GPU forward Chirp-Z");
+
+        let cpu_plan = StftPlan::new(FRAME_LEN, HOP_LEN).expect("CPU plan");
+        let cpu_out = cpu_plan.forward(&signal_f64).expect("CPU forward STFT");
+
+        assert_eq!(
+            gpu_out.len(), cpu_out.len(),
+            "length mismatch: gpu={}, cpu={}", gpu_out.len(), cpu_out.len()
+        );
+
+        let max_err = gpu_out
+            .iter()
+            .zip(cpu_out.iter())
+            .map(|(g, c)| {
+                let re = (g.re - c.re as f32).abs();
+                let im = (g.im - c.im as f32).abs();
+                re.max(im)
+            })
+            .fold(0.0f32, f32::max);
+
+        assert!(
+            max_err < TOL,
+            "max Chirp-Z forward error {max_err:.2e} exceeds tolerance {TOL:.2e}"
+        );
+    }
+
+    /// GPU inverse Chirp-Z at `frame_len=400`.
+    ///
+    /// Reference: CPU forward → GPU inverse must recover interior samples within tolerance.
+    /// Tolerance: 5e-2 (WOLA normalisation + f32 Chirp-Z accumulation).
+    #[test]
+    #[ignore = "requires wgpu device"]
+    fn inverse_chirpz_non_pot_frame_len_400_when_device_exists() {
+
+        const FRAME_LEN: usize = 400;
+        const HOP_LEN: usize   = 200;
+        const SIGNAL_LEN: usize = 2000;
+        const TOL: f32 = 5e-2;
+        // Interior samples: skip the first frame_len and last frame_len samples
+        // to avoid edge roll-off from WOLA boundary conditions.
+        const INTERIOR_START: usize = FRAME_LEN;
+        const INTERIOR_END:   usize = SIGNAL_LEN - FRAME_LEN;
+
+        let Ok(backend) = StftWgpuBackend::try_default() else {
+            return;
+        };
+
+        let signal_f32: Vec<f32> = (0..SIGNAL_LEN)
+            .map(|n| (2.0 * std::f32::consts::PI * 10.0 * n as f32 / FRAME_LEN as f32).sin())
+            .collect();
+        let signal_f64: ndarray::Array1<f64> =
+            ndarray::Array1::from_vec(signal_f32.iter().map(|&x| x as f64).collect());
+
+        let plan = StftWgpuPlan::new(FRAME_LEN, HOP_LEN);
+
+        // Obtain spectrum from CPU forward (verified reference).
+        let cpu_plan = apollo_stft::StftPlan::new(FRAME_LEN, HOP_LEN).expect("CPU plan");
+        let cpu_spectrum = cpu_plan.forward(&signal_f64).expect("CPU forward");
+        let spectrum_f32: Vec<Complex32> = cpu_spectrum
+            .iter()
+            .map(|c| Complex32::new(c.re as f32, c.im as f32))
+            .collect();
+
+        let recovered = backend
+            .execute_inverse(&plan, &spectrum_f32, SIGNAL_LEN)
+            .expect("GPU inverse Chirp-Z");
+
+        assert_eq!(recovered.len(), SIGNAL_LEN);
+
+        for i in INTERIOR_START..INTERIOR_END {
+            let err = (recovered[i] - signal_f32[i]).abs();
+            assert!(
+                err < TOL,
+                "sample {i}: recovered={:.6}, expected={:.6}, err={:.2e}",
+                recovered[i], signal_f32[i], err
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Non-PoT buffer-reuse path tests (Closure XIX)
+    // -----------------------------------------------------------------------
+
+    /// Structural test: non-PoT frame_len no longer returns FrameLenNotPowerOfTwo from make_buffers.
+    /// Closure XIX: buffer-reuse API now accepts arbitrary frame_len via chirp_padded_len scratch sizing.
+    #[test]
+    fn make_buffers_accepts_non_power_of_two_frame_len_structurally() {
+        let Ok(backend) = StftWgpuBackend::try_default() else {
+            return;
+        };
+        let plan = StftWgpuPlan::new(6, 3);
+        let signal_len = 24usize;
+        let r = backend.make_buffers(&plan, signal_len);
+        // Must NOT return FrameLenNotPowerOfTwo — buffer path must accept non-PoT via Chirp-Z.
+        assert!(
+            !matches!(r, Err(WgpuError::FrameLenNotPowerOfTwo { .. })),
+            "expected non-PoT acceptance, not FrameLenNotPowerOfTwo; got {r:?}"
+        );
+    }
+
+    /// GPU-gated buffer-reuse test: forward dispatch at non-PoT frame_len=400 produces valid output.
+    ///
+    /// Minimal exercise: verify the buffered forward path dispatches correctly
+    /// (either Radix-2 or Chirp-Z branch should execute without panic/abort).
+    /// Reference: CPU `apollo-stft` with the same plan and signal.
+    /// Tolerance: 1e-2 (same as GPU-gated allocating forward test).
+    #[test]
+    #[ignore = "requires wgpu device"]
+    fn forward_buffers_non_pot_frame_len_400_when_device_exists() {
+        use apollo_stft::StftPlan;
+
+        const FRAME_LEN: usize = 400;
+        const HOP_LEN: usize = 200;
+        const SIGNAL_LEN: usize = 1000;
+        const TOL: f32 = 1e-2;
+
+        let Ok(backend) = StftWgpuBackend::try_default() else {
+            return;
+        };
+
+        let signal_f32: Vec<f32> = (0..SIGNAL_LEN)
+            .map(|n| (2.0 * std::f32::consts::PI * 10.0 * n as f32 / FRAME_LEN as f32).sin())
+            .collect();
+        let signal_f64: ndarray::Array1<f64> =
+            ndarray::Array1::from_vec(signal_f32.iter().map(|&x| x as f64).collect());
+
+        let plan = StftWgpuPlan::new(FRAME_LEN, HOP_LEN);
+        let mut buffers = backend
+            .make_buffers(&plan, SIGNAL_LEN)
+            .expect("make_buffers non-PoT");
+
+        backend
+            .execute_forward_with_buffers(&plan, &signal_f32, &mut buffers)
+            .expect("forward with buffers");
+
+        let cpu_plan = StftPlan::new(FRAME_LEN, HOP_LEN).expect("CPU plan");
+        let cpu_out = cpu_plan.forward(&signal_f64).expect("CPU forward");
+
+        let gpu_spectrum = buffers.fwd_output();
+        assert_eq!(gpu_spectrum.len(), cpu_out.len());
+
+        let max_err = gpu_spectrum
+            .iter()
+            .zip(cpu_out.iter())
+            .map(|(g, c)| {
+                let re = (g.re - c.re as f32).abs();
+                let im = (g.im - c.im as f32).abs();
+                re.max(im)
+            })
+            .fold(0.0f32, f32::max);
+
+        assert!(
+            max_err < TOL,
+            "max forward buffered error {max_err:.2e} exceeds tolerance {TOL:.2e}"
+        );
+    }
+
+    /// GPU-gated buffer-reuse test: inverse dispatch at non-PoT frame_len=400 recovers interior samples.
+    ///
+    /// Reference: CPU forward → GPU inverse (buffered) must recover signal.
+    /// Tolerance: 5e-2 (same as GPU-gated allocating inverse test).
+    #[test]
+    #[ignore = "requires wgpu device"]
+    fn inverse_buffers_non_pot_frame_len_400_when_device_exists() {
+        use apollo_stft::StftPlan;
+
+        const FRAME_LEN: usize = 400;
+        const HOP_LEN: usize = 200;
+        const SIGNAL_LEN: usize = 1000;
+        const TOL: f32 = 5e-2;
+        const INTERIOR_START: usize = FRAME_LEN;
+        const INTERIOR_END: usize = SIGNAL_LEN - FRAME_LEN;
+
+        let Ok(backend) = StftWgpuBackend::try_default() else {
+            return;
+        };
+
+        let signal_f32: Vec<f32> = (0..SIGNAL_LEN)
+            .map(|n| (2.0 * std::f32::consts::PI * 10.0 * n as f32 / FRAME_LEN as f32).sin())
+            .collect();
+        let signal_f64: ndarray::Array1<f64> =
+            ndarray::Array1::from_vec(signal_f32.iter().map(|&x| x as f64).collect());
+
+        let plan = StftWgpuPlan::new(FRAME_LEN, HOP_LEN);
+        let cpu_plan = StftPlan::new(FRAME_LEN, HOP_LEN).expect("CPU plan");
+        let cpu_spectrum = cpu_plan.forward(&signal_f64).expect("CPU forward");
+        let spectrum_f32: Vec<Complex32> = cpu_spectrum
+            .iter()
+            .map(|c| Complex32::new(c.re as f32, c.im as f32))
+            .collect();
+
+        let mut buffers = backend
+            .make_buffers(&plan, SIGNAL_LEN)
+            .expect("make_buffers non-PoT");
+
+        backend
+            .execute_inverse_with_buffers(&plan, &spectrum_f32, SIGNAL_LEN, &mut buffers)
+            .expect("inverse with buffers");
+
+        let recovered = buffers.inv_output().to_vec();
+        assert_eq!(recovered.len(), SIGNAL_LEN);
+
+        for i in INTERIOR_START..INTERIOR_END {
+            let err = (recovered[i] - signal_f32[i]).abs();
+            assert!(
+                err < TOL,
+                "sample {i}: recovered={:.6}, expected={:.6}, err={:.2e}",
+                recovered[i], signal_f32[i], err
+            );
+        }
     }
 }

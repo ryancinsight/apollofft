@@ -152,6 +152,69 @@ impl MellinPlan {
     ) -> MellinResult<MellinSpectrum> {
         T::forward_spectrum(self, signal, signal_min, signal_max, profile)
     }
+
+    /// Recover the time-domain signal from a log-frequency Mellin spectrum.
+    ///
+    /// # Mathematical contract
+    ///
+    /// The forward spectrum computes `F[k] = du · DFT{g}[k]` where
+    /// `g[n] = f(exp(u_n))` and `u_n = ln(min_scale) + n·du`.
+    /// The inverse applies `g[n] = (1/(N·du)) · Σ_k F[k] exp(2πi·kn/N)` then
+    /// linearly resamples the log-domain result back onto
+    /// `[output_min, output_max]` at `output.len()` equally spaced points.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MellinError::SpectrumLengthMismatch` when `spectrum.len()`
+    /// differs from `self.config.samples()`.  Returns
+    /// `MellinError::InvalidSignalBound` when `output_min` or `output_max`
+    /// are not finite and positive, or `MellinError::InvalidSignalOrder` when
+    /// `output_min >= output_max`.
+    pub fn inverse_spectrum(
+        &self,
+        spectrum: &MellinSpectrum,
+        output_min: f64,
+        output_max: f64,
+        output: &mut [f64],
+    ) -> MellinResult<()> {
+        if spectrum.len() != self.config.samples() {
+            return Err(MellinError::SpectrumLengthMismatch);
+        }
+        if output.is_empty() {
+            return Err(MellinError::EmptySignal);
+        }
+        if !output_min.is_finite()
+            || !output_max.is_finite()
+            || output_min <= 0.0
+            || output_max <= 0.0
+        {
+            return Err(MellinError::InvalidSignalBound);
+        }
+        if output_min >= output_max {
+            return Err(MellinError::InvalidSignalOrder);
+        }
+
+        let log_min = self.config.min_scale().ln();
+        let log_max = self.config.max_scale().ln();
+
+        let log_samples =
+            crate::infrastructure::kernel::resample::inverse_log_frequency_spectrum(
+                spectrum.values(),
+                log_min,
+                log_max,
+            );
+
+        crate::infrastructure::kernel::resample::exp_resample(
+            &log_samples,
+            log_min,
+            log_max,
+            output,
+            output_min,
+            output_max,
+        );
+
+        Ok(())
+    }
 }
 
 /// Real storage accepted by typed Mellin input and log-resample output paths.

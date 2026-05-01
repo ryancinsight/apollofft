@@ -12,11 +12,11 @@ mod tests {
     };
 
     #[test]
-    fn capabilities_reflect_forward_only_kernel_surface() {
-        let capabilities = WgpuCapabilities::forward_only(true);
+    fn capabilities_reflect_forward_inverse_kernel_surface() {
+        let capabilities = WgpuCapabilities::forward_inverse(true);
         assert!(capabilities.device_available);
         assert!(capabilities.supports_forward);
-        assert!(!capabilities.supports_inverse);
+        assert!(capabilities.supports_inverse);
         assert!(capabilities.supports_mixed_precision);
         assert_eq!(
             capabilities.default_precision_profile,
@@ -52,14 +52,14 @@ mod tests {
     }
 
     #[test]
-    fn backend_reports_forward_only_when_device_exists() {
+    fn backend_reports_forward_and_inverse_when_device_exists() {
         let Ok(backend) = CztWgpuBackend::try_default() else {
             return;
         };
         let capabilities = backend.capabilities();
         assert!(capabilities.device_available);
         assert!(capabilities.supports_forward);
-        assert!(!capabilities.supports_inverse);
+        assert!(capabilities.supports_inverse);
     }
 
     #[test]
@@ -222,5 +222,53 @@ mod tests {
                 message: "spiral parameters must have finite non-zero magnitude",
             }
         );
+    }
+
+    /// GPU CZT inverse roundtrip: forward on GPU then inverse on GPU must
+    /// recover the original signal for DFT parameters (|A|=1, W=exp(-2πi/N)).
+    ///
+    /// The GPU inverse uses the adjoint formula which is **exact** for the DFT
+    /// case (Theorem: for W^N = 1 and |A|=1, the adjoint equals (1/N)*conjugate-forward).
+    #[test]
+    fn gpu_inverse_roundtrip_dft_parameters() {
+        let Ok(backend) = CztWgpuBackend::try_default() else {
+            return;
+        };
+        let n = 8usize;
+        let a32 = Complex32::new(1.0, 0.0);
+        let w32 = Complex32::from_polar(1.0, -std::f32::consts::TAU / n as f32);
+        let input: Vec<Complex32> = (0..n)
+            .map(|i| Complex32::new((i as f32 * 0.7).sin(), (i as f32 * 0.31).cos()))
+            .collect();
+        let gpu_plan = backend.plan(n, n, a32, w32);
+        let spectrum = backend
+            .execute_forward(&gpu_plan, &input)
+            .expect("GPU forward");
+        let recovered = backend
+            .execute_inverse(&gpu_plan, &spectrum)
+            .expect("GPU inverse");
+        assert_eq!(recovered.len(), n);
+        for (i, (rec, orig)) in recovered.iter().zip(input.iter()).enumerate() {
+            let re_err = (rec.re - orig.re).abs();
+            let im_err = (rec.im - orig.im).abs();
+            assert!(re_err < 5.0e-5, "sample {i} re: err={re_err:.3e}");
+            assert!(im_err < 5.0e-5, "sample {i} im: err={im_err:.3e}");
+        }
+    }
+
+    /// GPU inverse rejects non-square plans (M ≠ N).
+    #[test]
+    fn gpu_inverse_rejects_non_square_plan() {
+        let Ok(backend) = CztWgpuBackend::try_default() else {
+            return;
+        };
+        let a32 = Complex32::new(1.0, 0.0);
+        let w32 = Complex32::from_polar(1.0, -0.5);
+        let plan = backend.plan(4, 6, a32, w32);
+        let spectrum = vec![Complex32::new(0.0, 0.0); 6];
+        assert!(matches!(
+            backend.execute_inverse(&plan, &spectrum),
+            Err(WgpuError::LengthMismatch { .. })
+        ));
     }
 }

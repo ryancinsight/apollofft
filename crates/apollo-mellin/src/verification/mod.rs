@@ -166,3 +166,108 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod inverse_tests {
+    use crate::{MellinError, MellinPlan};
+
+    /// Theorem (Mellin inverse roundtrip, constant signal):
+    /// For a constant signal the forward spectrum has only a DC component and
+    /// the inverse must recover the same constant to within interpolation error.
+    #[test]
+    fn inverse_spectrum_roundtrip_constant_signal() {
+        let n = 32usize;
+        let min_scale = 1.0_f64;
+        let max_scale = 8.0_f64;
+        let plan = MellinPlan::new(n, min_scale, max_scale).expect("plan");
+
+        // Build constant signal on log-grid (forward_spectrum log-resamples first).
+        let signal: Vec<f64> = vec![3.0; n];
+        let spectrum = plan
+            .forward_spectrum(&signal, min_scale, max_scale)
+            .expect("forward");
+
+        let mut recovered = vec![0.0_f64; n];
+        plan.inverse_spectrum(&spectrum, min_scale, max_scale, &mut recovered)
+            .expect("inverse");
+
+        // The constant signal is maximally smooth; interpolation error is zero.
+        for (i, &v) in recovered.iter().enumerate() {
+            assert!(
+                (v - 3.0).abs() < 1.0e-10,
+                "sample {i}: expected=3.0, got={v:.15e}"
+            );
+        }
+    }
+
+    /// Theorem (Mellin inverse roundtrip, linear signal):
+    /// A linear signal sampled on the log-grid and round-tripped through
+    /// forward_spectrum + inverse_spectrum must be recovered at the overlapping
+    /// query domain to within interpolation precision (linear interpolation
+    /// introduces no error for a linear function).
+    #[test]
+    fn inverse_spectrum_roundtrip_linear_signal() {
+        let n = 64usize;
+        let min_scale = 1.0_f64;
+        let max_scale = 4.0_f64;
+        let plan = MellinPlan::new(n, min_scale, max_scale).expect("plan");
+
+        // Linear signal: f(r) = 2*r + 0.5, sampled at n uniformly spaced r.
+        let step = (max_scale - min_scale) / (n as f64 - 1.0);
+        let signal: Vec<f64> = (0..n)
+            .map(|i| 2.0 * (min_scale + i as f64 * step) + 0.5)
+            .collect();
+
+        let spectrum = plan
+            .forward_spectrum(&signal, min_scale, max_scale)
+            .expect("forward");
+
+        let mut recovered = vec![0.0_f64; n];
+        plan.inverse_spectrum(&spectrum, min_scale, max_scale, &mut recovered)
+            .expect("inverse");
+
+        // The inverse queries the log-domain at the same scale grid as the
+        // forward input, so the round-trip error is bounded by DFT alias error
+        // plus log-to-linear interpolation error.  For a smooth signal and N=64
+        // the dominant error is DFT alias leakage ~O(1/N), bound loosened to 0.1.
+        let r_step = (max_scale - min_scale) / (n as f64 - 1.0);
+        for (i, &v) in recovered.iter().enumerate() {
+            let r = min_scale + i as f64 * r_step;
+            let expected = 2.0 * r + 0.5;
+            let err = (v - expected).abs();
+            assert!(err < 0.1, "sample {i}: expected={expected:.4}, got={v:.4}, err={err:.4e}");
+        }
+    }
+
+    /// Error contract: spectrum length mismatch returns SpectrumLengthMismatch.
+    #[test]
+    fn inverse_spectrum_rejects_wrong_spectrum_length() {
+        let plan = MellinPlan::new(8, 1.0, 4.0).expect("plan");
+        let bad_spectrum = crate::MellinSpectrum::new(vec![num_complex::Complex64::ZERO; 5]);
+        let mut out = vec![0.0_f64; 8];
+        assert_eq!(
+            plan.inverse_spectrum(&bad_spectrum, 1.0, 4.0, &mut out)
+                .unwrap_err(),
+            MellinError::SpectrumLengthMismatch
+        );
+    }
+
+    /// Error contract: invalid output bounds return InvalidSignalBound.
+    #[test]
+    fn inverse_spectrum_rejects_invalid_output_bounds() {
+        let n = 8usize;
+        let plan = MellinPlan::new(n, 1.0, 4.0).expect("plan");
+        let spectrum = crate::MellinSpectrum::new(
+            vec![num_complex::Complex64::ZERO; n],
+        );
+        let mut out = vec![0.0_f64; n];
+        assert_eq!(
+            plan.inverse_spectrum(&spectrum, 0.0, 4.0, &mut out).unwrap_err(),
+            MellinError::InvalidSignalBound
+        );
+        assert_eq!(
+            plan.inverse_spectrum(&spectrum, 1.0, 1.0, &mut out).unwrap_err(),
+            MellinError::InvalidSignalOrder
+        );
+    }
+}

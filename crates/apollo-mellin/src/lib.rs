@@ -23,5 +23,6 @@ pub use application::execution::plan::mellin::{MellinPlan, MellinSpectrum, Melli
 pub use domain::contracts::error::{MellinError, MellinResult};
 pub use domain::metadata::scale::MellinScaleConfig;
 pub use infrastructure::kernel::resample::{
-    calculate_log_resample, log_frequency_spectrum, mellin_moment,
+    calculate_log_resample, exp_resample, inverse_log_frequency_spectrum, log_frequency_spectrum,
+    mellin_moment,
 };

@@ -92,3 +92,128 @@ fn mellin_spectrum(@builtin(global_invocation_id) gid: vec3<u32>) {
     spectrum_out[k].re = du * sum_re;
     spectrum_out[k].im = du * sum_im;
 }
+
+// ---------------------------------------------------------------------------
+// Inverse Mellin kernels
+// ---------------------------------------------------------------------------
+//
+// Inverse step 1: recover log-domain samples from spectrum via IDFT.
+//   g[n] = (1 / (N * du)) * Re{ sum_k F[k] * exp(+2*pi*i*k*n/N) }
+//
+// Inverse step 2: exp-resample g back to a linear output domain.
+//
+// The two passes share the `MellinParams` uniform; log_samples / spectrum_out
+// bindings are swapped relative to the forward passes (spectrum is now input).
+// A second params struct `InverseMellinParams` carries the output domain.
+
+struct InverseMellinParams {
+    samples:    u32,
+    out_len:    u32,
+    log_min:    f32,
+    log_max:    f32,
+    out_min:    f32,
+    out_max:    f32,
+    _pad0:      u32,
+    _pad1:      u32,
+}
+
+@group(0) @binding(0)
+var<storage, read> spectrum_in: array<ComplexValue>;
+
+@group(0) @binding(1)
+var<storage, read_write> inv_log_samples: array<f32>;
+
+@group(0) @binding(2)
+var<uniform> inv_params: InverseMellinParams;
+
+/// IDFT of spectrum → log-domain samples.
+@compute @workgroup_size(64, 1, 1)
+fn mellin_inverse_spectrum(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let n = gid.x;
+    if n >= inv_params.samples {
+        return;
+    }
+
+    let N = inv_params.samples;
+    let log_min = inv_params.log_min;
+    let log_max = inv_params.log_max;
+    let du = select(
+        1.0,
+        (log_max - log_min) / f32(N - 1u),
+        N > 1u
+    );
+    let inv_du = select(1.0, 1.0 / du, du > 1e-30);
+    let factor = TAU / f32(N);
+
+    var re_sum = 0.0;
+    for (var k: u32 = 0u; k < N; k = k + 1u) {
+        let angle = factor * f32(k * n);
+        re_sum = re_sum + spectrum_in[k].re * cos(angle) - spectrum_in[k].im * sin(angle);
+    }
+    // g[n] = (1/(N*du)) * re_sum  (real-valued: imaginary part vanishes for real signals)
+    inv_log_samples[n] = re_sum * inv_du / f32(N);
+}
+
+// ---------------------------------------------------------------------------
+// Inverse step 2: exp-resample log-domain samples → linear output signal.
+
+struct ExpResampleParams {
+    samples:    u32,
+    out_len:    u32,
+    log_min:    f32,
+    log_max:    f32,
+    out_min:    f32,
+    out_max:    f32,
+    _pad0:      u32,
+    _pad1:      u32,
+}
+
+@group(0) @binding(0)
+var<storage, read> er_log_samples: array<f32>;
+
+@group(0) @binding(1)
+var<storage, read_write> er_output: array<f32>;
+
+@group(0) @binding(2)
+var<uniform> er_params: ExpResampleParams;
+
+/// Exp-resample: map log-domain g[n] back to a linear output grid.
+@compute @workgroup_size(64, 1, 1)
+fn mellin_exp_resample(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if i >= er_params.out_len {
+        return;
+    }
+
+    let N = er_params.samples;
+    let out_step = select(
+        0.0,
+        (er_params.out_max - er_params.out_min) / f32(er_params.out_len - 1u),
+        er_params.out_len > 1u
+    );
+    let r = er_params.out_min + f32(i) * out_step;
+    if r <= 0.0 {
+        er_output[i] = 0.0;
+        return;
+    }
+
+    let u = log(r);
+    let log_min = er_params.log_min;
+    let log_max = er_params.log_max;
+    if u < log_min || u > log_max {
+        er_output[i] = 0.0;
+        return;
+    }
+
+    let du = select(0.0, (log_max - log_min) / f32(N - 1u), N > 1u);
+    if du < 1e-30 {
+        er_output[i] = er_log_samples[0];
+        return;
+    }
+
+    let exact_idx = (u - log_min) / du;
+    let lower = u32(floor(exact_idx));
+    let upper = min(lower + 1u, N - 1u);
+    let frac = exact_idx - f32(lower);
+    er_output[i] = er_log_samples[lower] * (1.0 - frac) + er_log_samples[upper] * frac;
+}

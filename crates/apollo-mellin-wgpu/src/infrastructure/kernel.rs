@@ -34,14 +34,32 @@ struct MellinParams {
     _padding: [u32; 2],
 }
 
+/// Uniform params shared by both inverse passes.
+/// Layout matches `InverseMellinParams` and `ExpResampleParams` in the WGSL.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct InverseMellinParamsPod {
+    samples: u32,
+    out_len: u32,
+    log_min: f32,
+    log_max: f32,
+    out_min: f32,
+    out_max: f32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
 /// Cached WGPU kernel state for repeated Mellin forward dispatches.
 #[derive(Debug)]
 pub struct MellinGpuKernel {
     resample_layout: wgpu::BindGroupLayout,
     spectrum_layout: wgpu::BindGroupLayout,
     params_buffer: wgpu::Buffer,
+    inv_params_buffer: wgpu::Buffer,
     resample_pipeline: wgpu::ComputePipeline,
     spectrum_pipeline: wgpu::ComputePipeline,
+    inverse_spectrum_pipeline: wgpu::ComputePipeline,
+    exp_resample_pipeline: wgpu::ComputePipeline,
 }
 
 impl MellinGpuKernel {
@@ -96,6 +114,24 @@ impl MellinGpuKernel {
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         });
+        let inverse_spectrum_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("apollo-mellin-wgpu inverse-spectrum pipeline"),
+                layout: Some(&resample_pipeline_layout),
+                module: &shader,
+                entry_point: Some("mellin_inverse_spectrum"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+        let exp_resample_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("apollo-mellin-wgpu exp-resample pipeline"),
+                layout: Some(&resample_pipeline_layout),
+                module: &shader,
+                entry_point: Some("mellin_exp_resample"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("apollo-mellin-wgpu params"),
             contents: bytemuck::bytes_of(&MellinParams {
@@ -109,12 +145,29 @@ impl MellinGpuKernel {
             }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
+        let inv_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("apollo-mellin-wgpu inverse params"),
+            contents: bytemuck::bytes_of(&InverseMellinParamsPod {
+                samples: 0,
+                out_len: 0,
+                log_min: 0.0,
+                log_max: 0.0,
+                out_min: 0.0,
+                out_max: 0.0,
+                _pad0: 0,
+                _pad1: 0,
+            }),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
         Self {
             resample_layout,
             spectrum_layout,
             params_buffer,
+            inv_params_buffer,
             resample_pipeline,
             spectrum_pipeline,
+            inverse_spectrum_pipeline,
+            exp_resample_pipeline,
         }
     }
 
@@ -263,6 +316,169 @@ impl MellinGpuKernel {
             pods.iter()
                 .map(|value| Complex32::new(value.re, value.im))
                 .collect()
+        };
+        staging.unmap();
+        Ok(output)
+    }
+
+    /// Execute the inverse Mellin spectrum path.
+    ///
+    /// Two GPU passes: (1) IDFT to recover log-domain samples, (2) exp-resample
+    /// back to the linear output domain `[out_min, out_max]` at `out_len` points.
+    pub fn execute_inverse(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        plan: &MellinWgpuPlan,
+        spectrum: &[Complex32],
+        out_min: f64,
+        out_max: f64,
+        out_len: usize,
+    ) -> WgpuResult<Vec<f32>> {
+        let n = plan.samples();
+
+        let spectrum_pods: Vec<ComplexPod> = spectrum
+            .iter()
+            .map(|v| ComplexPod { re: v.re, im: v.im })
+            .collect();
+
+        let spectrum_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("apollo-mellin-wgpu inv spectrum input"),
+            contents: bytemuck::cast_slice(&spectrum_pods),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+        let log_samples_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-mellin-wgpu inv log samples"),
+            size: (n * std::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-mellin-wgpu inv output"),
+            size: (out_len * std::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("apollo-mellin-wgpu inv staging"),
+            size: (out_len * std::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let log_min = plan.min_scale().ln() as f32;
+        let log_max = plan.max_scale().ln() as f32;
+        queue.write_buffer(
+            &self.inv_params_buffer,
+            0,
+            bytemuck::bytes_of(&InverseMellinParamsPod {
+                samples: n as u32,
+                out_len: out_len as u32,
+                log_min,
+                log_max,
+                out_min: out_min as f32,
+                out_max: out_max as f32,
+                _pad0: 0,
+                _pad1: 0,
+            }),
+        );
+
+        // Pass 1: mellin_inverse_spectrum — spectrum -> log_samples
+        let inv_spectrum_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("apollo-mellin-wgpu inv-spectrum bind group"),
+            layout: &self.resample_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: spectrum_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: log_samples_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.inv_params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        // Pass 2: mellin_exp_resample — log_samples -> output
+        let exp_resample_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("apollo-mellin-wgpu exp-resample bind group"),
+            layout: &self.resample_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: log_samples_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: output_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.inv_params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("apollo-mellin-wgpu inverse encoder"),
+        });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollo-mellin-wgpu inverse-spectrum pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.inverse_spectrum_pipeline);
+            pass.set_bind_group(0, &inv_spectrum_bg, &[]);
+            pass.dispatch_workgroups(dispatch_count(n as u32), 1, 1);
+        }
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollo-mellin-wgpu exp-resample pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.exp_resample_pipeline);
+            pass.set_bind_group(0, &exp_resample_bg, &[]);
+            pass.dispatch_workgroups(dispatch_count(out_len as u32), 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(
+            &output_buffer,
+            0,
+            &staging,
+            0,
+            (out_len * std::mem::size_of::<f32>()) as u64,
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = staging.slice(..);
+        let (sender, receiver) = mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+        let _ = device.poll(wgpu::PollType::Wait);
+        match receiver.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                return Err(WgpuError::BufferMapFailed {
+                    message: error.to_string(),
+                });
+            }
+            Err(error) => {
+                return Err(WgpuError::BufferMapFailed {
+                    message: error.to_string(),
+                });
+            }
+        }
+
+        let output = {
+            let mapped = slice.get_mapped_range();
+            bytemuck::cast_slice::<u8, f32>(&mapped).to_vec()
         };
         staging.unmap();
         Ok(output)

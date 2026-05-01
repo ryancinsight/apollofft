@@ -192,6 +192,55 @@ impl CztPlan {
         *data = transformed;
         Ok(())
     }
+
+    /// Inverse chirp z-transform via the Björck–Pereyra Vandermonde solve.
+    ///
+    /// # Mathematical contract
+    ///
+    /// Given a spectrum `X[k]` of length `M`, recovers `x[n]` of length `N`
+    /// such that `forward(x) == X` (in exact arithmetic).  Inversion requires
+    /// `M == N`; a rectangular (M ≠ N) CZT is not uniquely invertible.
+    ///
+    /// The evaluation points are `z_k = W^k` for `k = 0..N-1`.  If two points
+    /// coincide the Vandermonde matrix is singular and `CztError::NotInvertible`
+    /// is returned.
+    ///
+    /// # Complexity
+    ///
+    /// O(N²) time, O(N) additional space.
+    pub fn inverse(
+        &self,
+        spectrum: &Array1<Complex64>,
+    ) -> Result<Array1<Complex64>, CztError> {
+        if spectrum.len() != self.m {
+            return Err(CztError::LengthMismatch);
+        }
+        if self.n != self.m {
+            return Err(CztError::NotInvertible {
+                reason: "inverse is only defined for square (M == N) CZT plans",
+            });
+        }
+        let result =
+            crate::application::execution::kernel::bluestein::czt_bjork_pereyra_inverse(
+                spectrum.as_slice().expect("spectrum must be contiguous"),
+                self.a,
+                self.w,
+            )?;
+        Ok(Array1::from_vec(result))
+    }
+
+    /// Inverse CZT for typed `Complex64`, `Complex32`, or mixed `[f16; 2]` storage.
+    ///
+    /// Converts input once to `Complex64`, applies the exact Vandermonde solve,
+    /// and quantizes back to the requested storage type.
+    pub fn inverse_typed_into<T: CztStorage>(
+        &self,
+        spectrum: &Array1<T>,
+        output: &mut Array1<T>,
+        profile: PrecisionProfile,
+    ) -> Result<(), CztError> {
+        T::inverse_into(self, spectrum, output, profile)
+    }
 }
 
 /// Complex storage accepted by typed CZT paths.
@@ -220,6 +269,25 @@ pub trait CztStorage: Copy + Send + Sync + 'static {
         let mut output64 = Array1::zeros(plan.output_len());
         plan.forward_into(&input64, &mut output64)?;
         for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+            *slot = Self::from_complex64(value);
+        }
+        Ok(())
+    }
+
+    /// Execute inverse transform into caller-owned storage.
+    fn inverse_into(
+        plan: &CztPlan,
+        spectrum: &Array1<Self>,
+        output: &mut Array1<Self>,
+        profile: PrecisionProfile,
+    ) -> Result<(), CztError> {
+        validate_profile(profile, Self::PROFILE)?;
+        if spectrum.len() != plan.output_len() || output.len() != plan.input_len() {
+            return Err(CztError::LengthMismatch);
+        }
+        let spectrum64 = Array1::from_iter(spectrum.iter().copied().map(Self::to_complex64));
+        let result64 = plan.inverse(&spectrum64)?;
+        for (slot, value) in output.iter_mut().zip(result64.iter().copied()) {
             *slot = Self::from_complex64(value);
         }
         Ok(())
@@ -661,5 +729,97 @@ mod proptest_suite {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod inverse_tests {
+    use super::*;
+    use approx::assert_abs_diff_eq;
+
+    /// Theorem (exact ICZT roundtrip, DFT case):
+    /// For A=1, W=exp(-2πi/N), the CZT is the N-point DFT.
+    /// `inverse(forward(x)) == x` must hold to machine precision.
+    #[test]
+    fn inverse_roundtrip_dft_parameters() {
+        for n in [2usize, 3, 4, 5, 7, 8, 11, 13, 16] {
+            let a = Complex64::new(1.0, 0.0);
+            let w = Complex64::from_polar(1.0, -std::f64::consts::TAU / n as f64);
+            let input: Array1<Complex64> = Array1::from_shape_fn(n, |i| {
+                Complex64::new((i as f64 * 0.31 + 0.7).sin(), (i as f64 * 0.17).cos())
+            });
+            let plan = CztPlan::new(n, n, a, w).expect("DFT plan");
+            let spectrum = plan.forward(&input).expect("forward");
+            let recovered = plan.inverse(&spectrum).expect("inverse");
+            for i in 0..n {
+                let err = (recovered[i] - input[i]).norm();
+                assert!(err < 1e-10, "n={n} i={i} err={err:.3e}");
+            }
+        }
+    }
+
+    /// Theorem (exact ICZT roundtrip, general A≠1):
+    /// For |A|=1 and W=exp(-2πi*θ) with θ irrational, the Vandermonde nodes
+    /// z_k = W^k are distinct and Björck-Pereyra gives the exact inverse.
+    #[test]
+    fn inverse_roundtrip_general_a_parameter() {
+        let n = 6usize;
+        let a = Complex64::from_polar(1.0, 0.5);
+        let w = Complex64::from_polar(1.0, -std::f64::consts::TAU / n as f64);
+        let input: Array1<Complex64> = Array1::from_shape_fn(n, |i| {
+            Complex64::new((i as f64 * 0.53 + 1.1).sin(), (i as f64 * 0.37 - 0.5).cos())
+        });
+        let plan = CztPlan::new(n, n, a, w).expect("plan");
+        let spectrum = plan.forward(&input).expect("forward");
+        let recovered = plan.inverse(&spectrum).expect("inverse");
+        for i in 0..n {
+            assert_abs_diff_eq!(recovered[i].re, input[i].re, epsilon = 1e-9);
+            assert_abs_diff_eq!(recovered[i].im, input[i].im, epsilon = 1e-9);
+        }
+    }
+
+    /// Theorem (exact ICZT roundtrip, |W|≠1):
+    /// When |W| > 1 the spiral points z_k = W^k diverge; they are always
+    /// distinct since |z_j - z_k| = |W|^k * |W^{j-k} - 1| > 0 for j≠k.
+    #[test]
+    fn inverse_roundtrip_non_unit_w() {
+        let n = 5usize;
+        let a = Complex64::new(1.0, 0.0);
+        let w = Complex64::from_polar(1.1, -0.9);
+        let input: Array1<Complex64> = Array1::from_shape_fn(n, |i| {
+            Complex64::new((i as f64 * 0.7).cos(), (i as f64 * 0.4 + 0.3).sin())
+        });
+        let plan = CztPlan::new(n, n, a, w).expect("plan");
+        let spectrum = plan.forward(&input).expect("forward");
+        let recovered = plan.inverse(&spectrum).expect("inverse");
+        for i in 0..n {
+            assert_abs_diff_eq!(recovered[i].re, input[i].re, epsilon = 1e-8);
+            assert_abs_diff_eq!(recovered[i].im, input[i].im, epsilon = 1e-8);
+        }
+    }
+
+    /// Rectangular CZT (M ≠ N) must return NotInvertible.
+    #[test]
+    fn rectangular_czt_is_not_invertible() {
+        let plan = CztPlan::new(4, 6, Complex64::new(1.0, 0.0),
+            Complex64::from_polar(1.0, -0.7)).expect("plan");
+        let spectrum = Array1::zeros(6);
+        assert!(matches!(
+            plan.inverse(&spectrum),
+            Err(CztError::NotInvertible { .. })
+        ));
+    }
+
+    /// Spectrum length mismatch must return LengthMismatch.
+    #[test]
+    fn inverse_rejects_wrong_spectrum_length() {
+        let n = 4usize;
+        let plan = CztPlan::new(n, n, Complex64::new(1.0, 0.0),
+            Complex64::from_polar(1.0, -std::f64::consts::TAU / n as f64)).expect("plan");
+        let bad_spectrum = Array1::zeros(n + 1);
+        assert!(matches!(
+            plan.inverse(&bad_spectrum),
+            Err(CztError::LengthMismatch)
+        ));
     }
 }

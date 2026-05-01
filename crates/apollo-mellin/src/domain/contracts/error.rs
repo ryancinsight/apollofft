@@ -35,4 +35,7 @@ pub enum MellinError {
     /// Precision profile does not match the requested storage type.
     #[error("precision profile does not match storage type")]
     PrecisionMismatch,
+    /// Spectrum is empty or its length does not match the plan's sample count.
+    #[error("spectrum length must match the plan sample count")]
+    SpectrumLengthMismatch,
 }

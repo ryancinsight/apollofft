@@ -3,9 +3,7 @@
 ## Open Gaps
 
 - `GpuFft3dF16Native` Bluestein path on production hardware with non-power-of-two sizes: current test passes on dev hardware; production validation on adapters that expose `wgpu::Features::SHADER_F16` is pending.
-- `apollo-stft-wgpu` Bluestein/Chirp-Z non-PoT path: `frame_len` must be a power of two (`WgpuError::FrameLenNotPowerOfTwo`); CPU `apollo-stft` supports arbitrary `frame_len` via `FftPlan1D` which auto-selects Radix-2 or Bluestein. GPU non-PoT support requires a dedicated chirp WGSL shader (with radix-2 entry points operating on the chirp data BGL), a `StftChirpData` struct mirroring `apollo-fft-wgpu`'s `ChirpData`, conditional dispatch (Radix-2 for PoT, Chirp-Z for non-PoT), updated `StftGpuBuffers` for non-PoT scratch sizing, and non-PoT verification tests. ADR required per versioning policy.
 - Criterion buffer-reuse bench results on representative GPU hardware: allocation-vs-reuse speedup ratios for NUFFT fast paths and STFT paths are not yet recorded as numbers; benchmark code is present for all three crates (`apollo-fft-wgpu`, `apollo-stft-wgpu`); requires a GPU runner to produce measurable timing ratios.
-- WGPU inverse operations (2 remaining): `apollo-czt-wgpu` and `apollo-mellin-wgpu` return `UnsupportedExecution` from `execute_inverse`. These two crates have **no CPU inverse defined** (`apollo-czt` exposes only `forward`; `apollo-mellin` exposes `forward_resample`/`moment`/`forward_spectrum` only). GPU inverse for CZT and Mellin is `UnsupportedExecution` by **architectural design**, not by deferral. (`apollo-hilbert-wgpu`, `apollo-sdft-wgpu`, `apollo-stft-wgpu`, and `apollo-radon-wgpu` inverse/backproject GPU paths are now implemented.)
 
 Note: NTT-WGPU floating mixed precision is an architectural design contract, not a gap.
 Residue-field arithmetic requires exact modular integers; the WGPU surface uses exact `u32`
@@ -13,6 +11,26 @@ quantized storage (implemented and verified). Floating-point NTT is architectura
 by design and will not be implemented.
 
 ## Closed Gaps
+
+### Closure XX — CPU + GPU Inverse Transforms: CZT and Mellin [minor]
+- **Gap (CZT CPU inverse)**: `apollo-czt` had no inverse. CPU CZT inversion requires solving
+  the Vandermonde system `V·y = X` where `V[k,n] = W^{kn}`, then recovering `x[n] = y[n]·A^n`.
+- **Closed by**: Björck-Pereyra O(N²) in-place Newton solve in `bluestein.rs`.
+  `CztPlan::inverse` + `CztError::NotInvertible`. `apollo-czt` bumped to v0.2.0.
+- **Gap (Mellin CPU inverse)**: `apollo-mellin` had no inverse. Inversion requires IDFT of
+  the log-domain spectrum then exp-resample from log-grid to linear output domain.
+- **Closed by**: `inverse_log_frequency_spectrum` (rayon-parallel IDFT) + `exp_resample`
+  in `resample.rs`; `MellinPlan::inverse_spectrum`; `MellinError::SpectrumLengthMismatch`.
+  `apollo-mellin` bumped to v0.2.0.
+- **Gap (CZT GPU inverse)**: `apollo-czt-wgpu` returned `UnsupportedExecution` from
+  `execute_inverse`. GPU adjoint formula exact for unitary DFT parameters was not implemented.
+- **Closed by**: `czt_inverse` WGSL entry point; `CztWgpuBackend::execute_inverse`;
+  `WgpuCapabilities::forward_inverse`. `apollo-czt-wgpu` bumped to v0.2.0.
+- **Gap (Mellin GPU inverse)**: `apollo-mellin-wgpu` returned `UnsupportedExecution` from
+  `execute_inverse`. Two-pass GPU IDFT + exp-resample was not implemented.
+- **Closed by**: `mellin_inverse_spectrum` + `mellin_exp_resample` WGSL kernels;
+  `InverseMellinParamsPod`; `MellinGpuKernel::execute_inverse` (two-pass, reuses
+  `resample_layout`); `MellinWgpuBackend::execute_inverse`. `apollo-mellin-wgpu` v0.2.0.
 
 ### Closure XVII — STFT GPU Buffer-Reuse Criterion Benchmarks + README Usage Documentation
 - **Gap**: `stft_bench.rs` benchmarked only the allocating paths (`execute_forward`,

@@ -62,7 +62,7 @@ impl CztWgpuBackend {
     /// Return truthful current capabilities.
     #[must_use]
     pub const fn capabilities(&self) -> WgpuCapabilities {
-        WgpuCapabilities::forward_only(true)
+        WgpuCapabilities::forward_inverse(true)
     }
 
     /// Return the acquired WGPU device.
@@ -146,11 +146,45 @@ impl CztWgpuBackend {
         Ok(())
     }
 
-    /// Inverse or adjoint execution is unsupported until the owning CZT crate defines it.
-    pub fn execute_inverse(&self) -> WgpuResult<()> {
-        Err(WgpuError::UnsupportedExecution {
-            operation: "inverse",
-        })
+    /// Execute the adjoint inverse CZT.
+    ///
+    /// Computes `x[n] = (A^n / N) · Σ_k X[k] · W^{-nk}` on the GPU.
+    ///
+    /// **Exactness**: exact when |A| = 1, |W| = 1, and W is an N-th root of
+    /// unity (DFT case).  For general spiral parameters this is the
+    /// minimum-norm adjoint solution; the CPU crate's `CztPlan::inverse` uses
+    /// the Björck–Pereyra Vandermonde solve for exact general inversion.
+    ///
+    /// # Errors
+    ///
+    /// Returns `WgpuError::NotSquare` when `plan.input_len() != plan.output_len()`.
+    pub fn execute_inverse(
+        &self,
+        plan: &CztWgpuPlan,
+        spectrum: &[Complex32],
+    ) -> WgpuResult<Vec<Complex32>> {
+        if plan.input_len() != plan.output_len() {
+            return Err(WgpuError::LengthMismatch {
+                expected: plan.input_len(),
+                actual: plan.output_len(),
+            });
+        }
+        if spectrum.len() != plan.output_len() {
+            return Err(WgpuError::LengthMismatch {
+                expected: plan.output_len(),
+                actual: spectrum.len(),
+            });
+        }
+        let n = plan.input_len();
+        if n == 0 {
+            return Err(WgpuError::InvalidLength {
+                input_len: n,
+                output_len: n,
+                message: "lengths must be greater than zero",
+            });
+        }
+        self.kernel
+            .execute_inverse(self.device.as_ref(), self.queue.as_ref(), plan, spectrum)
     }
 
     fn validate_plan_input(plan: &CztWgpuPlan, input: &[Complex32]) -> WgpuResult<()> {

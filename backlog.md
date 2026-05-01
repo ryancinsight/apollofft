@@ -1,5 +1,34 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure XX phase)
+- [x] [minor] CPU CZT inverse: `CztPlan::inverse` via Björck-Pereyra Vandermonde solve;
+  `CztError::NotInvertible`; 5 value-semantic tests. `apollo-czt` v0.2.0.
+- [x] [minor] CPU Mellin inverse: `MellinPlan::inverse_spectrum` via IDFT + exp-resample;
+  `MellinError::SpectrumLengthMismatch`; 4 value-semantic tests. `apollo-mellin` v0.2.0.
+- [x] [minor] GPU CZT inverse: `czt_inverse` WGSL adjoint formula; `CztWgpuBackend::execute_inverse`;
+  `WgpuCapabilities::forward_inverse`; 2 GPU-gated tests. `apollo-czt-wgpu` v0.2.0.
+- [x] [minor] GPU Mellin inverse: two-pass WGSL (`mellin_inverse_spectrum` + `mellin_exp_resample`);
+  `InverseMellinParamsPod`; `MellinWgpuBackend::execute_inverse`; 2 GPU-gated tests.
+  `apollo-mellin-wgpu` v0.2.0.
+
+## Planned next increments
+*(No gaps blocking next sprint. All inverse paths for CZT and Mellin are now implemented CPU+GPU.)*
+*(Remaining open gap: hardware-gated benchmark timing ratios for NUFFT/STFT buffer-reuse paths.)*
+
+## Closed in this sprint (Closure XIX phase)
+- [x] [minor] Update `StftGpuBuffers` for non-PoT scratch sizing via `chirp_padded_len(frame_len)`;
+  remove `FrameLenNotPowerOfTwo` from `make_buffers`, `execute_forward_with_buffers`,
+  `execute_inverse_with_buffers`. Unblocks buffer-reuse path for non-PoT `frame_len`.
+  Version: 0.10.0 [minor]. Tests: 1 structural + 2 GPU-gated buffer-reuse.
+
+## Closed in this sprint (Closure XVIII phase)
+- [x] [minor] Bluestein/Chirp-Z non-PoT STFT GPU path: five-pass WGSL dispatch
+  (`stft_chirp.wgsl`, `stft_chirp_fft.wgsl`), `StftChirpData` GPU resource struct,
+  conditional dispatch in `kernel.rs` (Radix-2 for PoT, Chirp-Z for non-PoT),
+  `FrameLenNotPowerOfTwo` removed from primary dispatch path in `device.rs`,
+  `error.rs` variant doc updated, 5 new verification tests (3 structural, 2 GPU-gated).
+  ADR: `design_history_file/adr_stft_wgpu_non_pot_chirpz.md`. Version: 0.9.0 [minor].
+
 ## Closed in this sprint (Closure XVII phase)
 - [x] [patch] Add `bench_forward_reuse` and `bench_inverse_reuse` benchmark groups to
   `crates/apollo-stft-wgpu/benches/stft_bench.rs`: head-to-head allocating vs
@@ -11,13 +40,7 @@
   constraint notes, and bench invocation.
 
 ## Planned next increments
-- [ ] [minor] Bluestein/Chirp-Z non-PoT STFT GPU path: implement a Chirp-Z reduction
-  in `apollo-stft-wgpu` for arbitrary `frame_len` (remove `FrameLenNotPowerOfTwo` guard).
-  Requires: dedicated chirp WGSL shader with radix-2 entry points operating on the
-  chirp data BGL, `StftChirpData` struct mirroring `apollo-fft-wgpu`'s `ChirpData`,
-  conditional dispatch (Radix-2 for PoT, Chirp-Z for non-PoT), updated `StftGpuBuffers`
-  for non-PoT scratch sizing, and non-PoT verification tests. ADR required before
-  implementation per versioning policy.
+*(No gaps blocking next sprint at this time. STFT GPU PoT/non-PoT complete; buffer-reuse enabled.)*
 
 ## Closed in this sprint (Closure XVI phase)
 - [x] [minor] `StftGpuBuffers` pre-allocated buffer reuse in `apollo-stft-wgpu`:

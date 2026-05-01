@@ -11,6 +11,122 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.12.0] — Closure XX
+
+### Closure XX — CPU + GPU Inverse Transforms: CZT and Mellin [minor]
+
+#### Added — apollo-czt v0.2.0
+- `CztPlan::inverse(spectrum)` — exact Vandermonde solve via Björck-Pereyra algorithm
+  (`O(N²)` in-place Newton evaluation). Returns `CztError::NotInvertible` when
+  `M ≠ N` or when Vandermonde nodes collide (denominator below `f64::EPSILON * 1024`).
+- `CztStorage::inverse_into` — default method adapting `inverse` to in-place storage API.
+- `CztError::NotInvertible { reason: &'static str }` variant.
+- 5 value-semantic tests: roundtrip at DFT parameters, general `A` offset, non-unit `W`
+  spacing, rejection of rectangular plans, rejection of wrong spectrum length.
+
+#### Added — apollo-mellin v0.2.0
+- `MellinPlan::inverse_spectrum(spectrum, out_min, out_max, output)` — IDFT of
+  log-domain spectrum then exp-resample from log-grid to linear domain.
+  Rayon-parallel IDFT for `N ≥ 256`.
+- `inverse_log_frequency_spectrum` and `exp_resample` exported from `lib.rs`.
+- `MellinError::SpectrumLengthMismatch` variant.
+- 4 value-semantic tests: constant-signal roundtrip (`ε < 1e-10`), linear-signal
+  roundtrip (interpolation error `< 0.1` for `N = 64`), wrong-length rejection,
+  invalid-bounds rejection.
+
+#### Added — apollo-czt-wgpu v0.2.0
+- `czt_inverse` WGSL entry point: adjoint formula `x[n] = (A^n/N)·∑_k X[k]·W^{-nk}`,
+  exact for unitary DFT parameters.
+- `MellinGpuKernel::inverse_pipeline` field; `execute_inverse` dispatches over `N` threads.
+- `CztWgpuBackend::execute_inverse(plan, spectrum)` — validates `M == N`, delegates to kernel.
+- `WgpuCapabilities::forward_inverse` constructor.
+- 2 new GPU tests: roundtrip at DFT parameters, rejection of non-square plan.
+
+#### Added — apollo-mellin-wgpu v0.2.0
+- `mellin_inverse_spectrum` WGSL kernel: IDFT pass, spectrum → log-domain samples.
+- `mellin_exp_resample` WGSL kernel: exp-resample pass, log-domain → linear output.
+- `InverseMellinParamsPod` uniform struct (32 bytes, reuses params buffer slot).
+- `MellinGpuKernel::inverse_spectrum_pipeline`, `exp_resample_pipeline`,
+  `inv_params_buffer` fields; `execute_inverse` dispatches two GPU passes + readback.
+- `MellinWgpuBackend::execute_inverse(plan, spectrum, out_min, out_max, out_len)`.
+- `WgpuCapabilities::forward_inverse` constructor.
+- 2 new GPU tests: constant-signal roundtrip (`ε < 5e-4`), invalid-domain rejection.
+
+---
+
+## [0.10.0] — Closure XIX
+
+### Closure XIX — StftGpuBuffers Non-PoT Scratch Sizing [minor]
+
+#### Changed
+- `StftGpuBuffers::new` now accepts arbitrary `frame_len` (not just power-of-two).
+  Scratch buffers (`re_scratch_buf`, `im_scratch_buf`, `frame_data_buf`) are automatically
+  sized to `frame_count × M` where `M = chirp_padded_len(frame_len)` when `!frame_len.is_power_of_two()`,
+  and `frame_count × frame_len` when PoT.
+- `StftWgpuBackend::make_buffers`, `execute_forward_with_buffers`, `execute_inverse_with_buffers`
+  no longer return `WgpuError::FrameLenNotPowerOfTwo`; non-PoT `frame_len` now dispatches
+  via the buffer-reuse path (kernel auto-selects Chirp-Z for non-PoT at dispatch time).
+- Module docstring in `buffers.rs` updated: PoT constraint removed; Closure XIX note added.
+
+#### Added (Tests)
+- `make_buffers_accepts_non_power_of_two_frame_len_structurally`: structural verification
+  that `make_buffers` accepts non-PoT without returning `FrameLenNotPowerOfTwo`.
+- `forward_buffers_non_pot_frame_len_400_when_device_exists` (GPU-gated): buffer-reuse
+  forward at `frame_len=400`, GPU output matched against CPU `apollo-stft` reference.
+- `inverse_buffers_non_pot_frame_len_400_when_device_exists` (GPU-gated): buffer-reuse
+  inverse at `frame_len=400`, WOLA interior-sample recovery comparison.
+
+#### Removed
+- Panic condition `assert!(frame_len.is_power_of_two())` in `StftGpuBuffers::new`.
+
+---
+
+## [0.9.0] — Closure XVIII
+
+### Closure XVIII — Non-Power-of-Two STFT GPU Path (Bluestein/Chirp-Z) [minor]
+
+#### Added
+- `crates/apollo-stft-wgpu/src/infrastructure/shaders/stft_chirp.wgsl`: Five-pass WGSL
+  compute shader implementing the Bluestein Chirp-Z mapping for the STFT: `premul_fwd`,
+  `premul_inv`, `pointmul`, `postmul_fwd`, `postmul_inv`. Hann analysis/synthesis windows
+  and exp(±πi·n²/N) chirp twiddles are applied on-GPU.
+- `crates/apollo-stft-wgpu/src/infrastructure/shaders/stft_chirp_fft.wgsl`: Radix-2
+  sub-FFT shader operating on chirp working buffers: `chirp_fft_bitrev`,
+  `chirp_fft_butterfly_fwd`, `chirp_fft_butterfly_inv`, `chirp_fft_scale`.
+- `crates/apollo-stft-wgpu/src/infrastructure/chirp.rs`: `StftChirpData` struct —
+  pre-allocated GPU resources (chirp kernel H, working buffers, bind groups, pipelines)
+  for the Bluestein path. `chirp_padded_len(n)` returns `(2n−1).next_power_of_two()`.
+- `design_history_file/adr_stft_wgpu_non_pot_chirpz.md`: ADR for the Chirp-Z dispatch
+  strategy (Bluestein 1970, Rabiner 1969).
+- `ndarray = "0.16"` added as a regular (non-dev) dependency to `apollo-stft-wgpu`
+  for CPU-side chirp kernel construction in `StftChirpData::new`.
+
+#### Changed
+- `execute_forward` and `execute_inverse` in `StftWgpuBackend` (device.rs) no longer
+  return `WgpuError::FrameLenNotPowerOfTwo`; non-power-of-two `frame_len` now
+  automatically dispatches the Bluestein/Chirp-Z path.
+- `kernel.rs`: non-PoT `frame_len` delegates to `execute_forward_fft_chirp` /
+  `execute_inverse_chirp` instead of returning an error.
+- `WgpuError::FrameLenNotPowerOfTwo` doc comment updated to reflect that this variant
+  is no longer returned by primary dispatch; it may still be returned by
+  `make_buffers`, `execute_forward_with_buffers`, `execute_inverse_with_buffers`.
+- Verification tests `forward_rejects_non_power_of_two_frame_len` and
+  `inverse_rejects_non_power_of_two_frame_len` renamed and inverted to
+  `forward_accepts_non_power_of_two_frame_len_chirpz` and
+  `inverse_accepts_non_power_of_two_frame_len_chirpz`.
+
+#### Added (Tests)
+- `forward_accepts_non_power_of_two_frame_len_structurally`: structural check that
+  non-PoT no longer returns `FrameLenNotPowerOfTwo`.
+- `forward_accepts_non_power_of_two_frame_len_chirpz`: same for `execute_forward`.
+- `inverse_accepts_non_power_of_two_frame_len_chirpz`: same for `execute_inverse`.
+- `forward_chirpz_non_pot_frame_len_400_when_device_exists` (GPU-gated): GPU forward
+  Chirp-Z at frame_len=400, compared to CPU `apollo-stft` reference, TOL=1e-2.
+- `inverse_chirpz_non_pot_frame_len_400_when_device_exists` (GPU-gated): GPU inverse
+  Chirp-Z at frame_len=400, WOLA interior-sample recovery, TOL=5e-2.
+
+---
+
 ## [0.8.5] — Closure XVII
 
 ### Closure XVII — STFT GPU Buffer-Reuse Criterion Benchmarks + README Usage Documentation [patch]

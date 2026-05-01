@@ -8,11 +8,11 @@ mod tests {
     use crate::{MellinWgpuBackend, MellinWgpuPlan, WgpuCapabilities, WgpuError};
 
     #[test]
-    fn capabilities_reflect_forward_only_kernel_surface() {
-        let capabilities = WgpuCapabilities::forward_only(true);
+    fn capabilities_reflect_forward_inverse_kernel_surface() {
+        let capabilities = WgpuCapabilities::forward_inverse(true);
         assert!(capabilities.device_available);
         assert!(capabilities.supports_forward);
-        assert!(!capabilities.supports_inverse);
+        assert!(capabilities.supports_inverse);
         assert!(capabilities.supports_mixed_precision);
         assert_eq!(
             capabilities.default_precision_profile,
@@ -42,14 +42,14 @@ mod tests {
     }
 
     #[test]
-    fn backend_reports_forward_only_when_device_exists() {
+    fn backend_reports_forward_and_inverse_when_device_exists() {
         let Ok(backend) = MellinWgpuBackend::try_default() else {
             return;
         };
         let capabilities = backend.capabilities();
         assert!(capabilities.device_available);
         assert!(capabilities.supports_forward);
-        assert!(!capabilities.supports_inverse);
+        assert!(capabilities.supports_inverse);
     }
 
     #[test]
@@ -201,5 +201,50 @@ mod tests {
                 message: "signal_min must be less than signal_max",
             }
         );
+    }
+
+    /// GPU Mellin inverse roundtrip: forward on GPU then inverse on GPU must
+    /// recover the original signal for a constant input (where DFT leakage is
+    /// zero and the round-trip is exact up to interpolation precision).
+    #[test]
+    fn gpu_inverse_roundtrip_constant_signal() {
+        let Ok(backend) = MellinWgpuBackend::try_default() else {
+            return;
+        };
+        let n = 16usize;
+        let min_scale = 1.0_f64;
+        let max_scale = 8.0_f64;
+        let plan = backend.plan(n, min_scale, max_scale);
+        let signal: Vec<f32> = vec![2.5; n];
+        let spectrum = backend
+            .execute_forward(&plan, &signal, min_scale, max_scale)
+            .expect("GPU forward");
+        let recovered = backend
+            .execute_inverse(&plan, &spectrum, min_scale, max_scale, n)
+            .expect("GPU inverse");
+        assert_eq!(recovered.len(), n);
+        for (i, &v) in recovered.iter().enumerate() {
+            let err = (v - 2.5_f32).abs();
+            assert!(err < 5.0e-4, "sample {i}: expected=2.5, got={v:.6}, err={err:.3e}");
+        }
+    }
+
+    /// GPU inverse rejects invalid output domain (non-positive bounds).
+    #[test]
+    fn gpu_inverse_rejects_invalid_output_domain() {
+        let Ok(backend) = MellinWgpuBackend::try_default() else {
+            return;
+        };
+        let n = 8usize;
+        let plan = backend.plan(n, 1.0, 8.0);
+        let spectrum = vec![num_complex::Complex32::new(0.0, 0.0); n];
+        assert!(matches!(
+            backend.execute_inverse(&plan, &spectrum, 0.0, 8.0, n),
+            Err(WgpuError::InvalidSignalDomain { .. })
+        ));
+        assert!(matches!(
+            backend.execute_inverse(&plan, &spectrum, 2.0, 1.0, n),
+            Err(WgpuError::InvalidSignalDomain { .. })
+        ));
     }
 }

@@ -62,7 +62,7 @@ impl MellinWgpuBackend {
     /// Return truthful current capabilities.
     #[must_use]
     pub const fn capabilities(&self) -> WgpuCapabilities {
-        WgpuCapabilities::forward_only(true)
+        WgpuCapabilities::forward_inverse(true)
     }
 
     /// Return the acquired WGPU device.
@@ -103,10 +103,49 @@ impl MellinWgpuBackend {
     }
 
     /// Inverse or adjoint execution is unsupported until the owning Mellin crate defines it.
-    pub fn execute_inverse(&self) -> WgpuResult<()> {
-        Err(WgpuError::UnsupportedExecution {
-            operation: "inverse",
-        })
+    pub fn execute_inverse(
+        &self,
+        plan: &MellinWgpuPlan,
+        spectrum: &[Complex32],
+        out_min: f64,
+        out_max: f64,
+        out_len: usize,
+    ) -> WgpuResult<Vec<f32>> {
+        if plan.samples() == 0 || out_len == 0 {
+            return Err(WgpuError::LengthMismatch {
+                expected: 1,
+                actual: 0,
+            });
+        }
+        if spectrum.len() != plan.samples() {
+            return Err(WgpuError::LengthMismatch {
+                expected: plan.samples(),
+                actual: spectrum.len(),
+            });
+        }
+        if !out_min.is_finite() || !out_max.is_finite() || out_min <= 0.0 || out_max <= 0.0 {
+            return Err(WgpuError::InvalidSignalDomain {
+                signal_min: out_min,
+                signal_max: out_max,
+                message: "output domain bounds must be finite and positive",
+            });
+        }
+        if out_min >= out_max {
+            return Err(WgpuError::InvalidSignalDomain {
+                signal_min: out_min,
+                signal_max: out_max,
+                message: "out_min must be less than out_max",
+            });
+        }
+        self.kernel.execute_inverse(
+            self.device.as_ref(),
+            self.queue.as_ref(),
+            plan,
+            spectrum,
+            out_min,
+            out_max,
+            out_len,
+        )
     }
 
     /// Execute the forward Mellin transform with typed `f64`, `f32`, or mixed `f16` input storage.

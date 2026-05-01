@@ -17,4 +17,13 @@ pub enum CztError {
     /// Requested precision profile does not match the selected storage type.
     #[error("precision profile does not match the selected storage type")]
     PrecisionMismatch,
+    /// The transform cannot be inverted with the current plan parameters.
+    ///
+    /// Inversion requires M == N and non-singular spiral points
+    /// (no two evaluation points z_k = W^k must coincide).
+    #[error("CZT is not invertible: {reason}")]
+    NotInvertible {
+        /// Reason for non-invertibility.
+        reason: &'static str,
+    },
 }

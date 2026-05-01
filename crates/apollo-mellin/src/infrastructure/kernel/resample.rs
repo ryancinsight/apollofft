@@ -146,3 +146,113 @@ fn moment_antiderivative(min: f64, max: f64, exponent: f64) -> f64 {
         (max.powf(exponent) - min.powf(exponent)) / exponent
     }
 }
+
+/// Compute the inverse Mellin spectrum: recover log-domain samples from a
+/// log-frequency spectrum via IDFT.
+///
+/// # Mathematical basis
+///
+/// The forward spectrum is `F[k] = du · Σ_n g[n] exp(−2πi·kn/N)`.
+/// Dividing by `du` and applying the standard IDFT recovers
+/// `g[n] = (1/N) · Σ_k (F[k]/du) · exp(2πi·kn/N)`.
+///
+/// The result `g[n]` represents `f(exp(u_n))` where
+/// `u_n = log_min + n·du` and `du = (log_max − log_min) / (N−1)`.
+#[must_use]
+pub fn inverse_log_frequency_spectrum(
+    spectrum: &[Complex64],
+    log_min: f64,
+    log_max: f64,
+) -> Vec<f64> {
+    let len = spectrum.len();
+    if len == 0 {
+        return Vec::new();
+    }
+    let du = if len > 1 {
+        (log_max - log_min) / (len as f64 - 1.0)
+    } else {
+        1.0
+    };
+
+    // Divide spectrum by du to undo the du scaling from the forward DFT.
+    let inv_du = if du.abs() > f64::EPSILON { 1.0 / du } else { 1.0 };
+    let factor = std::f64::consts::TAU / len as f64;
+
+    let idft_coeff = |n: usize| -> f64 {
+        let re_sum: f64 = spectrum
+            .iter()
+            .enumerate()
+            .map(|(k, s)| {
+                let angle = factor * k as f64 * n as f64;
+                s.re * angle.cos() - s.im * angle.sin()
+            })
+            .sum();
+        re_sum * inv_du / len as f64
+    };
+
+    if len >= PAR_THRESHOLD {
+        (0..len).into_par_iter().map(idft_coeff).collect()
+    } else {
+        (0..len).map(idft_coeff).collect()
+    }
+}
+
+/// Interpolate a log-domain signal back onto a linear-scale output grid.
+///
+/// Given `log_samples[n]` representing `f(exp(u_n))` where
+/// `u_n = log_min + n·du`, this function evaluates `f` at linearly spaced
+/// points in `[output_min, output_max]` via linear interpolation in the
+/// log-domain.
+pub fn exp_resample(
+    log_samples: &[f64],
+    log_min: f64,
+    log_max: f64,
+    output: &mut [f64],
+    output_min: f64,
+    output_max: f64,
+) {
+    let n = log_samples.len();
+    let out_len = output.len();
+    if n == 0 || out_len == 0 {
+        output.fill(0.0);
+        return;
+    }
+
+    let du = if n > 1 {
+        (log_max - log_min) / (n as f64 - 1.0)
+    } else {
+        0.0
+    };
+    let out_step = if out_len > 1 {
+        (output_max - output_min) / (out_len as f64 - 1.0)
+    } else {
+        0.0
+    };
+
+    let eval = |i: usize| -> f64 {
+        let r = output_min + i as f64 * out_step;
+        if r <= 0.0 {
+            return 0.0;
+        }
+        let u = r.ln();
+        if u < log_min || u > log_max || du.abs() < f64::EPSILON {
+            return 0.0;
+        }
+        let exact_idx = (u - log_min) / du;
+        let lower = exact_idx.floor() as usize;
+        let upper = (lower + 1).min(n - 1);
+        let frac = exact_idx - lower as f64;
+        log_samples[lower] * (1.0 - frac) + log_samples[upper] * frac
+    };
+
+    if out_len >= PAR_THRESHOLD {
+        output.par_iter_mut().enumerate().for_each(|(i, v)| {
+            *v = eval(i);
+        });
+    } else {
+        output.iter_mut().enumerate().for_each(|(i, v)| {
+            *v = eval(i);
+        });
+    }
+}
+

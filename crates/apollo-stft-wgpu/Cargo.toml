@@ -1,6 +1,6 @@
 [package]
 name = "apollo-stft-wgpu"
-version = "0.1.0"
+version = "0.10.0"
 edition = "2021"
 license = "MIT"
 authors = ["Ryan Clanton PhD <ryanclanton@outlook.com>"]
@@ -11,6 +11,7 @@ description = "WGPU backend boundary for Apollo STFT"
 apollo-fft = { path = "../apollo-fft" }
 apollo-stft = { path = "../apollo-stft" }
 bytemuck = { version = "1.19", features = ["derive"] }
+ndarray = "0.16"
 num-complex = "0.4"
 pollster = "0.4"
 thiserror = "1.0"
