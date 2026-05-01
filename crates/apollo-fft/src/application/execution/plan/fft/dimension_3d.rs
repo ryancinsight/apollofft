@@ -428,7 +428,9 @@ impl FftPlan3D {
     ) {
         self.check_real_shape(input.dim(), "forward input");
         self.check_full_complex_shape(output.dim(), "forward output");
-        output.assign(&input.mapv(|value| Complex64::new(value, 0.0)));
+        Zip::from(output.view_mut())
+            .and(input.view())
+            .for_each(|out, &value| *out = Complex64::new(value, 0.0));
         self.forward_complex_inplace(output);
     }
 
@@ -439,7 +441,9 @@ impl FftPlan3D {
     ) {
         self.check_real_shape(input.dim(), "forward input");
         self.check_full_complex_shape(output.dim(), "forward output");
-        output.assign(&input.mapv(|value| Complex32::new(value, 0.0)));
+        Zip::from(output.view_mut())
+            .and(input.view())
+            .for_each(|out, &value| *out = Complex32::new(value, 0.0));
         self.forward_complex_inplace_f32(output);
     }
 
@@ -474,17 +478,37 @@ impl FftPlan3D {
     }
 
     fn axis_pass_complex(&self, data: &mut Array3<Complex64>, axis: Axis, forward: bool) {
+        if data.len_of(axis) <= 1 {
+            return;
+        }
         if axis.index() == 2 {
             self.axis2_pass_complex(data, forward);
             return;
         }
-        let mut lanes: Vec<Vec<Complex64>> = data
-            .lanes(axis)
-            .into_iter()
-            .map(|lane| lane.to_vec())
-            .collect();
+        if axis.index() == 1 {
+            self.axis1_pass_complex(data, forward);
+            return;
+        }
+        if axis.index() == 0 {
+            self.axis0_pass_complex(data, forward);
+        }
+    }
 
-        lanes.par_iter_mut().for_each(|lane| {
+    fn axis1_pass_complex(&self, data: &mut Array3<Complex64>, forward: bool) {
+        let data_slice = data
+            .as_slice_memory_order_mut()
+            .expect("3D complex data must be contiguous");
+        let mut lanes = vec![Complex64::default(); self.nx * self.nz * self.ny];
+        for i in 0..self.nx {
+            for k in 0..self.nz {
+                let lane_base = (i * self.nz + k) * self.ny;
+                for j in 0..self.ny {
+                    lanes[lane_base + j] = data_slice[(i * self.ny + j) * self.nz + k];
+                }
+            }
+        }
+
+        lanes.par_chunks_mut(self.ny).for_each(|lane| {
             if forward {
                 fft_forward_64(lane);
             } else {
@@ -492,14 +516,52 @@ impl FftPlan3D {
             }
         });
 
-        for (mut lane, values) in data.lanes_mut(axis).into_iter().zip(lanes.into_iter()) {
-            for (slot, value) in lane.iter_mut().zip(values.into_iter()) {
-                *slot = value;
+        for i in 0..self.nx {
+            for k in 0..self.nz {
+                let lane_base = (i * self.nz + k) * self.ny;
+                for j in 0..self.ny {
+                    data_slice[(i * self.ny + j) * self.nz + k] = lanes[lane_base + j];
+                }
+            }
+        }
+    }
+
+    fn axis0_pass_complex(&self, data: &mut Array3<Complex64>, forward: bool) {
+        let data_slice = data
+            .as_slice_memory_order_mut()
+            .expect("3D complex data must be contiguous");
+        let mut lanes = vec![Complex64::default(); self.ny * self.nz * self.nx];
+        for j in 0..self.ny {
+            for k in 0..self.nz {
+                let lane_base = (j * self.nz + k) * self.nx;
+                for i in 0..self.nx {
+                    lanes[lane_base + i] = data_slice[(i * self.ny + j) * self.nz + k];
+                }
+            }
+        }
+
+        lanes.par_chunks_mut(self.nx).for_each(|lane| {
+            if forward {
+                fft_forward_64(lane);
+            } else {
+                fft_inverse_64(lane);
+            }
+        });
+
+        for j in 0..self.ny {
+            for k in 0..self.nz {
+                let lane_base = (j * self.nz + k) * self.nx;
+                for i in 0..self.nx {
+                    data_slice[(i * self.ny + j) * self.nz + k] = lanes[lane_base + i];
+                }
             }
         }
     }
 
     fn axis2_pass_complex(&self, data: &mut Array3<Complex64>, forward: bool) {
+        if self.nz <= 1 {
+            return;
+        }
         let data_slice = data
             .as_slice_memory_order_mut()
             .expect("3D complex data must be contiguous");
@@ -513,17 +575,37 @@ impl FftPlan3D {
     }
 
     fn axis_pass_complex_f32(&self, data: &mut Array3<Complex32>, axis: Axis, forward: bool) {
+        if data.len_of(axis) <= 1 {
+            return;
+        }
         if axis.index() == 2 {
             self.axis2_pass_complex_f32(data, forward);
             return;
         }
-        let mut lanes: Vec<Vec<Complex32>> = data
-            .lanes(axis)
-            .into_iter()
-            .map(|lane| lane.to_vec())
-            .collect();
+        if axis.index() == 1 {
+            self.axis1_pass_complex_f32(data, forward);
+            return;
+        }
+        if axis.index() == 0 {
+            self.axis0_pass_complex_f32(data, forward);
+        }
+    }
 
-        lanes.par_iter_mut().for_each(|lane| {
+    fn axis1_pass_complex_f32(&self, data: &mut Array3<Complex32>, forward: bool) {
+        let data_slice = data
+            .as_slice_memory_order_mut()
+            .expect("3D f32 complex data must be contiguous");
+        let mut lanes = vec![Complex32::default(); self.nx * self.nz * self.ny];
+        for i in 0..self.nx {
+            for k in 0..self.nz {
+                let lane_base = (i * self.nz + k) * self.ny;
+                for j in 0..self.ny {
+                    lanes[lane_base + j] = data_slice[(i * self.ny + j) * self.nz + k];
+                }
+            }
+        }
+
+        lanes.par_chunks_mut(self.ny).for_each(|lane| {
             if forward {
                 fft_forward_32(lane);
             } else {
@@ -531,14 +613,52 @@ impl FftPlan3D {
             }
         });
 
-        for (mut lane, values) in data.lanes_mut(axis).into_iter().zip(lanes.into_iter()) {
-            for (slot, value) in lane.iter_mut().zip(values.into_iter()) {
-                *slot = value;
+        for i in 0..self.nx {
+            for k in 0..self.nz {
+                let lane_base = (i * self.nz + k) * self.ny;
+                for j in 0..self.ny {
+                    data_slice[(i * self.ny + j) * self.nz + k] = lanes[lane_base + j];
+                }
+            }
+        }
+    }
+
+    fn axis0_pass_complex_f32(&self, data: &mut Array3<Complex32>, forward: bool) {
+        let data_slice = data
+            .as_slice_memory_order_mut()
+            .expect("3D f32 complex data must be contiguous");
+        let mut lanes = vec![Complex32::default(); self.ny * self.nz * self.nx];
+        for j in 0..self.ny {
+            for k in 0..self.nz {
+                let lane_base = (j * self.nz + k) * self.nx;
+                for i in 0..self.nx {
+                    lanes[lane_base + i] = data_slice[(i * self.ny + j) * self.nz + k];
+                }
+            }
+        }
+
+        lanes.par_chunks_mut(self.nx).for_each(|lane| {
+            if forward {
+                fft_forward_32(lane);
+            } else {
+                fft_inverse_32(lane);
+            }
+        });
+
+        for j in 0..self.ny {
+            for k in 0..self.nz {
+                let lane_base = (j * self.nz + k) * self.nx;
+                for i in 0..self.nx {
+                    data_slice[(i * self.ny + j) * self.nz + k] = lanes[lane_base + i];
+                }
             }
         }
     }
 
     fn axis2_pass_complex_f32(&self, data: &mut Array3<Complex32>, forward: bool) {
+        if self.nz <= 1 {
+            return;
+        }
         let data_slice = data
             .as_slice_memory_order_mut()
             .expect("3D f32 complex data must be contiguous");
