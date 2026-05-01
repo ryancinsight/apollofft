@@ -11,6 +11,52 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.8.5] — Closure XVII
+
+### Closure XVII — STFT GPU Buffer-Reuse Criterion Benchmarks + README Usage Documentation [patch]
+#### Added
+- `bench_forward_reuse` benchmark group in `crates/apollo-stft-wgpu/benches/stft_bench.rs`:
+  head-to-head comparison of `execute_forward` (allocating) vs `execute_forward_with_buffers`
+  (buffer-reuse) at `frame_len` ∈ {256, 512, 1024}. Pre-allocates `StftGpuBuffers` outside
+  the bench loop; measures only signal upload + GPU dispatch + readback per iteration.
+- `bench_inverse_reuse` benchmark group: same head-to-head comparison for
+  `execute_inverse` vs `execute_inverse_with_buffers`.
+- Both groups added to `criterion_group!(benches, …)` in `stft_bench.rs`.
+- Updated module docstring in `stft_bench.rs` to describe both allocating and buffer-reuse
+  paths and their mathematical basis.
+- "Buffer Reuse" section in `crates/apollo-stft-wgpu/README.md`: usage snippet showing
+  `make_buffers` → `execute_forward_with_buffers` → `fwd_output()` pattern, constraint
+  notes for `FrameLenNotPowerOfTwo` and `LengthMismatch` errors.
+- "Benchmarks" section in `README.md`: table of all four benchmark groups with
+  description and `cargo bench -p apollo-stft-wgpu` invocation.
+
+---
+
+## [0.8.4] — Closure XVI
+
+### Closure XVI — StftGpuBuffers Pre-allocated Buffer Reuse [minor]
+#### Added
+- `StftGpuBuffers` struct in `crates/apollo-stft-wgpu/src/infrastructure/buffers.rs`:
+  pre-allocates all GPU data buffers, staging buffers, bind groups, and per-stage butterfly
+  uniform buffers for a fixed `(frame_count, frame_len, signal_len, hop_len)` quad.
+  Eliminates 5–8 `device.create_buffer` calls, 4+ `device.create_bind_group` calls,
+  and `log₂(N)` uniform-buffer allocations per dispatch.
+- `StftWgpuBackend::make_buffers(plan, signal_len)`: constructs a `StftGpuBuffers` for
+  a given plan shape with validation identical to the allocating paths.
+- `StftWgpuBackend::execute_forward_with_buffers(plan, signal, buffers)`: zero-allocation
+  forward STFT dispatch; result in `buffers.fwd_output()`.
+- `StftWgpuBackend::execute_inverse_with_buffers(plan, spectrum, signal_len, buffers)`:
+  zero-allocation inverse STFT dispatch; result in `buffers.inv_output()`.
+- `StftGpuKernel::execute_forward_fft_with_buffers` and `execute_inverse_with_buffers`:
+  kernel-level buffered dispatch methods.
+- Verification test `reusable_buffers_match_allocating_forward_and_inverse_when_device_exists`
+  (#[ignore = "requires wgpu device"]): asserts bit-exact agreement between allocating and
+  buffered paths on a bin-aligned sinusoid (k=16, frame_len=512);
+  verifies idempotent second-call buffer reuse.
+- `pub use infrastructure::buffers::StftGpuBuffers` re-exported from crate root.
+
+---
+
 ## [0.8.3] — Closure XV
 
 ### Closure XV — Radon FBP GPU Criterion Benchmarks

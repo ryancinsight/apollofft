@@ -1,5 +1,52 @@
 # Apollo Checklist
 
+## Closure XVII — STFT GPU Buffer-Reuse Criterion Benchmarks + README Usage Documentation [patch]
+Sprint target version: 0.8.5
+
+- [x] Add `bench_forward_reuse` to `crates/apollo-stft-wgpu/benches/stft_bench.rs`:
+      head-to-head `execute_forward` vs `execute_forward_with_buffers` at fl ∈ {256, 512, 1024};
+      `StftGpuBuffers` pre-allocated outside bench loop.
+- [x] Add `bench_inverse_reuse` to `stft_bench.rs`:
+      head-to-head `execute_inverse` vs `execute_inverse_with_buffers`;
+      spectrum pre-computed outside bench loop; only inverse dispatch measured.
+- [x] Add both groups to `criterion_group!(benches, …)` in `stft_bench.rs`.
+- [x] Update `stft_bench.rs` module docstring to describe both allocating and buffer-reuse
+      paths and their mathematical basis.
+- [x] Add "Buffer Reuse" section to `crates/apollo-stft-wgpu/README.md` with usage snippet,
+      constraint notes (`FrameLenNotPowerOfTwo`, `LengthMismatch`), and pattern description.
+- [x] Add "Benchmarks" section to `README.md` with group table and `cargo bench` invocation.
+- [x] `cargo check -p apollo-stft-wgpu` clean (bench compiles against `StftGpuBuffers` API).
+- [x] `cargo test -p apollo-stft-wgpu`: 14 passed; 3 ignored (GPU-gated).
+- [x] Artifact sync: CHANGELOG.md (0.8.5), Cargo.toml (0.8.4 → 0.8.5), backlog.md,
+      checklist.md, gap_audit.md updated.
+
+## Closure XVI — StftGpuBuffers Pre-allocated Buffer Reuse [minor]
+Sprint target version: 0.8.4
+
+- [x] Create `crates/apollo-stft-wgpu/src/infrastructure/buffers.rs` with `StftGpuBuffers`
+      struct, `StftGpuBuffers::new(device, kernel, frame_count, frame_len, signal_len, hop_len)`,
+      and accessors `frame_count()`, `frame_len()`, `signal_len()`, `hop_len()`,
+      `fwd_output()`, `inv_output()`.
+- [x] Make `ComplexPod`, `StftParams`, `FftStageParams`, `FwdFftStageParams` `pub(crate)` in
+      `kernel.rs`.
+- [x] Make `bind_group_layout`, `fft_data_bgl`, `fft_params_bgl` fields `pub(crate)` in
+      `StftGpuKernel`.
+- [x] Add `StftGpuKernel::execute_forward_fft_with_buffers` (reuses bind groups; uploads
+      signal via `queue.write_buffer`; writes result to `buffers.fwd_output_host`).
+- [x] Add `StftGpuKernel::execute_inverse_with_buffers` (uploads spectrum + OLA params;
+      writes result to `buffers.inv_output_host`).
+- [x] Add `StftWgpuBackend::make_buffers`, `execute_forward_with_buffers`,
+      `execute_inverse_with_buffers` to `device.rs`.
+- [x] Re-export `StftGpuBuffers` from `lib.rs`.
+- [x] Add `#[allow(dead_code)]` on GPU-only scratch fields (`re_scratch_buf`,
+      `im_scratch_buf`, `frame_data_buf`) with architectural justification doc-comment.
+- [x] `cargo clippy -p apollo-stft-wgpu --all-targets -- -D warnings` clean.
+- [x] `cargo test -p apollo-stft-wgpu`: 14 passed; 3 ignored (`reusable_buffers_match_*`,
+      `forward_fft_roundtrip_*`, `inverse_roundtrip_large_*`).
+- [x] Add `pub mod buffers` to `infrastructure/mod.rs`.
+- [x] Artifact sync: CHANGELOG.md, Cargo.toml (0.8.3 → 0.8.4), backlog.md,
+      checklist.md, gap_audit.md updated.
+
 ## Closure XV — Radon FBP GPU Criterion Benchmarks [patch]
 Sprint target version: 0.8.3
 

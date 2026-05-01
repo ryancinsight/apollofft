@@ -586,4 +586,107 @@ mod tests {
             );
         }
     }
+
+    /// Reusable-buffer forward and inverse dispatch must produce values identical to the
+    /// allocating path for the same input.
+    ///
+    /// Analytical signal: bin-aligned sinusoid k=16 over frame_len=512.
+    /// `frame_count = 1 + SIGNAL_LEN.div_ceil(HOP_LEN)`; hop=256 satisfies Hann COLA.
+    ///
+    /// Verification: `max |allocating[i] - buffered[i]|` must be exactly 0.0 for both
+    /// forward output (same GPU computation, same data → bit-exact on any deterministic
+    /// GPU driver) and inverse output. Tolerance is set to 1e-6 to account for any
+    /// non-determinism in GPU scheduling while still catching functional divergence.
+    #[test]
+    #[ignore = "requires wgpu device"]
+    fn reusable_buffers_match_allocating_forward_and_inverse_when_device_exists() {
+        const FRAME_LEN: usize = 512;
+        const HOP_LEN: usize = 256;
+        const SIGNAL_LEN: usize = 2048;
+        const TOL: f32 = 1e-6;
+
+        let Ok(backend) = StftWgpuBackend::try_default() else {
+            return;
+        };
+
+        let signal: Vec<f32> = (0..SIGNAL_LEN)
+            .map(|n| (2.0 * std::f32::consts::PI * 16.0 * n as f32 / FRAME_LEN as f32).sin())
+            .collect();
+
+        let plan = StftWgpuPlan::new(FRAME_LEN, HOP_LEN);
+        let frame_count = 1 + SIGNAL_LEN.div_ceil(HOP_LEN);
+
+        // ── Allocating path (reference) ───────────────────────────────────────
+        let alloc_fwd = backend
+            .execute_forward(&plan, &signal)
+            .expect("allocating forward");
+        assert_eq!(alloc_fwd.len(), frame_count * FRAME_LEN);
+
+        let alloc_inv = backend
+            .execute_inverse(&plan, &alloc_fwd, SIGNAL_LEN)
+            .expect("allocating inverse");
+        assert_eq!(alloc_inv.len(), SIGNAL_LEN);
+
+        // ── Buffered path ─────────────────────────────────────────────────────
+        let mut buffers = backend
+            .make_buffers(&plan, SIGNAL_LEN)
+            .expect("make_buffers");
+
+        backend
+            .execute_forward_with_buffers(&plan, &signal, &mut buffers)
+            .expect("buffered forward");
+        let buffered_fwd = buffers.fwd_output();
+        assert_eq!(buffered_fwd.len(), frame_count * FRAME_LEN);
+
+        // Forward output must match allocating path.
+        let max_fwd_err = alloc_fwd
+            .iter()
+            .zip(buffered_fwd.iter())
+            .map(|(a, b)| {
+                let re_err = (a.re - b.re).abs();
+                let im_err = (a.im - b.im).abs();
+                re_err.max(im_err)
+            })
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_fwd_err < TOL,
+            "forward max error {max_fwd_err:.2e} exceeds tolerance {TOL:.2e}"
+        );
+
+        backend
+            .execute_inverse_with_buffers(&plan, &alloc_fwd, SIGNAL_LEN, &mut buffers)
+            .expect("buffered inverse");
+        let buffered_inv = buffers.inv_output();
+        assert_eq!(buffered_inv.len(), SIGNAL_LEN);
+
+        // Inverse output must match allocating path.
+        let max_inv_err = alloc_inv
+            .iter()
+            .zip(buffered_inv.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_inv_err < TOL,
+            "inverse max error {max_inv_err:.2e} exceeds tolerance {TOL:.2e}"
+        );
+
+        // Second call with same buffers: verify buffer reuse (no panic / corruption).
+        backend
+            .execute_forward_with_buffers(&plan, &signal, &mut buffers)
+            .expect("buffered forward second call");
+        let buffered_fwd2 = buffers.fwd_output();
+        let max_fwd2_err = alloc_fwd
+            .iter()
+            .zip(buffered_fwd2.iter())
+            .map(|(a, b)| {
+                let re_err = (a.re - b.re).abs();
+                let im_err = (a.im - b.im).abs();
+                re_err.max(im_err)
+            })
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_fwd2_err < TOL,
+            "second-call forward max error {max_fwd2_err:.2e} exceeds tolerance {TOL:.2e}"
+        );
+    }
 }

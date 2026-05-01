@@ -3,7 +3,8 @@
 ## Open Gaps
 
 - `GpuFft3dF16Native` Bluestein path on production hardware with non-power-of-two sizes: current test passes on dev hardware; production validation on adapters that expose `wgpu::Features::SHADER_F16` is pending.
-- Criterion buffer-reuse bench results on representative GPU hardware: allocation-vs-reuse speedup ratios for 1D and 3D NUFFT fast paths are not yet recorded; requires a GPU runner.
+- `apollo-stft-wgpu` Bluestein/Chirp-Z non-PoT path: `frame_len` must be a power of two (`WgpuError::FrameLenNotPowerOfTwo`); CPU `apollo-stft` supports arbitrary `frame_len` via `FftPlan1D` which auto-selects Radix-2 or Bluestein. GPU non-PoT support requires a dedicated chirp WGSL shader (with radix-2 entry points operating on the chirp data BGL), a `StftChirpData` struct mirroring `apollo-fft-wgpu`'s `ChirpData`, conditional dispatch (Radix-2 for PoT, Chirp-Z for non-PoT), updated `StftGpuBuffers` for non-PoT scratch sizing, and non-PoT verification tests. ADR required per versioning policy.
+- Criterion buffer-reuse bench results on representative GPU hardware: allocation-vs-reuse speedup ratios for NUFFT fast paths and STFT paths are not yet recorded as numbers; benchmark code is present for all three crates (`apollo-fft-wgpu`, `apollo-stft-wgpu`); requires a GPU runner to produce measurable timing ratios.
 - WGPU inverse operations (2 remaining): `apollo-czt-wgpu` and `apollo-mellin-wgpu` return `UnsupportedExecution` from `execute_inverse`. These two crates have **no CPU inverse defined** (`apollo-czt` exposes only `forward`; `apollo-mellin` exposes `forward_resample`/`moment`/`forward_spectrum` only). GPU inverse for CZT and Mellin is `UnsupportedExecution` by **architectural design**, not by deferral. (`apollo-hilbert-wgpu`, `apollo-sdft-wgpu`, `apollo-stft-wgpu`, and `apollo-radon-wgpu` inverse/backproject GPU paths are now implemented.)
 
 Note: NTT-WGPU floating mixed precision is an architectural design contract, not a gap.
@@ -12,6 +13,28 @@ quantized storage (implemented and verified). Floating-point NTT is architectura
 by design and will not be implemented.
 
 ## Closed Gaps
+
+### Closure XVII — STFT GPU Buffer-Reuse Criterion Benchmarks + README Usage Documentation
+- **Gap**: `stft_bench.rs` benchmarked only the allocating paths (`execute_forward`,
+  `execute_inverse`); no head-to-head comparison with the `StftGpuBuffers` buffer-reuse
+  API (added in Closure XVI) was present. `README.md` had no documentation for the
+  `make_buffers` / `execute_forward_with_buffers` / `execute_inverse_with_buffers` pattern.
+- **Closed by**: Added `bench_forward_reuse` and `bench_inverse_reuse` benchmark groups to
+  `stft_bench.rs`; updated `criterion_group!`; added "Buffer Reuse" and "Benchmarks"
+  sections to `README.md`.
+
+### Closure XVI — StftGpuBuffers Pre-allocated Buffer Reuse
+- **Gap**: every `execute_forward_fft` and `execute_inverse` call allocated 5–8 GPU buffers
+  + 4+ bind groups + log₂N uniform buffers per dispatch — equivalent overhead to
+  `GpuFft3dBuffers` gap closed in the `apollo-fft-wgpu` prior sprint.
+- **Fix**: `StftGpuBuffers` pre-allocates all resources at construction time for a fixed
+  `(frame_count, frame_len, signal_len, hop_len)` quad. `StftWgpuBackend::make_buffers`,
+  `execute_forward_with_buffers`, and `execute_inverse_with_buffers` provide the public API.
+  Kernel-level `execute_forward_fft_with_buffers` and `execute_inverse_with_buffers` are also
+  directly accessible.
+- **Verification**: `reusable_buffers_match_allocating_forward_and_inverse_when_device_exists`
+  asserts `max_err < 1e-6` between allocating and buffered paths for both forward and inverse.
+- **Version**: 0.8.4 [minor].
 
 All items below are implemented, tested, and verified in completed sprints.
 

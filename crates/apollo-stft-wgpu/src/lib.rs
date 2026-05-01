@@ -16,6 +16,7 @@ pub mod verification;
 pub use application::plan::StftWgpuPlan;
 pub use domain::capabilities::WgpuCapabilities;
 pub use domain::error::{WgpuError, WgpuResult};
+pub use infrastructure::buffers::StftGpuBuffers;
 pub use infrastructure::device::{wgpu_available, StftWgpuBackend};
 pub use infrastructure::kernel::StftGpuKernel;
 pub use num_complex::Complex32;

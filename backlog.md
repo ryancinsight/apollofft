@@ -1,5 +1,37 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure XVII phase)
+- [x] [patch] Add `bench_forward_reuse` and `bench_inverse_reuse` benchmark groups to
+  `crates/apollo-stft-wgpu/benches/stft_bench.rs`: head-to-head allocating vs
+  `StftGpuBuffers` buffer-reuse comparison at `frame_len` ∈ {256, 512, 1024}.
+  Mirrors the pattern of `apollo-fft-wgpu/benches/buffer_reuse.rs`.
+- [x] [patch] Add "Buffer Reuse" and "Benchmarks" sections to
+  `crates/apollo-stft-wgpu/README.md` documenting the
+  `make_buffers` → `execute_forward/inverse_with_buffers` usage pattern,
+  constraint notes, and bench invocation.
+
+## Planned next increments
+- [ ] [minor] Bluestein/Chirp-Z non-PoT STFT GPU path: implement a Chirp-Z reduction
+  in `apollo-stft-wgpu` for arbitrary `frame_len` (remove `FrameLenNotPowerOfTwo` guard).
+  Requires: dedicated chirp WGSL shader with radix-2 entry points operating on the
+  chirp data BGL, `StftChirpData` struct mirroring `apollo-fft-wgpu`'s `ChirpData`,
+  conditional dispatch (Radix-2 for PoT, Chirp-Z for non-PoT), updated `StftGpuBuffers`
+  for non-PoT scratch sizing, and non-PoT verification tests. ADR required before
+  implementation per versioning policy.
+
+## Closed in this sprint (Closure XVI phase)
+- [x] [minor] `StftGpuBuffers` pre-allocated buffer reuse in `apollo-stft-wgpu`:
+  construct once per `(frame_count, frame_len, signal_len, hop_len)` quad; eliminates
+  5–8 `device.create_buffer`, 4+ `device.create_bind_group`, and `log₂(N)` uniform-buffer
+  allocations per dispatch. Mirrors `GpuFft3dBuffers` pattern from `apollo-fft-wgpu`.
+- [x] [minor] `StftWgpuBackend::make_buffers`, `execute_forward_with_buffers`,
+  `execute_inverse_with_buffers` — public API surface for zero-allocation repeated dispatch.
+- [x] [minor] `StftGpuKernel::execute_forward_fft_with_buffers` and
+  `execute_inverse_with_buffers` — kernel-level buffered dispatch methods.
+- [x] [minor] Verification test `reusable_buffers_match_allocating_forward_and_inverse_when_device_exists`:
+  asserts bit-exact agreement (TOL=1e-6) between allocating and buffered forward+inverse paths;
+  verifies idempotent second-call buffer reuse.
+
 ## Closed in this sprint (Closure XV phase)
 - [x] [patch] Criterion benchmark suite for `apollo-radon-wgpu`: new `benches/radon_wgpu_bench.rs`
   with `radon_wgpu_forward` and `radon_wgpu_fbp` groups across three image sizes (64², 128², 256²).

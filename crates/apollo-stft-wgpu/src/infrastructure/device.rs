@@ -10,6 +10,7 @@ use apollo_stft::{StftRealOutputStorage, StftRealStorage, StftSpectrumInput, Stf
 use crate::application::plan::StftWgpuPlan;
 use crate::domain::capabilities::WgpuCapabilities;
 use crate::domain::error::{WgpuError, WgpuResult};
+use crate::infrastructure::buffers::StftGpuBuffers;
 use crate::infrastructure::kernel::StftGpuKernel;
 
 /// Return whether a default WGPU adapter/device can be acquired.
@@ -282,5 +283,124 @@ impl StftWgpuBackend {
             *slot = O::from_complex64(Complex64::new(f64::from(value.re), f64::from(value.im)));
         }
         Ok(())
+    }
+
+    /// Allocate pre-allocated GPU buffers for repeated STFT dispatches with the given plan.
+    ///
+    /// `signal_len` must be the exact length of signals that will be passed to
+    /// `execute_forward_with_buffers`. `frame_count` is derived as
+    /// `1 + signal_len.div_ceil(hop_len)`.
+    ///
+    /// ## Errors
+    /// Returns `WgpuError::InvalidPlan` if plan parameters are invalid.
+    /// Returns `WgpuError::FrameLenNotPowerOfTwo` if `plan.frame_len()` is not a power of two.
+    pub fn make_buffers(
+        &self,
+        plan: &StftWgpuPlan,
+        signal_len: usize,
+    ) -> WgpuResult<StftGpuBuffers> {
+        if plan.frame_len() == 0 {
+            return Err(WgpuError::InvalidPlan {
+                frame_len: plan.frame_len(),
+                hop_len: plan.hop_len(),
+                message: "frame_len must be non-zero",
+            });
+        }
+        if plan.hop_len() == 0 {
+            return Err(WgpuError::InvalidPlan {
+                frame_len: plan.frame_len(),
+                hop_len: plan.hop_len(),
+                message: "hop_len must be non-zero",
+            });
+        }
+        if !plan.frame_len().is_power_of_two() {
+            return Err(WgpuError::FrameLenNotPowerOfTwo {
+                frame_len: plan.frame_len(),
+            });
+        }
+        let frame_count = 1 + signal_len.div_ceil(plan.hop_len());
+        Ok(StftGpuBuffers::new(
+            &self.device,
+            &self.kernel,
+            frame_count,
+            plan.frame_len(),
+            signal_len,
+            plan.hop_len(),
+        ))
+    }
+
+    /// Execute the forward STFT using pre-allocated GPU buffers.
+    ///
+    /// Reuses all GPU resources from `buffers`; uploads only `signal` data.
+    /// `signal.len()` must equal `buffers.signal_len()`.
+    /// Result is written into `buffers` and accessible via `buffers.fwd_output()`.
+    pub fn execute_forward_with_buffers(
+        &self,
+        plan: &StftWgpuPlan,
+        signal: &[f32],
+        buffers: &mut StftGpuBuffers,
+    ) -> WgpuResult<()> {
+        if plan.frame_len() == 0 {
+            return Err(WgpuError::InvalidPlan {
+                frame_len: plan.frame_len(),
+                hop_len: plan.hop_len(),
+                message: "frame_len must be non-zero",
+            });
+        }
+        if plan.hop_len() == 0 {
+            return Err(WgpuError::InvalidPlan {
+                frame_len: plan.frame_len(),
+                hop_len: plan.hop_len(),
+                message: "hop_len must be non-zero",
+            });
+        }
+        if !plan.frame_len().is_power_of_two() {
+            return Err(WgpuError::FrameLenNotPowerOfTwo {
+                frame_len: plan.frame_len(),
+            });
+        }
+        self.kernel
+            .execute_forward_fft_with_buffers(&self.device, &self.queue, signal, buffers)
+    }
+
+    /// Execute the inverse STFT using pre-allocated GPU buffers.
+    ///
+    /// Reuses all GPU resources from `buffers`; uploads only `spectrum` data.
+    /// `spectrum.len()` must equal `buffers.frame_count() * buffers.frame_len()`.
+    /// `signal_len` must equal `buffers.signal_len()`.
+    /// Result is written into `buffers` and accessible via `buffers.inv_output()`.
+    pub fn execute_inverse_with_buffers(
+        &self,
+        plan: &StftWgpuPlan,
+        spectrum: &[Complex32],
+        signal_len: usize,
+        buffers: &mut StftGpuBuffers,
+    ) -> WgpuResult<()> {
+        if plan.frame_len() == 0 {
+            return Err(WgpuError::InvalidPlan {
+                frame_len: plan.frame_len(),
+                hop_len: plan.hop_len(),
+                message: "frame_len must be non-zero",
+            });
+        }
+        if plan.hop_len() == 0 {
+            return Err(WgpuError::InvalidPlan {
+                frame_len: plan.frame_len(),
+                hop_len: plan.hop_len(),
+                message: "hop_len must be non-zero",
+            });
+        }
+        if !plan.frame_len().is_power_of_two() {
+            return Err(WgpuError::FrameLenNotPowerOfTwo {
+                frame_len: plan.frame_len(),
+            });
+        }
+        self.kernel.execute_inverse_with_buffers(
+            &self.device,
+            &self.queue,
+            spectrum,
+            signal_len,
+            buffers,
+        )
     }
 }

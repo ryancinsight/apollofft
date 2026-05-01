@@ -36,9 +36,9 @@ const FFT_WORKGROUP_SIZE: u32 = 256;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
-struct ComplexPod {
-    re: f32,
-    im: f32,
+pub(crate) struct ComplexPod {
+    pub(crate) re: f32,
+    pub(crate) im: f32,
 }
 
 /// Uniform parameter block for forward pass and OLA pass.
@@ -47,11 +47,11 @@ struct ComplexPod {
 /// Field order matches the WGSL `StftParams` struct byte-for-byte.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
-struct StftParams {
-    signal_len: u32,
-    frame_len: u32,
-    hop_len: u32,
-    frame_count: u32,
+pub(crate) struct StftParams {
+    pub(crate) signal_len: u32,
+    pub(crate) frame_len: u32,
+    pub(crate) hop_len: u32,
+    pub(crate) frame_count: u32,
 }
 
 /// Uniform parameter block for the FFT inverse passes.
@@ -60,11 +60,11 @@ struct StftParams {
 /// Field order matches the WGSL `FftStageParams` struct byte-for-byte.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
-struct FftStageParams {
-    frame_count: u32,
-    frame_len: u32,
-    stage: u32,
-    _pad: u32,
+pub(crate) struct FftStageParams {
+    pub(crate) frame_count: u32,
+    pub(crate) frame_len: u32,
+    pub(crate) stage: u32,
+    pub(crate) _pad: u32,
 }
 
 /// Uniform parameter block for the FFT forward passes.
@@ -75,11 +75,11 @@ struct FftStageParams {
 /// Field order matches the WGSL `FwdFftParams` struct byte-for-byte.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
-struct FwdFftStageParams {
-    frame_count: u32,
-    frame_len: u32,
-    hop_len: u32,
-    stage: u32,
+pub(crate) struct FwdFftStageParams {
+    pub(crate) frame_count: u32,
+    pub(crate) frame_len: u32,
+    pub(crate) hop_len: u32,
+    pub(crate) stage: u32,
 }
 
 /// GPU compute kernel encapsulating the forward and inverse FFT-accelerated STFT pipelines.
@@ -94,15 +94,15 @@ struct FwdFftStageParams {
 #[derive(Debug)]
 pub struct StftGpuKernel {
     /// 3-binding layout used by the OLA reconstruction pass.
-    bind_group_layout: wgpu::BindGroupLayout,
+    pub(crate) bind_group_layout: wgpu::BindGroupLayout,
     /// Uniform params buffer for the OLA pass (StftParams).
     params_buffer: wgpu::Buffer,
     /// Pipeline for the weighted overlap-add OLA reconstruction pass.
     inverse_ola_pipeline: wgpu::ComputePipeline,
     /// Data bind group layout for the FFT inverse passes (group 0, 4 bindings).
-    fft_data_bgl: wgpu::BindGroupLayout,
+    pub(crate) fft_data_bgl: wgpu::BindGroupLayout,
     /// Per-stage params bind group layout for the FFT inverse passes (group 1, 1 uniform).
-    fft_params_bgl: wgpu::BindGroupLayout,
+    pub(crate) fft_params_bgl: wgpu::BindGroupLayout,
     /// Deinterleave pipeline: interleaved complex f32 → split re/im buffers.
     deinterleave_pipeline: wgpu::ComputePipeline,
     /// Bit-reversal permutation pipeline.
@@ -877,6 +877,294 @@ impl StftGpuKernel {
         };
         staging.unmap();
         Ok(output)
+    }
+
+    /// Execute the forward STFT using pre-allocated GPU buffers, avoiding per-dispatch
+    /// buffer and bind-group creation overhead.
+    ///
+    /// Uploads `signal` to `buffers.signal_buf` via `queue.write_buffer`, then dispatches
+    /// the 4-pass forward FFT pipeline using pre-built bind groups from `buffers`.
+    /// Result is written into `buffers.fwd_output_host` and is accessible via
+    /// `buffers.fwd_output()`.
+    ///
+    /// ## Errors
+    /// Returns `WgpuError::LengthMismatch` if `signal.len() != buffers.signal_len()`.
+    pub fn execute_forward_fft_with_buffers(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        signal: &[f32],
+        buffers: &mut super::buffers::StftGpuBuffers,
+    ) -> WgpuResult<()> {
+        if signal.len() != buffers.signal_len() {
+            return Err(WgpuError::LengthMismatch {
+                expected: buffers.signal_len(),
+                actual: signal.len(),
+            });
+        }
+
+        let frame_count = buffers.frame_count();
+        let frame_len = buffers.frame_len();
+        let log2_n = buffers.log2_n;
+        let out_size = (frame_count * frame_len * std::mem::size_of::<ComplexPod>()) as u64;
+
+        queue.write_buffer(&buffers.signal_buf, 0, bytemuck::cast_slice(signal));
+
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("apollo-stft-wgpu fwd reuse encoder"),
+        });
+
+        {
+            let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("stft_fwd_pack_window (reuse)"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&self.fwd_pack_window_pipeline);
+            p.set_bind_group(0, &buffers.fwd_data_bg, &[]);
+            p.set_bind_group(1, &buffers.fwd_base_params_bg, &[]);
+            p.dispatch_workgroups(fft_dispatch_count((frame_count * frame_len) as u32), 1, 1);
+        }
+
+        {
+            let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("stft_fwd_bitrev (reuse)"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&self.fwd_bitrev_pipeline);
+            p.set_bind_group(0, &buffers.fwd_data_bg, &[]);
+            p.set_bind_group(1, &buffers.fwd_base_params_bg, &[]);
+            p.dispatch_workgroups(fft_dispatch_count((frame_count * frame_len) as u32), 1, 1);
+        }
+
+        for s in 0..log2_n as usize {
+            let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("stft_fwd_butterfly (reuse)"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&self.fwd_butterfly_pipeline);
+            p.set_bind_group(0, &buffers.fwd_data_bg, &[]);
+            p.set_bind_group(1, &buffers.fwd_butterfly_bgs[s], &[]);
+            p.dispatch_workgroups(
+                fft_dispatch_count((frame_count * frame_len / 2) as u32),
+                1,
+                1,
+            );
+        }
+
+        {
+            let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("stft_fwd_interleave (reuse)"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&self.fwd_interleave_pipeline);
+            p.set_bind_group(0, &buffers.fwd_data_bg, &[]);
+            p.set_bind_group(1, &buffers.fwd_base_params_bg, &[]);
+            p.dispatch_workgroups(fft_dispatch_count((frame_count * frame_len) as u32), 1, 1);
+        }
+
+        enc.copy_buffer_to_buffer(
+            &buffers.fwd_output_buf,
+            0,
+            &buffers.fwd_staging_buf,
+            0,
+            out_size,
+        );
+
+        queue.submit(std::iter::once(enc.finish()));
+
+        let slice = buffers.fwd_staging_buf.slice(..out_size);
+        let (tx, rx) = mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = device.poll(wgpu::PollType::Wait);
+
+        match rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                return Err(WgpuError::BufferMapFailed {
+                    message: e.to_string(),
+                })
+            }
+            Err(e) => {
+                return Err(WgpuError::BufferMapFailed {
+                    message: e.to_string(),
+                })
+            }
+        }
+
+        {
+            let m = slice.get_mapped_range();
+            let pods = bytemuck::cast_slice::<u8, ComplexPod>(&m);
+            for (slot, p) in buffers.fwd_output_host.iter_mut().zip(pods.iter()) {
+                *slot = Complex32::new(p.re, p.im);
+            }
+        }
+
+        buffers.fwd_staging_buf.unmap();
+        Ok(())
+    }
+
+    /// Execute the inverse STFT using pre-allocated GPU buffers, avoiding per-dispatch
+    /// buffer and bind-group creation overhead.
+    ///
+    /// Uploads `spectrum` to `buffers.spectrum_buf` via `queue.write_buffer`, writes
+    /// OLA params to `buffers.inv_ola_params_buf`, then dispatches the 5-pass inverse FFT
+    /// pipeline using pre-built bind groups from `buffers`.
+    /// Result is written into `buffers.inv_output_host` and is accessible via
+    /// `buffers.inv_output()`.
+    ///
+    /// ## Errors
+    /// Returns `WgpuError::LengthMismatch` if `spectrum.len() != buffers.frame_count() * buffers.frame_len()`
+    /// or `signal_len != buffers.signal_len()`.
+    pub fn execute_inverse_with_buffers(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        spectrum: &[Complex32],
+        signal_len: usize,
+        buffers: &mut super::buffers::StftGpuBuffers,
+    ) -> WgpuResult<()> {
+        let expected_spectrum = buffers.frame_count() * buffers.frame_len();
+        if spectrum.len() != expected_spectrum {
+            return Err(WgpuError::LengthMismatch {
+                expected: expected_spectrum,
+                actual: spectrum.len(),
+            });
+        }
+        if signal_len != buffers.signal_len() {
+            return Err(WgpuError::LengthMismatch {
+                expected: buffers.signal_len(),
+                actual: signal_len,
+            });
+        }
+
+        let frame_count = buffers.frame_count();
+        let frame_len = buffers.frame_len();
+        let hop_len = buffers.hop_len();
+        let log2_n = buffers.log2_n;
+        let inv_signal_size = (signal_len * std::mem::size_of::<f32>()) as u64;
+
+        let spectrum_flat: Vec<f32> = spectrum.iter().flat_map(|c| [c.re, c.im]).collect();
+        queue.write_buffer(
+            &buffers.spectrum_buf,
+            0,
+            bytemuck::cast_slice(&spectrum_flat),
+        );
+
+        queue.write_buffer(
+            &buffers.inv_ola_params_buf,
+            0,
+            bytemuck::bytes_of(&StftParams {
+                signal_len: signal_len as u32,
+                frame_len: frame_len as u32,
+                hop_len: hop_len as u32,
+                frame_count: frame_count as u32,
+            }),
+        );
+
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("apollo-stft-wgpu inv reuse encoder"),
+        });
+
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollo-stft-wgpu deinterleave pass (reuse)"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.deinterleave_pipeline);
+            pass.set_bind_group(0, &buffers.inv_data_bg, &[]);
+            pass.set_bind_group(1, &buffers.inv_base_params_bg, &[]);
+            pass.dispatch_workgroups(fft_dispatch_count((frame_count * frame_len) as u32), 1, 1);
+        }
+
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollo-stft-wgpu bitrev pass (reuse)"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.bitrev_pipeline);
+            pass.set_bind_group(0, &buffers.inv_data_bg, &[]);
+            pass.set_bind_group(1, &buffers.inv_base_params_bg, &[]);
+            pass.dispatch_workgroups(fft_dispatch_count((frame_count * frame_len) as u32), 1, 1);
+        }
+
+        for s in 0..log2_n as usize {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollo-stft-wgpu butterfly pass (reuse)"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.butterfly_pipeline);
+            pass.set_bind_group(0, &buffers.inv_data_bg, &[]);
+            pass.set_bind_group(1, &buffers.inv_butterfly_bgs[s], &[]);
+            pass.dispatch_workgroups(
+                fft_dispatch_count((frame_count * frame_len / 2) as u32),
+                1,
+                1,
+            );
+        }
+
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollo-stft-wgpu scale-window pass (reuse)"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.scale_window_pipeline);
+            pass.set_bind_group(0, &buffers.inv_data_bg, &[]);
+            pass.set_bind_group(1, &buffers.inv_base_params_bg, &[]);
+            pass.dispatch_workgroups(fft_dispatch_count((frame_count * frame_len) as u32), 1, 1);
+        }
+
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollo-stft-wgpu inverse ola pass (reuse)"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.inverse_ola_pipeline);
+            pass.set_bind_group(0, &buffers.ola_bg, &[]);
+            pass.dispatch_workgroups(dispatch_count(signal_len as u32), 1, 1);
+        }
+
+        enc.copy_buffer_to_buffer(
+            &buffers.inv_signal_buf,
+            0,
+            &buffers.inv_staging_buf,
+            0,
+            inv_signal_size,
+        );
+
+        queue.submit(std::iter::once(enc.finish()));
+
+        let slice = buffers.inv_staging_buf.slice(..inv_signal_size);
+        let (tx, rx) = mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = device.poll(wgpu::PollType::Wait);
+
+        match rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                return Err(WgpuError::BufferMapFailed {
+                    message: e.to_string(),
+                })
+            }
+            Err(e) => {
+                return Err(WgpuError::BufferMapFailed {
+                    message: e.to_string(),
+                })
+            }
+        }
+
+        {
+            let m = slice.get_mapped_range();
+            buffers
+                .inv_output_host
+                .copy_from_slice(bytemuck::cast_slice::<u8, f32>(&m));
+        }
+
+        buffers.inv_staging_buf.unmap();
+        Ok(())
     }
 }
 

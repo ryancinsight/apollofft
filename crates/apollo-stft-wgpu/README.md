@@ -56,10 +56,55 @@ Host storage accepts `Complex32` and `[f16; 2]` input/output. GPU arithmetic is 
 `f16` values are promoted to `f32` at the host–GPU boundary before dispatch.
 Profile mismatch returns `WgpuError::InvalidPrecisionProfile`.
 
+## Buffer Reuse
+
+For repeated dispatches over the same `(frame_len, hop_len, signal_len)` shape, pre-allocate
+all GPU objects once using `StftGpuBuffers` and reuse them across calls. This eliminates
+5–8 `device.create_buffer` calls, 4+ `device.create_bind_group` calls, and log₂(N)
+uniform-buffer allocations per dispatch.
+
+```text
+// One-time setup
+let backend = StftWgpuBackend::try_default()?;
+let plan = StftWgpuPlan::new(frame_len, hop_len);
+let mut buffers = backend.make_buffers(&plan, signal_len)?;
+
+// Repeated forward dispatches — no GPU object allocation per call
+backend.execute_forward_with_buffers(&plan, &signal, &mut buffers)?;
+let spectrum: &[Complex32] = buffers.fwd_output();
+
+// Repeated inverse dispatches — same buffers object
+backend.execute_inverse_with_buffers(&plan, spectrum, signal_len, &mut buffers)?;
+let reconstructed: &[f32] = buffers.inv_output();
+```
+
+`make_buffers` validates the plan and returns `WgpuError::FrameLenNotPowerOfTwo` if
+`frame_len` is not a power of two. Buffers are fixed to the `signal_len` supplied at
+construction; passing a signal of a different length to `execute_forward_with_buffers`
+produces a `WgpuError::LengthMismatch`.
+
+## Benchmarks
+
+Criterion benchmarks in `benches/stft_bench.rs` cover four groups:
+
+| Group | Path | Description |
+|---|---|---|
+| `stft_forward_fft` | allocating | `execute_forward`: full buffer + bind-group creation per call |
+| `stft_inverse_fft` | allocating | `execute_inverse`: full buffer + bind-group creation per call |
+| `stft_forward_reuse_fl{N}` | allocating vs with_buffers | Head-to-head forward dispatch comparison |
+| `stft_inverse_reuse_fl{N}` | allocating vs with_buffers | Head-to-head inverse dispatch comparison |
+
+Run on a GPU-capable host:
+```text
+cargo bench -p apollo-stft-wgpu
+```
+
+HTML reports are written to `target/criterion/`.
+
 ## Verification
 
 Tests cover capability truthfulness, plan metadata preservation, invalid-plan rejection,
 `FrameLenNotPowerOfTwo` rejection for both forward and inverse paths, CPU parity for
 forward FFT against `apollo-stft::StftPlan::forward`, WOLA roundtrip for COLA-compliant
-parameter sets, large-frame roundtrip (frame_len=1024, 10 butterfly stages), and
-typed mixed-precision dispatch.
+parameter sets, large-frame roundtrip (frame_len=1024, 10 butterfly stages), typed
+mixed-precision dispatch, and buffer-reuse functional parity against the allocating paths.
