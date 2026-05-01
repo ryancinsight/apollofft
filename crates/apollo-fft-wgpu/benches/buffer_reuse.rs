@@ -33,7 +33,11 @@ fn real_field(nx: usize, ny: usize, nz: usize) -> Array3<f64> {
 fn try_fft_plan(nx: usize, ny: usize, nz: usize) -> Option<GpuFft3d> {
     let instance = wgpu::Instance::default();
     let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        }))
             .ok()?;
     let descriptor = wgpu::DeviceDescriptor {
         label: Some("apollo-fft-wgpu bench"),

@@ -42,7 +42,11 @@ impl NufftWgpuBackend {
     pub fn try_default() -> NufftWgpuResult<Self> {
         let instance = wgpu::Instance::default();
         let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            }))
                 .map_err(|error| NufftWgpuError::AdapterUnavailable {
                 message: error.to_string(),
             })?;

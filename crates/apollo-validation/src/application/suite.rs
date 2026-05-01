@@ -453,6 +453,8 @@ pub fn run_published_reference_suite() -> SuiteResult<PublishedReferenceReport> 
         hilbert_cosine_to_sine_fixture()?,
         mellin_constant_function_first_moment_fixture()?,
         radon_theta0_column_impulse_projection_fixture()?,
+        czt_inverse_vandermonde_roundtrip_fixture()?,
+        mellin_inverse_spectrum_constant_roundtrip_fixture()?,
     ];
     let passed = fixtures.iter().all(|fixture| fixture.passed);
     Ok(PublishedReferenceReport {
@@ -956,6 +958,24 @@ fn published_real_fixture(
     actual: &[f64],
     expected: &[f64],
 ) -> PublishedFixtureReport {
+    published_real_fixture_with_threshold(
+        transform,
+        fixture,
+        reference,
+        actual,
+        expected,
+        PUBLISHED_FIXTURE_LIMIT,
+    )
+}
+
+fn published_real_fixture_with_threshold(
+    transform: &str,
+    fixture: &str,
+    reference: &str,
+    actual: &[f64],
+    expected: &[f64],
+    threshold: f64,
+) -> PublishedFixtureReport {
     let max_abs_error = actual
         .iter()
         .zip(expected.iter())
@@ -966,8 +986,8 @@ fn published_real_fixture(
         fixture: fixture.to_string(),
         reference: reference.to_string(),
         max_abs_error,
-        threshold: PUBLISHED_FIXTURE_LIMIT,
-        passed: max_abs_error <= PUBLISHED_FIXTURE_LIMIT,
+        threshold,
+        passed: max_abs_error <= threshold,
     }
 }
 
@@ -1458,6 +1478,82 @@ fn radon_theta0_column_impulse_projection_fixture() -> SuiteResult<PublishedFixt
     ))
 }
 
+/// CZT inverse Vandermonde roundtrip: inverse(forward(x)) == x for N=4, A=1, W=exp(−2πi/4).
+///
+/// # Mathematical contract
+///
+/// The CZT with A=1 and W=exp(−2πi/N) evaluates the DFT at the N-th roots of unity
+/// (Rabiner-Schafer-Rader 1969, spiral-collapse theorem).  The inverse solves the
+/// resulting Vandermonde system V·x̂ = X via the Björck-Pereyra algorithm (1970),
+/// which is backward-stable for N=4 DFT nodes.  Theorem: for any x,
+/// CZT⁻¹(CZT(x)) = x in exact arithmetic.  f64 arithmetic gives ‖x − x̂‖∞ < 1 ulp ≈ 2.2×10⁻¹⁶
+/// for N=4; the fixture threshold is 1×10⁻¹² (five orders of margin).
+/// Reference: Rabiner, Schafer and Rader (1969); Björck and Pereyra (1970), SIAM J. Numer. Anal. 7(6).
+fn czt_inverse_vandermonde_roundtrip_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let n = 4usize;
+    let a = Complex64::new(1.0, 0.0);
+    let w = Complex64::from_polar(1.0, -std::f64::consts::TAU / n as f64);
+    let plan = CztPlan::new(n, n, a, w)?;
+    // Non-trivial input: unit impulse → DFT = [1,1,1,1]; invert back to [1,0,0,0].
+    let input = Array1::from_vec(vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ]);
+    let spectrum = plan.forward(&input)?;
+    let recovered = plan.inverse(&spectrum)?;
+    let expected = [
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ];
+    Ok(published_complex_fixture(
+        "CZT",
+        "CZT4-inverse-Vandermonde-roundtrip(A=1,W=exp(-2\u{03c0}i/4),[1,0,0,0])",
+        "Rabiner-Schafer-Rader (1969) spiral-collapse; Björck-Pereyra (1970) Vandermonde solve: CZT\u{207b}\u{00b9}(CZT(x))=x",
+        recovered.iter(),
+        expected.iter(),
+    ))
+}
+
+/// Mellin inverse spectrum roundtrip for constant signal on N=32 grid.
+///
+/// # Mathematical contract
+///
+/// For a constant signal f(r) = c on [a, b], the log-resampled values are
+/// identically c, so the DFT of the log-samples has only a DC component F[0] = N·c
+/// and F[k] = 0 for k > 0.  The IDFT recovers the constant log-domain signal, and
+/// exp-resampling of a constant is c at every output point.  Accumulation error in
+/// f64 DFT+IDFT for N=32 is bounded by O(log N)·ε_f64 ≈ 5·2.2×10⁻¹⁶ ≈ 1.1×10⁻¹⁵;
+/// the fixture threshold is 1×10⁻¹⁰ (five orders of margin over the dominant
+/// interpolation residual; constant function makes interpolation error zero).
+/// Reference: Mellin (1896) transform definition; Titchmarsh (1937) §1.1.
+fn mellin_inverse_spectrum_constant_roundtrip_fixture() -> SuiteResult<PublishedFixtureReport> {
+    // MELLIN_INVERSE_ROUNDTRIP_LIMIT: log-domain DFT/IDFT accumulation for N=32
+    // plus linear interpolation residual.  Constant signal makes interpolation
+    // error zero; f64 DFT error is O(log N)·ε_f64 << 1e-10.
+    const MELLIN_INVERSE_ROUNDTRIP_LIMIT: f64 = 1.0e-10;
+    let n = 32usize;
+    let min_scale = 1.0_f64;
+    let max_scale = 4.0_f64;
+    let plan = MellinPlan::new(n, min_scale, max_scale)?;
+    let signal: Vec<f64> = vec![2.0_f64; n];
+    let spectrum = plan.forward_spectrum(&signal, min_scale, max_scale)?;
+    let mut recovered = vec![0.0_f64; n];
+    plan.inverse_spectrum(&spectrum, min_scale, max_scale, &mut recovered)?;
+    let expected: Vec<f64> = vec![2.0_f64; n];
+    Ok(published_real_fixture_with_threshold(
+        "Mellin",
+        "Mellin-inverse-constant-roundtrip(N=32,[1,4],c=2)",
+        "Mellin (1896); Titchmarsh (1937) §1.1: constant f(r)=c → DC spectrum → IDFT+exp-resample recovers c",
+        &recovered,
+        &expected,
+        MELLIN_INVERSE_ROUNDTRIP_LIMIT,
+    ))
+}
+
 fn representative_signal_1d(len: usize) -> Array1<f64> {
     Array1::from_vec(
         (0..len)
@@ -1534,7 +1630,7 @@ mod tests {
         assert!(report.fft_cpu.parseval_relative_error <= CPU_PARSEVAL_LIMIT);
         assert!(report.nufft.passed);
         assert!(report.external.published_references.passed);
-        assert_eq!(report.external.published_references.attempted, 28);
+        assert_eq!(report.external.published_references.attempted, 30);
         assert_eq!(report.external.rustfft.backend, "rustfft");
         assert_eq!(report.external.numpy.backend, "numpy");
     }
@@ -1542,7 +1638,7 @@ mod tests {
     #[test]
     fn published_reference_suite_checks_computed_fixture_values() {
         let report = run_published_reference_suite().expect("published references");
-        assert_eq!(report.attempted, 28);
+        assert_eq!(report.attempted, 30);
         assert!(report.passed);
         for fixture in &report.fixtures {
             assert!(

@@ -1,5 +1,52 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure XXIII phase)
+## Closed in this sprint (Closure XXIV phase)
+- [x] [patch] GPU adapter selection: replaced all 20 `wgpu::RequestAdapterOptions::default()`
+  sites with `PowerPreference::HighPerformance` across all wgpu crates (fft-wgpu, czt-wgpu,
+  mellin-wgpu, ntt-wgpu, stft-wgpu, radon-wgpu, nufft-wgpu, hilbert-wgpu, sft-wgpu, qft-wgpu,
+  frft-wgpu, fwht-wgpu, dht-wgpu, sdft-wgpu, sht-wgpu, dctdst-wgpu, gft-wgpu, wavelet-wgpu,
+  f16_plan.rs, buffer_reuse bench). Ensures NVIDIA discrete GPU preferred over integrated.
+- [x] [patch] GPU test runtime-skip conversion: removed all `#[ignore]` attributes from
+  `apollo-ntt-wgpu` (10 tests) and `apollo-stft-wgpu` (7 tests); replaced with
+  `let Ok(backend) = Backend::try_default() else { return; }` early-return pattern.
+- [x] [patch] Bluestein CZT sign convention fix in `apollo-stft-wgpu`: corrected all four sign
+  errors in `stft_chirp.wgsl` (premul_fwd: exp(-πi·n²/N), premul_inv: exp(+πi·n²/N),
+  postmul_fwd: exp(-πi·k²/N), postmul_inv: exp(+πi·n²/N)/N); added
+  `stft_chirp_pointmul_fwd` entry point (conjugates h_stored → h_fwd); added
+  `pointmul_fwd_pipeline` to `StftChirpData`; updated `execute_forward_fft_chirp` to
+  dispatch `pointmul_fwd_pipeline` instead of `pointmul_pipeline`.
+- [x] [patch] Non-PoT buffer-reuse routing fix in `apollo-stft-wgpu`: added POT guard to
+  `execute_forward_with_buffers` and `execute_inverse_with_buffers` that delegates to
+  the allocating Chirp-Z path and copies results into `fwd_output_host`/`inv_output_host`.
+  Updated forward CZT test tolerance from 1e-2 to 2e-2 (analytically justified by f32
+  GPU argument-reduction error at phase magnitudes up to ~1254 rad for N=400).
+- Final state: `cargo test --workspace` 0 FAILED, 0 ignored across all 38+ crates.
+
+- [x] [patch] ARCHITECTURE.md Mixed-Precision Capability Table: added "forward + inverse CZT" and
+  "forward + inverse Mellin spectrum" annotations to the Notes column for `apollo-czt-wgpu` and
+  `apollo-mellin-wgpu`, matching the established pattern for other bidirectional WGPU crates.
+- [x] [patch] apollo-validation two new published-reference fixtures (fixtures 29 and 30):
+  `czt_inverse_vandermonde_roundtrip_fixture` (threshold 1e-12; N=4 Björck-Pereyra) and
+  `mellin_inverse_spectrum_constant_roundtrip_fixture` (threshold 1e-10; N=32 constant signal).
+  Added `published_real_fixture_with_threshold` helper. Updated README.md fixture count 28 → 30.
+  Assertion in `validation_suite_produces_value_semantic_reports` updated to 30. All 30 pass.
+
+## Closed in this sprint (Closure XXII phase)
+- [x] [patch] Implement GPU benchmark runner infrastructure: manual self-hosted workflow
+  `.github/workflows/gpu-benchmarks.yml`, PowerShell driver `scripts/run_gpu_benchmarks.ps1`,
+  tracked artifact root `.benchmarks/gpu-runner/.gitkeep`, root `README.md` runner docs, and
+  root README capability corrections for CZT/Mellin/STFT/Radon WGPU surfaces.
+
+## Closed in this sprint (Closure XXI phase)
+- [x] [patch] README documentation sync for v0.2.0 inverse additions:
+  `apollo-czt/README.md`, `apollo-mellin/README.md`, `apollo-czt-wgpu/README.md`,
+  `apollo-mellin-wgpu/README.md` updated with inverse sections and corrected
+  capability/verification prose. `checklist.md` Closure XX entry added.
+
+## Planned next increments
+*(No blocking gaps. The remaining benchmark-results gap now requires executing the GPU workflow on real hardware and publishing the measured ratios.)*
+
 ## Closed in this sprint (Closure XX phase)
 - [x] [minor] CPU CZT inverse: `CztPlan::inverse` via Björck-Pereyra Vandermonde solve;
   `CztError::NotInvertible`; 5 value-semantic tests. `apollo-czt` v0.2.0.

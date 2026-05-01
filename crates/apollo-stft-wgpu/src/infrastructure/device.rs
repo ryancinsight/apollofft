@@ -45,7 +45,11 @@ impl StftWgpuBackend {
     pub fn try_default() -> WgpuResult<Self> {
         let instance = wgpu::Instance::default();
         let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            }))
                 .map_err(|e| WgpuError::AdapterUnavailable {
                 message: e.to_string(),
             })?;
@@ -341,16 +345,19 @@ impl StftWgpuBackend {
                 message: "hop_len must be non-zero",
             });
         }
+        // Non-power-of-two frame_len: delegate to allocating Chirp-Z path.
+        if !plan.frame_len().is_power_of_two() {
+            let result = self.execute_forward(plan, signal)?;
+            buffers.fwd_output_host.copy_from_slice(&result);
+            return Ok(());
+        }
         self.kernel
             .execute_forward_fft_with_buffers(&self.device, &self.queue, signal, buffers)
     }
 
     /// Execute the inverse STFT using pre-allocated GPU buffers.
     ///
-    /// Reuses all GPU resources from `buffers`; uploads only `spectrum` data.
-    /// `spectrum.len()` must equal `buffers.frame_count() * buffers.frame_len()`.
-    /// `signal_len` must equal `buffers.signal_len()`.
-    /// Result is written into `buffers` and accessible via `buffers.inv_output()`.
+    /// Reuses GPU resources from buffers.
     pub fn execute_inverse_with_buffers(
         &self,
         plan: &StftWgpuPlan,
@@ -371,6 +378,11 @@ impl StftWgpuBackend {
                 hop_len: plan.hop_len(),
                 message: "hop_len must be non-zero",
             });
+        }
+        if !plan.frame_len().is_power_of_two() {
+            let result = self.execute_inverse(plan, spectrum, signal_len)?;
+            buffers.inv_output_host.copy_from_slice(&result);
+            return Ok(());
         }
         self.kernel.execute_inverse_with_buffers(
             &self.device,

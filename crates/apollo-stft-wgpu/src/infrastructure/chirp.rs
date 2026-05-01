@@ -97,6 +97,8 @@ pub(crate) struct StftChirpData {
     pub(crate) chirp_inv_butterfly_pipeline: wgpu::ComputePipeline,
     /// 1/M scale pipeline for the inverse sub-FFT.
     pub(crate) chirp_scale_pipeline: wgpu::ComputePipeline,
+    /// Forward pointmul: multiply by conj(h_stored) = h_fwd = exp(+pi*i*j^2/N).
+    pub(crate) pointmul_fwd_pipeline: wgpu::ComputePipeline,
 
     // ── Dimensions ────────────────────────────────────────────────────────────
     pub(crate) n:           u32,   // original frame_len
@@ -324,6 +326,7 @@ impl StftChirpData {
         let pointmul_pipeline    = build_pipeline(&chirp_pm_pipeline_layout, &chirp_shader, "stft_chirp_pointmul");
         let postmul_fwd_pipeline = build_pipeline(&chirp_io_pipeline_layout, &chirp_shader, "stft_chirp_postmul_fwd");
         let postmul_inv_pipeline = build_pipeline(&chirp_io_pipeline_layout, &chirp_shader, "stft_chirp_postmul_inv");
+            let pointmul_fwd_pipeline = build_pipeline(&chirp_pm_pipeline_layout, &chirp_shader, "stft_chirp_pointmul_fwd");
 
         let chirp_bitrev_pipeline        = build_pipeline(&radix2_pipeline_layout, &chirp_fft_shader, "chirp_fft_bitrev");
         let chirp_fwd_butterfly_pipeline = build_pipeline(&radix2_pipeline_layout, &chirp_fft_shader, "chirp_fft_butterfly_fwd");
@@ -400,6 +403,7 @@ impl StftChirpData {
             chirp_fwd_butterfly_pipeline,
             chirp_inv_butterfly_pipeline,
             chirp_scale_pipeline,
+                        pointmul_fwd_pipeline,
             n: n as u32,
             m: m as u32,
             frame_count: frame_count as u32,

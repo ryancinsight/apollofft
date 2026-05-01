@@ -23,6 +23,8 @@
 # Local benchmark outputs
 /external/results/*
 !/external/results/.gitkeep
+/.benchmarks/gpu-runner/*
+!/.benchmarks/gpu-runner/.gitkeep
 
 # Scratch and temporary development artifacts
 /validation_output*.json

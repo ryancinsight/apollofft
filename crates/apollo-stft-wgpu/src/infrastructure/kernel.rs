@@ -1260,10 +1260,10 @@ impl StftGpuKernel {
         // Pass C: pointmul — pointwise multiply by precomputed H in DFT domain.
         {
             let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("stft_chirp_pointmul"),
+                    label: Some("stft_chirp_pointmul_fwd"),
                 timestamp_writes: None,
             });
-            p.set_pipeline(&chirp.pointmul_pipeline);
+                p.set_pipeline(&chirp.pointmul_fwd_pipeline);
             p.set_bind_group(0, &chirp.chirp_data_bg, &[]);
             p.set_bind_group(1, &chirp.chirp_params_bg, &[]);
             p.dispatch_workgroups(fft_dispatch_count((frame_count * m) as u32), 1, 1);

@@ -11,6 +11,48 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.12.2] — Closure XXII
+
+### Closure XXII — GPU Benchmark Runner Workflow + Root README Correction [patch]
+
+#### Added
+- `.github/workflows/gpu-benchmarks.yml`: manual `workflow_dispatch` workflow targeting a
+  labeled self-hosted runner (`[self-hosted, gpu, apollo]`) to execute the WGPU Criterion
+  benchmark suites and upload the output bundle as a workflow artifact.
+- `scripts/run_gpu_benchmarks.ps1`: reproducible GPU benchmark runner script that stages
+  logs, `manifest.json`, `summary.md`, and `target/criterion` under `.benchmarks/gpu-runner/`.
+- `.benchmarks/gpu-runner/.gitkeep`: tracked anchor for benchmark artifact staging.
+
+#### Changed
+- Root `README.md`: corrected stale CZT/Mellin/STFT/Radon WGPU capability prose and added a
+  dedicated "GPU Benchmark Runner" section documenting labels, workflow entry point, executed
+  benches, and output staging path.
+- `.gitignore`: ignores generated `.benchmarks/gpu-runner/*` outputs while keeping the tracked
+  directory anchor.
+
+---
+
+## [0.12.1] — Closure XXI
+
+### Closure XXI — README Documentation Sync for v0.2.0 Inverse Additions [patch]
+
+#### Changed
+- `apollo-czt/README.md`: added "Inverse Transform" section documenting
+  `CztPlan::inverse`, Björck-Pereyra Vandermonde solve, and `CztError::NotInvertible`
+  conditions (non-square plan, node collision). Updated "Verification" section to
+  list inverse roundtrip and rejection tests.
+- `apollo-mellin/README.md`: added "Inverse Transform" section documenting
+  `MellinPlan::inverse_spectrum`, IDFT + exp-resample algorithm, and
+  `MellinError::SpectrumLengthMismatch`. Updated "Verification" section.
+- `apollo-czt-wgpu/README.md`: updated "Execution Contract" to reflect forward+inverse
+  support; added adjoint formula description; removed stale "inverse unsupported" prose.
+  Updated "Verification" section to mention GPU inverse roundtrip test.
+- `apollo-mellin-wgpu/README.md`: updated "Execution Contract" to document two-pass
+  GPU inverse (IDFT + exp-resample); updated capability and verification prose.
+- `checklist.md`: added completed Closure XX entry (22 checklist items).
+
+---
+
 ## [0.12.0] — Closure XX
 
 ### Closure XX — CPU + GPU Inverse Transforms: CZT and Mellin [minor]

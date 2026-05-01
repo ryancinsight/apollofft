@@ -42,6 +42,24 @@ X[k] = sum_n x[n] a^-n w^(n k)
 `nk = (n^2 + k^2 - (k-n)^2) / 2` to reduce the transform to one zero-padded
 convolution evaluated by `apollo-fft`.
 
+## Inverse Transform
+
+`CztPlan::inverse(spectrum)` inverts the square (M == N) CZT by solving the
+Vandermonde system
+
+```text
+V y = X   where V[k,n] = W^(kn)
+```
+
+via the Björck-Pereyra algorithm (O(N²), in-place Newton divided-difference
+phasors). After solving for `y`, the original signal is recovered as
+`x[n] = y[n] · A^n`.
+
+`CztError::NotInvertible` is returned when:
+- the plan is non-square (M ≠ N), or
+- a Vandermonde node denominator falls below `f64::EPSILON × 1024` (node
+  collision — W is a root of unity of order ≤ N).
+
 ## Verification
 
 The crate validates:
@@ -51,6 +69,8 @@ The crate validates:
 - caller-owned output matches the allocating fast path
 - typed `Complex64`, `Complex32`, and mixed `[f16; 2]` storage paths match the
   allocating fast path within analytically derived storage bounds
+- inverse roundtrip at DFT parameters, general `A` offset, non-unit `W` spacing
+- inverse rejects non-square plans and wrong-length spectrum inputs
 
 Production CZT code depends on Apollo-owned FFT kernels. External FFT engines
 belong only in `apollo-validation`.

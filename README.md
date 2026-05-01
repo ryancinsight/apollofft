@@ -17,10 +17,12 @@ Stage 2 moves Apollo beyond the initial compatibility cut:
 - `apollo-sft` owns the sparse Fourier transform single source of truth.
 - `apollo-fft-wgpu` owns the real shader-backed 3D WGPU FFT path with radix-2 and Bluestein/Chirp-Z axis strategies. The optional `native-f16` feature adds `GpuFft3dF16Native`, which executes all butterfly arithmetic directly in `f16` inside the shader when the adapter exposes `wgpu::Features::SHADER_F16`, covering both power-of-two (radix-2) and non-power-of-two (Bluestein chirp-Z) sizes.
 - `apollo-nufft-wgpu` owns NUFFT GPU execution and ships exact direct Type-1 and Type-2 WGPU kernels for 1D and 3D, plus fast Kaiser-Bessel gridding paths for both 1D and 3D. The fast paths perform GPU spreading or interpolation, dispatch oversampled FFTs through `apollo-fft-wgpu`, and apply GPU deconvolution against the same Kaiser-Bessel metadata used by `apollo-nufft`.
-- Per-transform WGPU crates own GPU backend boundaries for their respective mathematical domains. `apollo-fwht-wgpu` and `apollo-dht-wgpu` ship real 1D `f32` kernels, `apollo-dctdst-wgpu` ships the full real 1D `f32` DCT-II/DCT-III/DST-II/DST-III family, `apollo-czt-wgpu` ships a direct complex forward CZT kernel, `apollo-gft-wgpu` ships forward and inverse graph-basis execution, `apollo-hilbert-wgpu` ships forward analytic/quadrature Hilbert execution, `apollo-mellin-wgpu` ships a forward Mellin log-frequency spectrum kernel, `apollo-ntt-wgpu` ships forward and inverse NTT execution on its supported modulus surface, `apollo-qft-wgpu` ships forward and inverse dense unitary QFT execution, `apollo-radon-wgpu` ships forward parallel-beam projection, adjoint backprojection, and ramp-filtered backprojection (FBP) execution, `apollo-sdft-wgpu` ships forward direct-bin sliding DFT execution, `apollo-sft-wgpu` ships direct dense DFT sparse top-k execution and inverse reconstruction, `apollo-sht-wgpu` ships direct complex SHT forward/inverse execution using owner-derived basis and quadrature buffers, `apollo-stft-wgpu` ships FFT-accelerated (Radix-2 DIT, O(N log N) per frame) forward Hann-windowed STFT and inverse WOLA reconstruction execution, and apollo-wavelet-wgpu`apollo-wavelet-wgpu` ships forward and inverse Haar DWT execution.
+- Per-transform WGPU crates own GPU backend boundaries for their respective mathematical domains. `apollo-fwht-wgpu` and `apollo-dht-wgpu` ship real 1D `f32` kernels, `apollo-dctdst-wgpu` ships the full real 1D `f32` DCT-II/DCT-III/DST-II/DST-III family, `apollo-czt-wgpu` ships direct complex forward and inverse CZT execution, `apollo-gft-wgpu` ships forward and inverse graph-basis execution, `apollo-hilbert-wgpu` ships forward analytic/quadrature Hilbert execution, `apollo-mellin-wgpu` ships forward and inverse Mellin log-frequency spectrum execution, `apollo-ntt-wgpu` ships forward and inverse NTT execution on its supported modulus surface, `apollo-qft-wgpu` ships forward and inverse dense unitary QFT execution, `apollo-radon-wgpu` ships forward parallel-beam projection, adjoint backprojection, and ramp-filtered backprojection (FBP) execution, `apollo-sdft-wgpu` ships forward direct-bin sliding DFT execution, `apollo-sft-wgpu` ships direct dense DFT sparse top-k execution and inverse reconstruction, `apollo-sht-wgpu` ships direct complex SHT forward/inverse execution using owner-derived basis and quadrature buffers, `apollo-stft-wgpu` ships FFT-accelerated forward Hann-windowed STFT and inverse WOLA reconstruction execution for both power-of-two and non-power-of-two frame lengths, and `apollo-wavelet-wgpu` ships forward and inverse Haar DWT execution.
 - `apollo-wavelet` owns discrete and continuous wavelet transform plans for multiresolution analysis.
 - `apollo-validation` emits structured CPU, GPU, NUFFT, benchmark, and external-comparison reports.
 - `apollo-python` exposes FFT, NUFFT, precision selection, and backend capability introspection for Python callers.
+
+GPU benchmark automation runs on a dedicated self-hosted workflow path rather than the hosted CPU CI path. The repository ships `.github/workflows/gpu-benchmarks.yml` plus `scripts/run_gpu_benchmarks.ps1` to execute the WGPU Criterion suites on a runner labeled `[self-hosted, gpu, apollo]`, stage outputs under `.benchmarks/gpu-runner/`, and upload the result bundle as a workflow artifact.
 
 Mixed precision is now a first-class Apollo concept:
 
@@ -65,23 +67,23 @@ Mixed precision is now a first-class Apollo concept:
   `apollo-sft-wgpu`, `apollo-sht-wgpu`, `apollo-stft-wgpu`, and
   `apollo-wavelet-wgpu`: per-transform WGPU backend boundaries with
   capability and plan descriptor contracts.
-- `apollo-czt-wgpu`: direct complex forward CZT WGPU execution with CPU parity tests; inverse remains unsupported.
+- `apollo-czt-wgpu`: direct complex forward and inverse CZT WGPU execution with CPU parity tests on the implemented `f32` surface.
 - `apollo-dctdst-wgpu`: 1D real `f32` DCT-II/DCT-III/DST-II/DST-III WGPU execution with CPU parity tests.
 - `apollo-dht-wgpu`: 1D real `f32` DHT WGPU execution with CPU parity tests.
 - `apollo-fwht-wgpu`: 1D real `f32` FWHT WGPU execution with CPU parity tests.
 - `apollo-gft-wgpu`: forward and inverse real graph Fourier basis WGPU execution with CPU parity tests on the implemented `f32` surface.
 - `apollo-hilbert-wgpu`: forward analytic-signal and quadrature Hilbert WGPU execution with CPU parity tests; inverse recovers original signal DFT spectrum via the analytic-mask inversion rule.
-- `apollo-mellin-wgpu`: forward Mellin log-frequency spectrum WGPU execution with CPU parity tests; inverse remains unsupported.
+- `apollo-mellin-wgpu`: forward and inverse Mellin log-frequency spectrum WGPU execution with CPU parity tests on the implemented `f32` surface.
 - `apollo-ntt-wgpu`: forward and inverse modular NTT WGPU execution with CPU parity tests on the supported 32-bit modulus surface.
 - `apollo-qft-wgpu`: forward and inverse dense unitary QFT WGPU execution with CPU parity tests on the implemented `f32` complex surface.
 - `apollo-radon-wgpu`: forward parallel-beam Radon projection, adjoint backprojection (GPU WOLA, Natterer 2001 §II.2), and ramp-filtered backprojection (GPU FBP, Ram-Lak filter, Bracewell & Riddle 1967) WGPU execution with CPU parity tests.
 - `apollo-sdft-wgpu`: forward and inverse direct-bin sliding DFT WGPU execution with CPU parity tests.
 - `apollo-sft-wgpu`: forward dense direct DFT with deterministic top-k sparse projection and inverse sparse reconstruction with CPU parity tests.
 - `apollo-sht-wgpu`: forward and inverse complex spherical harmonic transform WGPU execution with CPU parity tests on owner-derived quadrature and basis buffers.
-- `apollo-stft-wgpu`: FFT-accelerated (Radix-2 DIT, O(N log N) per frame) forward Hann-windowed STFT and inverse WOLA reconstruction (Allen-Rabiner 1977, Theorem 1) WGPU execution with CPU parity tests; power-of-two `frame_len` required.
+- `apollo-stft-wgpu`: FFT-accelerated forward Hann-windowed STFT and inverse WOLA reconstruction (Allen-Rabiner 1977, Theorem 1) WGPU execution with CPU parity tests; power-of-two sizes use Radix-2 DIT and non-power-of-two sizes use the Bluestein/Chirp-Z path.
 - `apollo-wavelet-wgpu`: forward and inverse Haar DWT WGPU execution with CPU parity tests on the implemented `f32` surface.
 - `apollo-wavelet`: DWT/CWT multiresolution transforms with Haar, Daubechies-4, Ricker, and DC-corrected real Morlet support.
-- `apollo-validation`: parity, adversarial, benchmark, and external-reference runners. Includes 28 published-reference fixtures: FFT 4-point (Cooley-Tukey 1965), FFT inverse 4-point (Cooley-Tukey 1965), DHT 4-point (Bracewell 1983), DHT self-reciprocal (Bracewell 1983), DCT-II 2-point (FFTW REDFT10), DST-II 2-point (FFTW RODFT10), DCT-II inverse pair (Rao-Yip 1990), NTT impulse N=4 (Pollard 1971), NTT constant N=4, NTT impulse N=8, NTT polynomial convolution, NTT impulse N=16, NTT polynomial product N=16, NUFFT impulse at origin (Dutt-Rokhlin 1993), NUFFT quarter-period phase (Dutt-Rokhlin 1993), FWHT 2-point (Hadamard 1893), QFT 2-point (Shor 1994), CZT unit impulse is DFT (Rabiner-Schafer-Rader 1969), GFT path graph (Shuman 2013), FrFT unitary order-2 reversal (Candan 2000), DWT Haar one-level detail (Haar 1910/Mallat 1989), SDFT bin-zero unit impulse, SFT 1-sparse alternating tone (Gilbert et al. 2002), SHT monopole Y₀⁰ coefficient (Driscoll-Healy 1994), STFT rectangular-window impulse frame (Gabor 1946), Hilbert cosine-to-sine 4-point (Bedrosian 1963), Mellin constant-function first moment (Mellin 1896), and Radon θ=0 column-impulse projection (Radon 1917).
+- `apollo-validation`: parity, adversarial, benchmark, and external-reference runners. Includes 30 published-reference fixtures: FFT 4-point (Cooley-Tukey 1965), FFT inverse 4-point (Cooley-Tukey 1965), DHT 4-point (Bracewell 1983), DHT self-reciprocal (Bracewell 1983), DCT-II 2-point (FFTW REDFT10), DST-II 2-point (FFTW RODFT10), DCT-II inverse pair (Rao-Yip 1990), NTT impulse N=4 (Pollard 1971), NTT constant N=4, NTT impulse N=8, NTT polynomial convolution, NTT impulse N=16, NTT polynomial product N=16, NUFFT impulse at origin (Dutt-Rokhlin 1993), NUFFT quarter-period phase (Dutt-Rokhlin 1993), FWHT 2-point (Hadamard 1893), QFT 2-point (Shor 1994), CZT unit impulse is DFT (Rabiner-Schafer-Rader 1969), GFT path graph (Shuman 2013), FrFT unitary order-2 reversal (Candan 2000), DWT Haar one-level detail (Haar 1910/Mallat 1989), SDFT bin-zero unit impulse, SFT 1-sparse alternating tone (Gilbert et al. 2002), SHT monopole Y₀⁰ coefficient (Driscoll-Healy 1994), STFT rectangular-window impulse frame (Gabor 1946), Hilbert cosine-to-sine 4-point (Bedrosian 1963), Mellin constant-function first moment (Mellin 1896), Radon θ=0 column-impulse projection (Radon 1917), CZT inverse Vandermonde roundtrip N=4 (Rabiner-Schafer-Rader 1969; Björck-Pereyra 1970), and Mellin inverse spectrum constant roundtrip N=32 (Mellin 1896).
 - `apollo-python`: PyO3 bindings, NumPy interop, and backend introspection.
 
 ## Architecture
@@ -127,10 +129,9 @@ lib.rs -> infrastructure -> application -> domain
 - GPU NUFFT: `apollo-nufft-wgpu`. NUFFT WGPU support is a separate transform
   domain boundary and does not live in the dense FFT backend crate.
 - Other GPU transform domains: each transform has an owning `*-wgpu` crate.
-  `apollo-czt-wgpu` now executes the direct complex forward CZT on WGPU for
-  the implemented `f32` kernel surface. Inverse remains unsupported there
-  until the owning CZT crate defines and verifies an authoritative inverse or
-  adjoint contract.
+  `apollo-czt-wgpu` now executes the direct complex forward CZT and the square-plan
+  adjoint inverse on WGPU for the implemented `f32` kernel surface, validating
+  parity and DFT-case roundtrip against the owning CPU crate.
   `apollo-hilbert-wgpu` now executes the analytic-signal Hilbert path on WGPU
   by direct DFT, analytic-spectrum masking, and inverse DFT over the
   implemented `f32` surface. Inverse remains unsupported there until the
@@ -138,9 +139,9 @@ lib.rs -> infrastructure -> application -> domain
   adjoint contract.
   `apollo-mellin-wgpu` now executes the forward Mellin log-frequency spectrum
   on WGPU by log-resampling onto the plan scale grid and applying the direct
-  spectrum sum over the implemented `f32` surface. Inverse remains unsupported
-  there until the owning Mellin crate defines and verifies an authoritative
-  inverse or adjoint contract.
+  spectrum sum over the implemented `f32` surface, and executes the inverse by
+  a two-pass GPU IDFT plus exp-resample pipeline validated against the owning
+  CPU crate.
   `apollo-ntt-wgpu` now executes the forward and inverse NTT on WGPU by direct
   modular summation over the supported 32-bit modulus surface and validates
   parity against the owning CPU crate.
@@ -150,11 +151,10 @@ lib.rs -> infrastructure -> application -> domain
   `apollo-qft-wgpu` now executes the forward and inverse dense unitary QFT on
   WGPU by direct complex summation with `1 / sqrt(n)` normalization and
   validates parity against the owning CPU crate.
-  `apollo-radon-wgpu` now executes the forward parallel-beam Radon projection
-  on WGPU by direct image-space accumulation into sinogram detector bins and
-  validates parity against the owning CPU crate. Inverse and filtered
-  backprojection remain unsupported there until the owning Radon crate defines
-  and verifies an authoritative GPU reconstruction contract.
+  `apollo-radon-wgpu` now executes the forward parallel-beam Radon projection,
+  adjoint backprojection, and ramp-filtered backprojection on WGPU by direct
+  image-space accumulation plus GPU filtering and validates parity against the
+  owning CPU crate.
   `apollo-sdft-wgpu` now executes forward direct-bin sliding DFT evaluation on
   WGPU by direct `O(N*K)` summation over the current real-valued window and
   validates parity against `apollo-sdft::SdftPlan::direct_bins`. Inverse
@@ -165,11 +165,12 @@ lib.rs -> infrastructure -> application -> domain
   and spherical harmonic basis values, preserving `apollo-sht` as the SSOT for
   basis and quadrature definitions.
   `apollo-stft-wgpu` now executes both forward Hann-windowed STFT and inverse
-  WOLA reconstruction on the GPU via a batched Radix-2 DIT FFT / IFFT (O(N log N)
-  per frame, power-of-two `frame_len` required). Forward validates parity against
-  `apollo-stft::StftPlan::forward`; inverse validates against CPU WOLA reconstruction
-  (Allen-Rabiner 1977, Theorem 1). Mixed-precision f16/f32 host-boundary paths are
-  supported for both directions.
+  WOLA reconstruction on the GPU via a batched FFT / IFFT path: Radix-2 DIT for
+  power-of-two frame lengths and Bluestein/Chirp-Z for non-power-of-two frame
+  lengths. Forward validates parity against `apollo-stft::StftPlan::forward`;
+  inverse validates against CPU WOLA reconstruction (Allen-Rabiner 1977,
+  Theorem 1). Mixed-precision f16/f32 host-boundary paths are supported for
+  both directions.
   `apollo-wavelet-wgpu` now executes forward and inverse multi-level Haar DWT
   on WGPU using a Mallat decomposition and validates forward coefficients and
   inverse reconstruction against `apollo-wavelet::DwtPlan` for the Haar
@@ -211,6 +212,24 @@ Rust surface is the generic typed API.
 - Solver-specific spectral helpers remain in `kwavers` until they prove broadly reusable.
 - Bounded variation belongs in traits, newtypes, configuration structs, strategy types, or backend abstractions, not cloned public APIs.
 - Validation assertions inspect computed values and compare them against analytical invariants or independent references.
+
+## GPU Benchmark Runner
+
+Apollo's hosted CI remains CPU-only. WGPU benchmarks run through a separate manual workflow on a labeled self-hosted runner:
+
+- Workflow: `.github/workflows/gpu-benchmarks.yml`
+- Runner labels: `self-hosted`, `gpu`, `apollo`
+- Script entry point: `scripts/run_gpu_benchmarks.ps1`
+- Output bundle: `.benchmarks/gpu-runner/run-<run_id>/`
+
+The workflow is manual (`workflow_dispatch`) so normal pull-request CI never blocks on GPU hardware availability. The runner script executes these Criterion suites:
+
+- `apollo-fft-wgpu` `buffer_reuse`
+- `apollo-nufft-wgpu` `buffer_reuse`
+- `apollo-stft-wgpu` `stft_bench`
+- `apollo-radon-wgpu` `radon_wgpu_bench`
+
+Each run captures per-benchmark console logs, a machine-readable `manifest.json`, a human-readable `summary.md`, and the full `target/criterion` directory for artifact upload.
 
 ## References
 

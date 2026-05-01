@@ -69,14 +69,14 @@ The table below is the authoritative record of per-crate precision support. "Adv
 | apollo-stft | CPU | HIGH_ACCURACY | f64/Complex64, f32/Complex32, f16/[f16;2] | — | f16 promoted to f32/Complex32 |
 | apollo-wavelet | CPU | HIGH_ACCURACY | f64, f32, half::f16 | — | f16 promoted to f32 |
 | apollo-fft-wgpu | WGPU | LOW_PRECISION_F32 | f32, half::f16 (mixed) | f32 | native-f16 feature: arithmetic in f16 via SHADER_F16 |
-| apollo-czt-wgpu | WGPU | LOW_PRECISION_F32 | f32, [f16;2] host (mixed) | f32 | f16 promoted to f32 at host boundary |
+| apollo-czt-wgpu | WGPU | LOW_PRECISION_F32 | f32, [f16;2] host (mixed) | f32 | forward + inverse CZT; f16 promoted to f32 at host boundary |
 | apollo-dctdst-wgpu | WGPU | LOW_PRECISION_F32 | f32 | f32 | mixed f16 host path present |
 | apollo-dht-wgpu | WGPU | LOW_PRECISION_F32 | f32, half::f16 host (mixed) | f32 | f16 promoted at host boundary |
 | apollo-frft-wgpu | WGPU | LOW_PRECISION_F32 | f32, [f16;2] host (mixed) | f32 | f16 promoted at host boundary; UnitaryFrftGpuKernel available |
 | apollo-fwht-wgpu | WGPU | LOW_PRECISION_F32 | f32, half::f16 host (mixed) | f32 | f16 promoted at host boundary |
 | apollo-gft-wgpu | WGPU | LOW_PRECISION_F32 | f32, half::f16 host (mixed) | f32 | f16 promoted at host boundary |
 | apollo-hilbert-wgpu | WGPU | LOW_PRECISION_F32 | f32, half::f16 host (mixed) | f32 | forward + inverse analytic-mask; f16 promoted at host boundary |
-| apollo-mellin-wgpu | WGPU | LOW_PRECISION_F32 | f32, half::f16 host (mixed) | f32 | f16 promoted at host boundary |
+| apollo-mellin-wgpu | WGPU | LOW_PRECISION_F32 | f32, half::f16 host (mixed) | f32 | forward + inverse Mellin spectrum; f16 promoted at host boundary |
 | apollo-ntt-wgpu | WGPU | exact u32 residues | u32 quantized | u32 modular | floating mixed precision explicitly unsupported |
 | apollo-nufft-wgpu | WGPU | LOW_PRECISION_F32 | Complex32, [f16;2] host (mixed) | f32 | f16 promoted at host boundary |
 | apollo-qft-wgpu | WGPU | LOW_PRECISION_F32 | Complex32, [f16;2] host (mixed) | f32 | f16 promoted at host boundary |
