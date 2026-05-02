@@ -11,6 +11,27 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.12.18] — Closure XXXVIII
+
+### Closure XXXVIII — DCT-I and DST-I Forward Known-Value Fixtures [patch]
+
+#### Added
+- Validation fixture 58 in `apollo-validation`: `dct1_three_point_forward_known_values_fixture` —
+  DCT-I, N=3, x=[1,2,3]: y=[8,−2,0]; boundary formula y[k]=x[0]+(−1)^k·x[N−1]+2·Σx[n]cos(πnk/(N−1));
+  y[2]=0 algebraically exact (cos(π)=−1 cancels interior term 4); threshold 1×10⁻¹⁵.
+  Reference: Rao & Yip (1990) *Discrete Cosine Transform* Table 2.1; FFTW REDFT00.
+- Validation fixture 59 in `apollo-validation`: `dst1_two_point_forward_known_values_fixture` —
+  DST-I, N=2, x=[1,3]: y=[4√3,−2√3]; formula y[k]=2·Σx[n]sin(π(n+1)(k+1)/(N+1));
+  analytically derived as 2·(√3/2+3√3/2)=4√3 and 2·(√3/2−3√3/2)=−2√3; threshold 1×10⁻¹².
+  Reference: Rao & Yip (1990) *Discrete Cosine Transform* Table 3.1; FFTW RODFT00.
+- Root `README.md` fixture count updated 57 → 59; two new entries appended.
+
+#### Final state
+- Both count assertions in `apollo-validation/suite.rs` updated 57 → 59.
+- All 3 validation tests pass (59 fixtures, 59 attempted, all passed).
+
+---
+
 ## [0.12.17] — Closure XXXVII
 
 ### Closure XXXVII — DCT-III and DST-III Published-Reference Fixtures [patch]

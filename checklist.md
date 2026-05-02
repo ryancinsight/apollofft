@@ -1,4 +1,18 @@
 # Apollo Checklist
+## Closure XXXVIII — DCT-I and DST-I Forward Known-Value Fixtures [patch]
+Sprint target version: 0.12.18
+
+- [x] Triage: identify remaining DCT-I/DST-I published-reference gaps (forward known-value fixtures).
+- [x] Add validation fixture 58: `dct1_three_point_forward_known_values_fixture`
+  (DCT-I N=3 x=[1,2,3]: y=[8,−2,0]; boundary formula; Rao & Yip 1990 Table 2.1; threshold 1e-15).
+- [x] Add validation fixture 59: `dst1_two_point_forward_known_values_fixture`
+  (DST-I N=2 x=[1,3]: y=[4√3,−2√3]; formula y[k]=2·Σsin; Rao & Yip 1990 Table 3.1; threshold 1e-12).
+- [x] Update `run_published_reference_suite` call list: 57 → 59 fixtures.
+- [x] Update both count assertions in `apollo-validation/suite.rs`: 57 → 59.
+- [x] Update root `README.md` fixture count 57 → 59; append two new entries.
+- [x] Update sprint PM artifacts: CHANGELOG.md, backlog.md, checklist.md, gap_audit.md.
+- [x] `cargo test -p apollo-validation`: 3 passed, 0 FAILED, 0 ignored.
+
 ## Closure XXXVII — DCT-III and DST-III Published-Reference Fixtures [patch]
 Sprint target version: 0.12.17
 

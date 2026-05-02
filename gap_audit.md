@@ -11,6 +11,18 @@ quantized storage (implemented and verified). Floating-point NTT is architectura
 by design and will not be implemented.
 
 ## Closed Gaps
+### Closure XXXVIII — DCT-I and DST-I Forward Known-Value Fixtures [patch]
+- **Gap**: `apollo-validation` had 57 published-reference fixtures. DCT-I (`RealTransformKind::DctI`)
+  and DST-I (`RealTransformKind::DstI`) each had only inverse-roundtrip coverage (fixtures 44–45);
+  no fixture exercised the forward output values against the Rao & Yip (1990) table definitions.
+- **Closed by**: Added fixtures 58–59:
+  - Fixture 58: `dct1_three_point_forward_known_values_fixture` — DCT-I N=3, x=[1,2,3];
+    y=[8,−2,0]; y[2]=0 algebraically exact; threshold 1×10⁻¹⁵.
+  - Fixture 59: `dst1_two_point_forward_known_values_fixture` — DST-I N=2, x=[1,3];
+    y=[4√3,−2√3]; threshold 1×10⁻¹².
+- **Evidence**: `cargo test -p apollo-validation` — 3 passed, 0 FAILED, 0 ignored.
+- **Reference**: Rao & Yip (1990) *Discrete Cosine Transform* Tables 2.1 and 3.1; FFTW REDFT00/RODFT00.
+
 ### Closure XXXVII — DCT-III and DST-III Published-Reference Fixtures [patch]
 - **Gap**: `apollo-validation` had 55 published-reference fixtures. DCT-III (`RealTransformKind::DctIII`)
   and DST-III (`RealTransformKind::DstIII`) were fully implemented in `apollo-dctdst` and exercised

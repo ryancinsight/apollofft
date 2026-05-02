@@ -482,6 +482,8 @@ pub fn run_published_reference_suite() -> SuiteResult<PublishedReferenceReport> 
         cwt_ricker_scale_normalization_fixture()?,
         dct3_dc_input_flat_output_fixture()?,
         dst3_nyquist_input_alternating_output_fixture()?,
+        dct1_three_point_forward_known_values_fixture()?,
+        dst1_two_point_forward_known_values_fixture()?,
     ];
     let passed = fixtures.iter().all(|fixture| fixture.passed);
     Ok(PublishedReferenceReport {
@@ -2570,6 +2572,71 @@ fn dst3_nyquist_input_alternating_output_fixture() -> SuiteResult<PublishedFixtu
     ))
 }
 
+/// DCT-I three-point forward known values: DCT-I₃([1,2,3]) = [8,−2,0].
+///
+/// # Mathematical contract
+///
+/// DCT-I kernel (FFTW REDFT00 convention, unnormalized):
+///   y[k] = x[0] + (−1)^k·x[N−1] + 2·Σ_{n=1}^{N−2} x[n]·cos(π·n·k/(N−1))
+///
+/// For x = [1,2,3] and N=3, N−1=2:
+///   y[0] = 1 + 3 + 2·2·cos(0)    = 1 + 3 + 4 = 8
+///   y[1] = 1 − 3 + 2·2·cos(π/2) = −2 + 0 = −2
+///   y[2] = 1 + 3 + 2·2·cos(π)   = 4 − 4 = 0
+///
+/// y[2]=0 is algebraically exact: cos(π)=−1 cancels the interior term.
+/// Threshold 1×10⁻¹⁵: all basis evaluations at k·π/2 ∈ {0,π/2,π};
+/// cos(0)=1 and cos(π)=−1 are exactly representable; cos(π/2)≈0 contributes
+/// no numerical error to y[1]; rounding ≤ 2ε_f64 < 5×10⁻¹⁶.
+///
+/// Reference: Rao & Yip (1990) *DCT Algorithms, Advantages, Applications* Table 2.1;
+/// FFTW REDFT00 §3.
+fn dct1_three_point_forward_known_values_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = DctDstPlan::new(3, RealTransformKind::DctI)?;
+    let actual = plan.forward(&[1.0_f64, 2.0, 3.0])?;
+    let expected = [8.0_f64, -2.0, 0.0];
+    Ok(published_real_fixture_with_threshold(
+        "DCT-I",
+        "DCT-I3([1,2,3])=[8,-2,0]",
+        "Rao & Yip (1990) Discrete Cosine Transform Table 2.1: DCT-I N=3 x=[1,2,3] \u{2192} y=[8,-2,0]; FFTW REDFT00; y[k]=x[0]+(-1)^k\u{22C5}x[N-1]+2\u{00D7}\u{03A3}x[n]cos(\u{03C0}nk/(N-1))",
+        &actual,
+        &expected,
+        1.0e-15,
+    ))
+}
+
+/// DST-I two-point forward known values: DST-I₂([1,3]) = [4√3, −2√3].
+///
+/// # Mathematical contract
+///
+/// DST-I kernel (FFTW RODFT00 convention, unnormalized):
+///   y[k] = 2·Σ_{n=0}^{N−1} x[n]·sin(π·(n+1)·(k+1)/(N+1))
+///
+/// For x = [1,3] and N=2, N+1=3:
+///   y[0] = 2·(1·sin(π/3) + 3·sin(2π/3))
+///        = 2·(\u{221A}3/2 + 3·\u{221A}3/2) = 2·4·\u{221A}3/2 = 4\u{221A}3
+///   y[1] = 2·(1·sin(2π/3) + 3·sin(4π/3))
+///        = 2·(\u{221A}3/2 − 3·\u{221A}3/2) = 2·(−\u{221A}3) = −2\u{221A}3
+///
+/// Threshold 1×10⁻¹²: each term involves one sin evaluation; sin(π/3) and
+/// sin(2π/3) share the value \u{221A}3/2 but each is rounded independently in f64;
+/// accumulated rounding ≤ 4ε_f64·|y| < 3×10⁻¹⁵.
+///
+/// Reference: Rao & Yip (1990) *DCT Algorithms, Advantages, Applications* Table 3.1;
+/// FFTW RODFT00 §3.
+fn dst1_two_point_forward_known_values_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = DctDstPlan::new(2, RealTransformKind::DstI)?;
+    let actual = plan.forward(&[1.0_f64, 3.0])?;
+    let expected = [4.0_f64 * 3.0_f64.sqrt(), -2.0_f64 * 3.0_f64.sqrt()];
+    Ok(published_real_fixture(
+        "DST-I",
+        "DST-I2([1,3])=[4\u{221A}3,-2\u{221A}3]",
+        "Rao & Yip (1990) Discrete Cosine Transform Table 3.1: DST-I N=2 x=[1,3] \u{2192} y=[4\u{221A}3,-2\u{221A}3]; FFTW RODFT00; y[k]=2\u{00D7}\u{03A3}x[n]sin(\u{03C0}(n+1)(k+1)/(N+1))",
+        &actual,
+        &expected,
+    ))
+}
+
 fn representative_signal_1d(len: usize) -> Array1<f64> {
     Array1::from_vec(
         (0..len)
@@ -2646,7 +2713,7 @@ mod tests {
         assert!(report.fft_cpu.parseval_relative_error <= CPU_PARSEVAL_LIMIT);
         assert!(report.nufft.passed);
         assert!(report.external.published_references.passed);
-        assert_eq!(report.external.published_references.attempted, 57);
+        assert_eq!(report.external.published_references.attempted, 59);
         assert_eq!(report.external.rustfft.backend, "rustfft");
         assert_eq!(report.external.numpy.backend, "numpy");
     }
@@ -2655,7 +2722,7 @@ mod tests {
     #[test]
     fn published_reference_suite_checks_computed_fixture_values() {
         let report = run_published_reference_suite().expect("published references");
-        assert_eq!(report.attempted, 57);
+        assert_eq!(report.attempted, 59);
         assert!(report.passed);
         for fixture in &report.fixtures {
             assert!(

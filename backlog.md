@@ -1,5 +1,16 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure XXXVIII phase)
+- [x] [patch] Validation fixture 58: `dct1_three_point_forward_known_values_fixture`
+  (DCT-I N=3 x=[1,2,3]: y=[8,−2,0]; y[k]=x[0]+(−1)^k·x[N−1]+2·Σx[n]cos(πnk/(N−1)); y[2]=0 exact;
+  Rao & Yip (1990) Table 2.1; FFTW REDFT00; threshold 1e-15).
+- [x] [patch] Validation fixture 59: `dst1_two_point_forward_known_values_fixture`
+  (DST-I N=2 x=[1,3]: y=[4√3,−2√3]; y[k]=2·Σx[n]sin(π(n+1)(k+1)/(N+1));
+  Rao & Yip (1990) Table 3.1; FFTW RODFT00; threshold 1e-12).
+- [x] [patch] Root `README.md` fixture count updated 57→59; two new entries appended.
+- [x] [patch] Both count assertions in `apollo-validation` updated: 57→59.
+- Final state: `cargo test -p apollo-validation` 3 passed, 0 FAILED, 0 ignored.
+
 ## Closed in this sprint (Closure XXXVII phase)
 - [x] [patch] Validation fixture 56: `dct3_dc_input_flat_output_fixture`
   (DCT-III N=4 [1,0,0,0]: y=[½,½,½,½]; y[k]=x[0]/2 (single term, all cosines vanish); Makhoul 1980 Table I; FFTW REDFT01; threshold 1e-15).
