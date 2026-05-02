@@ -53,6 +53,11 @@ use crate::domain::metadata::shape::Shape3D;
 use half::f16;
 use ndarray::{Array3, Axis, Zip};
 use num_complex::Complex32;
+
+/// Use rayon parallel iteration when total elements exceed this threshold.
+/// Below the threshold, sequential iteration avoids rayon task-spawn overhead
+/// that dominates for small volumes (e.g. 8³ = 512 elements).
+const RAYON_THRESHOLD: usize = 32768;
 use num_complex::Complex64;
 use rayon::prelude::*;
 
@@ -588,26 +593,15 @@ impl FftPlan3D {
                 }
             }
         }
-        match (forward, &self.twiddle_y_fwd_64, &self.twiddle_y_inv_64) {
-            (true, Some(tw), _) => {
-                let tw = tw.as_slice();
-                scratch.par_chunks_mut(self.ny).for_each(|lane| {
-                    forward_inplace_64_with_twiddles(lane, tw);
-                });
-            }
-            (false, _, Some(tw)) => {
-                let tw = tw.as_slice();
-                scratch.par_chunks_mut(self.ny).for_each(|lane| {
-                    inverse_inplace_64_with_twiddles(lane, tw);
-                });
-            }
-            _ => scratch.par_chunks_mut(self.ny).for_each(|lane| {
-                if forward {
-                    fft_forward_64(lane);
-                } else {
-                    fft_inverse_64(lane);
-                }
-            }),
+        let lane_fn_64 = |lane: &mut [Complex64]| match (forward, &self.twiddle_y_fwd_64, &self.twiddle_y_inv_64) {
+            (true,  Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_slice()),
+            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_slice()),
+            _ => if forward { fft_forward_64(lane) } else { fft_inverse_64(lane) },
+        };
+        if scratch.len() > RAYON_THRESHOLD {
+            scratch.par_chunks_mut(self.ny).for_each(lane_fn_64);
+        } else {
+            scratch.chunks_mut(self.ny).for_each(lane_fn_64);
         }
         for i in 0..self.nx {
             for k in 0..self.nz {
@@ -632,26 +626,15 @@ impl FftPlan3D {
                 }
             }
         }
-        match (forward, &self.twiddle_x_fwd_64, &self.twiddle_x_inv_64) {
-            (true, Some(tw), _) => {
-                let tw = tw.as_slice();
-                scratch.par_chunks_mut(self.nx).for_each(|lane| {
-                    forward_inplace_64_with_twiddles(lane, tw);
-                });
-            }
-            (false, _, Some(tw)) => {
-                let tw = tw.as_slice();
-                scratch.par_chunks_mut(self.nx).for_each(|lane| {
-                    inverse_inplace_64_with_twiddles(lane, tw);
-                });
-            }
-            _ => scratch.par_chunks_mut(self.nx).for_each(|lane| {
-                if forward {
-                    fft_forward_64(lane);
-                } else {
-                    fft_inverse_64(lane);
-                }
-            }),
+        let lane_fn_64 = |lane: &mut [Complex64]| match (forward, &self.twiddle_x_fwd_64, &self.twiddle_x_inv_64) {
+            (true,  Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_slice()),
+            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_slice()),
+            _ => if forward { fft_forward_64(lane) } else { fft_inverse_64(lane) },
+        };
+        if scratch.len() > RAYON_THRESHOLD {
+            scratch.par_chunks_mut(self.nx).for_each(lane_fn_64);
+        } else {
+            scratch.chunks_mut(self.nx).for_each(lane_fn_64);
         }
         for j in 0..self.ny {
             for k in 0..self.nz {
@@ -670,26 +653,15 @@ impl FftPlan3D {
         let data_slice = data
             .as_slice_memory_order_mut()
             .expect("3D complex data must be contiguous");
-        match (forward, &self.twiddle_z_fwd_64, &self.twiddle_z_inv_64) {
-            (true, Some(tw), _) => {
-                let tw = tw.as_slice();
-                data_slice.par_chunks_mut(self.nz).for_each(|lane| {
-                    forward_inplace_64_with_twiddles(lane, tw);
-                });
-            }
-            (false, _, Some(tw)) => {
-                let tw = tw.as_slice();
-                data_slice.par_chunks_mut(self.nz).for_each(|lane| {
-                    inverse_inplace_64_with_twiddles(lane, tw);
-                });
-            }
-            _ => data_slice.par_chunks_mut(self.nz).for_each(|lane| {
-                if forward {
-                    fft_forward_64(lane);
-                } else {
-                    fft_inverse_64(lane);
-                }
-            }),
+        let lane_fn_64 = |lane: &mut [Complex64]| match (forward, &self.twiddle_z_fwd_64, &self.twiddle_z_inv_64) {
+            (true,  Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_slice()),
+            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_slice()),
+            _ => if forward { fft_forward_64(lane) } else { fft_inverse_64(lane) },
+        };
+        if data_slice.len() > RAYON_THRESHOLD {
+            data_slice.par_chunks_mut(self.nz).for_each(lane_fn_64);
+        } else {
+            data_slice.chunks_mut(self.nz).for_each(lane_fn_64);
         }
     }
 
@@ -723,26 +695,15 @@ impl FftPlan3D {
                 }
             }
         }
-        match (forward, &self.twiddle_y_fwd_32, &self.twiddle_y_inv_32) {
-            (true, Some(tw), _) => {
-                let tw = tw.as_slice();
-                scratch.par_chunks_mut(self.ny).for_each(|lane| {
-                    forward_inplace_32_with_twiddles(lane, tw);
-                });
-            }
-            (false, _, Some(tw)) => {
-                let tw = tw.as_slice();
-                scratch.par_chunks_mut(self.ny).for_each(|lane| {
-                    inverse_inplace_32_with_twiddles(lane, tw);
-                });
-            }
-            _ => scratch.par_chunks_mut(self.ny).for_each(|lane| {
-                if forward {
-                    fft_forward_32(lane);
-                } else {
-                    fft_inverse_32(lane);
-                }
-            }),
+        let lane_fn_32 = |lane: &mut [Complex32]| match (forward, &self.twiddle_y_fwd_32, &self.twiddle_y_inv_32) {
+            (true,  Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_slice()),
+            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_slice()),
+            _ => if forward { fft_forward_32(lane) } else { fft_inverse_32(lane) },
+        };
+        if scratch.len() > RAYON_THRESHOLD {
+            scratch.par_chunks_mut(self.ny).for_each(lane_fn_32);
+        } else {
+            scratch.chunks_mut(self.ny).for_each(lane_fn_32);
         }
         for i in 0..self.nx {
             for k in 0..self.nz {
@@ -767,26 +728,15 @@ impl FftPlan3D {
                 }
             }
         }
-        match (forward, &self.twiddle_x_fwd_32, &self.twiddle_x_inv_32) {
-            (true, Some(tw), _) => {
-                let tw = tw.as_slice();
-                scratch.par_chunks_mut(self.nx).for_each(|lane| {
-                    forward_inplace_32_with_twiddles(lane, tw);
-                });
-            }
-            (false, _, Some(tw)) => {
-                let tw = tw.as_slice();
-                scratch.par_chunks_mut(self.nx).for_each(|lane| {
-                    inverse_inplace_32_with_twiddles(lane, tw);
-                });
-            }
-            _ => scratch.par_chunks_mut(self.nx).for_each(|lane| {
-                if forward {
-                    fft_forward_32(lane);
-                } else {
-                    fft_inverse_32(lane);
-                }
-            }),
+        let lane_fn_32 = |lane: &mut [Complex32]| match (forward, &self.twiddle_x_fwd_32, &self.twiddle_x_inv_32) {
+            (true,  Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_slice()),
+            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_slice()),
+            _ => if forward { fft_forward_32(lane) } else { fft_inverse_32(lane) },
+        };
+        if scratch.len() > RAYON_THRESHOLD {
+            scratch.par_chunks_mut(self.nx).for_each(lane_fn_32);
+        } else {
+            scratch.chunks_mut(self.nx).for_each(lane_fn_32);
         }
         for j in 0..self.ny {
             for k in 0..self.nz {
@@ -805,26 +755,15 @@ impl FftPlan3D {
         let data_slice = data
             .as_slice_memory_order_mut()
             .expect("3D f32 complex data must be contiguous");
-        match (forward, &self.twiddle_z_fwd_32, &self.twiddle_z_inv_32) {
-            (true, Some(tw), _) => {
-                let tw = tw.as_slice();
-                data_slice.par_chunks_mut(self.nz).for_each(|lane| {
-                    forward_inplace_32_with_twiddles(lane, tw);
-                });
-            }
-            (false, _, Some(tw)) => {
-                let tw = tw.as_slice();
-                data_slice.par_chunks_mut(self.nz).for_each(|lane| {
-                    inverse_inplace_32_with_twiddles(lane, tw);
-                });
-            }
-            _ => data_slice.par_chunks_mut(self.nz).for_each(|lane| {
-                if forward {
-                    fft_forward_32(lane);
-                } else {
-                    fft_inverse_32(lane);
-                }
-            }),
+        let lane_fn_32 = |lane: &mut [Complex32]| match (forward, &self.twiddle_z_fwd_32, &self.twiddle_z_inv_32) {
+            (true,  Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_slice()),
+            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_slice()),
+            _ => if forward { fft_forward_32(lane) } else { fft_inverse_32(lane) },
+        };
+        if data_slice.len() > RAYON_THRESHOLD {
+            data_slice.par_chunks_mut(self.nz).for_each(lane_fn_32);
+        } else {
+            data_slice.chunks_mut(self.nz).for_each(lane_fn_32);
         }
     }
 

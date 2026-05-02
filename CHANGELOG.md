@@ -11,6 +11,45 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.6] — Closure XLV
+
+### Closure XLV — apollo-fft: real FFT half-spectrum trick, rayon sequential threshold, cache-blocked transpose [patch]
+
+#### Changed
+- `apollo-fft` / `radix2.rs`: added `build_real_fwd_post_twiddles_64(n) -> Vec<Complex64>` and
+  `forward_real_inplace_64(input, output, fft_twiddles, post_twiddles)`. The new function packs a
+  real N-input into N/2 complex samples, applies an N/2-point forward FFT using the first N/2-1
+  entries of the existing N-point twiddle table (contiguous-layout invariant), then unpacks
+  in-place via the split-radix identity `X[k] = (Z[k]+Z[M-k]*)/2 - i·W_N^k·(Z[k]-Z[M-k]*)/2`,
+  processing symmetric pairs to avoid aliasing. Complexity ≈ N/2·log₂(N/2) + O(N) vs
+  N·log₂N for the previous zero-padded complex FFT path.
+- `apollo-fft` / `dimension_1d.rs`: `FftPlan1D` gains a `real_fwd_post_twiddles: Option<Vec<Complex64>>`
+  field (N/2+1 entries, built at construction for PoT N ≥ 4). Both `forward_real_to_complex` and
+  `forward_real_to_complex_into` now dispatch to `forward_real_inplace_64` when post-twiddles are
+  available, falling back to the previous complex-pad path for non-PoT or N < 4.
+- `apollo-fft` / `dimension_2d.rs`: added `const RAYON_THRESHOLD: usize = 32768` and
+  `const TRANSPOSE_TILE: usize = 32`. All four axis-pass functions (f64 row/col, f32 row/col) now
+  use sequential `chunks_mut` iteration when `data.len() ≤ RAYON_THRESHOLD`, eliminating
+  rayon task-spawn overhead for small matrices. The column gather and scatter loops are now
+  32×32-tile cache-blocked, keeping each tile ≤ 8 KB in L1.
+- `apollo-fft` / `dimension_3d.rs`: same `RAYON_THRESHOLD = 32768` applied to all six axis-pass
+  functions (axis0/1/2 × f64/f32). Sequential path used for volumes ≤ 32K elements.
+
+#### Performance (Closure XLV vs numpy baseline)
+| Case         | Before XLV | After XLV | Change |
+|---|---|---|---|
+| 1D real N=1024  | 1.57× | 2.14× | +36% |
+| 1D real N=4096  | 0.95× | 1.66× | +75% |
+| 1D real N=16384 | 3.18× | 6.16× | +94% |
+| 2D 32×32        | 0.37× | 2.03× | +449% |
+| 2D 64×64        | 0.55× | 1.13× | +105% |
+| 2D 128×128      | 0.69× | 0.85× | +23% |
+| 3D 8³           | 0.48× | 4.27× | +789% |
+| 3D 16³          | 1.22× | 1.79× | +47% |
+| 1D cpx N=1024   | 1.38× | 1.24× | -10% |
+
+---
+
 ## [0.13.5] — Closure XLIV
 
 ### Closure XLIV — apollo-fft: precomputed twiddle tables + preallocated scratch in 2D/3D plans [patch]

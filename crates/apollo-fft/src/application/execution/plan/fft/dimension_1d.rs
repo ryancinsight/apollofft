@@ -3,6 +3,7 @@
 use crate::application::execution::kernel::radix2::{
     build_forward_twiddle_table_32, build_forward_twiddle_table_64,
     build_inverse_twiddle_table_32, build_inverse_twiddle_table_64,
+    build_real_fwd_post_twiddles_64, forward_real_inplace_64,
     forward_inplace_32_with_twiddles, forward_inplace_64_with_twiddles,
     inverse_inplace_32_with_twiddles, inverse_inplace_64_with_twiddles,
 };
@@ -93,6 +94,10 @@ pub struct FftPlan1D {
     twiddle_fwd_32: Option<Vec<Complex32>>,
     /// Precomputed f32 inverse twiddle table (used in LOW_PRECISION_F32 mode).
     twiddle_inv_32: Option<Vec<Complex32>>,
+    /// Post-processing twiddles for the real-input half-spectrum FFT.
+    /// Entry k = exp(-2πi·k/N) for k = 0..=N/2. Length N/2+1.
+    /// `Some` iff `N` is a power of two ≥ 4; `None` otherwise.
+    real_fwd_post_twiddles: Option<Vec<Complex64>>,
 }
 
 impl std::fmt::Debug for FftPlan1D {
@@ -156,6 +161,11 @@ impl FftPlan1D {
             twiddle_inv_64,
             twiddle_fwd_32,
             twiddle_inv_32,
+            real_fwd_post_twiddles: if shape.n >= 4 && shape.n.is_power_of_two() {
+                Some(build_real_fwd_post_twiddles_64(shape.n))
+            } else {
+                None
+            },
         }
     }
 
@@ -211,9 +221,27 @@ impl FftPlan1D {
     #[must_use]
     pub fn forward_real_to_complex(&self, input: &Array1<f64>) -> Array1<Complex64> {
         assert_eq!(input.len(), self.n, "forward input length mismatch");
-        let mut output = input.mapv(|value| Complex64::new(value, 0.0));
-        self.forward_complex_inplace(&mut output);
-        output
+        // For power-of-two N ≥ 4: use the half-length complex packing trick.
+        // Pack x into N/2 complex samples, run N/2-point FFT (using the first
+        // N/2-1 entries of the N-point twiddle table), then unpack via conjugate
+        // symmetry. This halves the FFT work relative to a full N-point complex FFT.
+        if let (Some(fft_tw), Some(post_tw)) =
+            (&self.twiddle_fwd_64, &self.real_fwd_post_twiddles)
+        {
+            let input_slice = input.as_slice().expect("input must be contiguous");
+            let mut output = Array1::<Complex64>::zeros(self.n);
+            forward_real_inplace_64(
+                input_slice,
+                output.as_slice_mut().expect("output must be contiguous"),
+                fft_tw,
+                post_tw,
+            );
+            output
+        } else {
+            let mut output = input.mapv(|value| Complex64::new(value, 0.0));
+            self.forward_complex_inplace(&mut output);
+            output
+        }
     }
 
     /// Forward transform of a real signal into a caller-supplied complex buffer.
@@ -224,10 +252,22 @@ impl FftPlan1D {
     ) {
         assert_eq!(input.len(), self.n, "forward input length mismatch");
         assert_eq!(output.len(), self.n, "forward output length mismatch");
-        Zip::from(&mut *output).and(input).for_each(|out, &value| {
-            *out = Complex64::new(value, 0.0);
-        });
-        self.forward_complex_inplace(output);
+        if let (Some(fft_tw), Some(post_tw)) =
+            (&self.twiddle_fwd_64, &self.real_fwd_post_twiddles)
+        {
+            let input_slice = input.as_slice().expect("input must be contiguous");
+            forward_real_inplace_64(
+                input_slice,
+                output.as_slice_mut().expect("output must be contiguous"),
+                fft_tw,
+                post_tw,
+            );
+        } else {
+            Zip::from(&mut *output).and(input).for_each(|out, &value| {
+                *out = Complex64::new(value, 0.0);
+            });
+            self.forward_complex_inplace(output);
+        }
     }
 
     /// Compatibility alias for `forward_real_to_complex_into`.

@@ -144,6 +144,129 @@ pub fn build_forward_twiddle_table_32(n: usize) -> Vec<Complex32> {
     table
 }
 
+/// Build post-processing twiddle table for real-input forward FFT.
+///
+/// Returns N/2 + 1 entries: `post[k] = exp(-2πi·k/N)` for k = 0..=N/2.
+///
+/// These are the standard DFT twiddle factors W_N^k. During the unpack step of
+/// `forward_real_inplace_64`, each complex bin `X[k]` for k = 1..N/2-1 requires
+/// multiplication by W_N^k to separate the even and odd sub-DFTs. The DC (k=0)
+/// and Nyquist (k=N/2) bins use simple real sums and require no multiplication.
+pub fn build_real_fwd_post_twiddles_64(n: usize) -> Vec<Complex64> {
+    debug_assert!(n.is_power_of_two() && n >= 4);
+    let m = n >> 1;
+    (0..=m)
+        .map(|k| {
+            let a = -std::f64::consts::TAU * k as f64 / n as f64;
+            Complex64::new(a.cos(), a.sin())
+        })
+        .collect()
+}
+
+/// Real-input forward FFT via half-length complex packing.
+///
+/// # Algorithm
+///
+/// Theorem (split-radix real DFT): For real x[n] of length N = 2M, define
+/// the complex signal z[k] = x[2k] + i·x[2k+1] for k = 0..M-1. Let
+/// Z = FFT_M(z), A[l] = DFT of even sub-sequence, B[l] = DFT of odd sub-sequence.
+/// Then Z[l] = A[l] + i·B[l] and Z[M-l]* = A[l] - i·B[l], giving
+/// A[l] = (Z[l] + Z[M-l]*)/2 and B[l] = -i·(Z[l] - Z[M-l]*)/2.
+/// The N-point DFT is X[l] = A[l] + W_N^l·B[l] for l = 0..N-1, where W_N^l = exp(-2πi·l/N).
+/// Together: X[l] = (Z[l] + Z[M-l]*)/2 - i·W_N^l·(Z[l] - Z[M-l]*)/2.
+/// Conjugate symmetry X[N-l] = X[l]* (since x is real) yields all N bins.
+///
+/// # Complexity
+///
+/// O((N/2)·log₂(N/2)) arithmetic operations for the inner FFT plus O(N) for
+/// packing and unpacking — approximately half the work of a full N-point complex FFT.
+///
+/// # Twiddle reuse
+///
+/// The N/2-point FFT uses `fft_twiddles[0..N/2-1]`. By the contiguous per-stage
+/// layout invariant, stages 1..log₂(N/2) of the N-point table occupy exactly
+/// the first N/2-1 entries. The post-processing twiddles W_N^k are distinct from
+/// the FFT twiddles and are supplied separately as `post_twiddles`.
+///
+/// # In-place unpack correctness
+///
+/// After the inner FFT, `output[0..M]` holds Z[0..M-1]. The unpack writes
+/// X[l] to `output[l]` and X[N-l] = X[l]* to `output[N-l]`. For each pair
+/// (l, M-l) with l < M/2, both Z[l] and Z[M-l] are read before either is
+/// overwritten — since `output[M-l]` (index > M/2) has not been touched by
+/// any earlier pair (which only wrote to indices ≤ pair_l < M/2).
+///
+/// # Preconditions
+///
+/// - `n = input.len() = output.len()`, a power of two, ≥ 4.
+/// - `fft_twiddles.len()` ≥ n/2 - 1.
+/// - `post_twiddles.len()` = n/2 + 1.
+pub fn forward_real_inplace_64(
+    input: &[f64],
+    output: &mut [Complex64],
+    fft_twiddles: &[Complex64],
+    post_twiddles: &[Complex64],
+) {
+    let n = input.len();
+    debug_assert!(n.is_power_of_two() && n >= 4, "real FFT requires PoT length >= 4");
+    let m = n >> 1;
+    debug_assert_eq!(output.len(), n);
+    debug_assert!(fft_twiddles.len() >= m - 1);
+    debug_assert_eq!(post_twiddles.len(), m + 1);
+
+    // Pack: z[k] = x[2k] + i·x[2k+1] into output[0..m]
+    for k in 0..m {
+        output[k] = Complex64::new(input[2 * k], input[2 * k + 1]);
+    }
+
+    // N/2-point forward FFT using the first m-1 twiddle entries.
+    // Correct by the contiguous-layout invariant: stages 1..log₂M occupy
+    // positions 0..M-1 of the N-point forward twiddle table.
+    forward_inplace_64_with_twiddles(&mut output[..m], &fft_twiddles[..m - 1]);
+
+    // In-place unpack. Save Z[0] before overwriting output[0].
+    let z0 = output[0];
+
+    // Process symmetric pairs l, m-l for l = 1..ceil(m/2).
+    // For l < m/2: Z[l] is at output[l] and Z[m-l] is at output[m-l] (m-l > m/2,
+    // so not yet written), avoiding read-after-write aliasing within the loop.
+    let pair_end = (m + 1) / 2;
+    for l in 1..pair_end {
+        let ml = m - l;
+        let zl = output[l];  // Z[l] — still valid
+        let zml = output[ml]; // Z[m-l] — still valid (ml > m/2 ≥ l, not yet written)
+        // X[l]   = (zl + zml*)/2 - i·W_N^l·(zl - zml*)/2
+        let a = (zl + zml.conj()) * 0.5;
+        let b = (zl - zml.conj()) * Complex64::new(0.0, -0.5);
+        let xl = a + post_twiddles[l] * b;
+        // X[m-l] = (zml + zl*)/2 - i·W_N^(m-l)·(zml - zl*)/2
+        let a2 = (zml + zl.conj()) * 0.5;
+        let b2 = (zml - zl.conj()) * Complex64::new(0.0, -0.5);
+        let xml = a2 + post_twiddles[ml] * b2;
+        output[l] = xl;
+        output[ml] = xml;
+        output[n - l] = xl.conj();  // conjugate symmetry: X[N-l] = X[l]*
+        output[n - ml] = xml.conj(); // X[N-(m-l)] = X[m-l]*
+    }
+
+    // Handle middle element when m is even: l = m/2.
+    // output[m/2] was not modified in the loop above (pair_end = m/2 for even m).
+    if m % 2 == 0 {
+        let mid = m / 2;
+        let zmid = output[mid];
+        let a = (zmid + zmid.conj()) * 0.5;
+        let b = (zmid - zmid.conj()) * Complex64::new(0.0, -0.5);
+        let xmid = a + post_twiddles[mid] * b;
+        output[mid] = xmid;
+        output[n - mid] = xmid.conj();
+    }
+
+    // DC bin: X[0] = Z[0].re + Z[0].im  (W_N^0 = 1, A[0] = Z[0].re, B[0] = Z[0].im)
+    output[0] = Complex64::new(z0.re + z0.im, 0.0);
+    // Nyquist bin: X[m] = Z[0].re - Z[0].im  (W_N^m = -1)
+    output[m] = Complex64::new(z0.re - z0.im, 0.0);
+}
+
 /// Build a contiguous per-stage inverse twiddle table for f32.
 pub fn build_inverse_twiddle_table_32(n: usize) -> Vec<Complex32> {
     debug_assert!(n.is_power_of_two());
