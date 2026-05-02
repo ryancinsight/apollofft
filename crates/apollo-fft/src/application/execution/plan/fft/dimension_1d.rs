@@ -3,7 +3,7 @@
 use crate::application::execution::kernel::radix2::{
     build_forward_twiddle_table_32, build_forward_twiddle_table_64,
     build_inverse_twiddle_table_32, build_inverse_twiddle_table_64,
-    build_real_fwd_post_twiddles_64, forward_real_inplace_64,
+    build_real_fwd_post_twiddles_64, forward_real_inplace_64, inverse_real_inplace_64,
     forward_inplace_32_with_twiddles, forward_inplace_64_with_twiddles,
     inverse_inplace_32_with_twiddles, inverse_inplace_64_with_twiddles,
 };
@@ -98,6 +98,11 @@ pub struct FftPlan1D {
     /// Entry k = exp(-2πi·k/N) for k = 0..=N/2. Length N/2+1.
     /// `Some` iff `N` is a power of two ≥ 4; `None` otherwise.
     real_fwd_post_twiddles: Option<Vec<Complex64>>,
+    /// Pre-allocated scratch buffer for the inverse real FFT (iRFFT) trick.
+    /// Length N/2 Complex64. Reused via Mutex. Avoids the per-call N-element
+    /// allocation of the naive `input.to_owned()` path in `inverse_complex_to_real`.
+    /// `Some` iff `N` is a power of two ≥ 4; `None` otherwise.
+    real_inv_scratch: Option<Mutex<Vec<Complex64>>>,
 }
 
 impl std::fmt::Debug for FftPlan1D {
@@ -163,6 +168,14 @@ impl FftPlan1D {
             twiddle_inv_32,
             real_fwd_post_twiddles: if shape.n >= 4 && shape.n.is_power_of_two() {
                 Some(build_real_fwd_post_twiddles_64(shape.n))
+            } else {
+                None
+            },
+            real_inv_scratch: if shape.n >= 4 && shape.n.is_power_of_two() {
+                Some(Mutex::new(vec![
+                    Complex64::new(0.0, 0.0);
+                    shape.n >> 1
+                ]))
             } else {
                 None
             },
@@ -293,13 +306,26 @@ impl FftPlan1D {
         assert_eq!(input.len(), self.n, "inverse input length mismatch");
         assert_eq!(output.len(), self.n, "inverse output length mismatch");
         assert_eq!(scratch.len(), self.n, "inverse scratch length mismatch");
-        scratch.assign(input);
-        self.inverse_complex_inplace(scratch);
-        Zip::from(output)
-            .and(scratch.view())
-            .for_each(|out, value| {
-                *out = value.re;
-            });
+        // Fast path: iRFFT trick. The caller-supplied scratch is N elements but
+        // we only need M=N/2; use the lower half to avoid a lock when the caller
+        // already owns a buffer.
+        if let (Some(inv_tw), Some(post_tw)) =
+            (&self.twiddle_inv_64, &self.real_fwd_post_twiddles)
+        {
+            let input_slice = input.as_slice().expect("input must be contiguous");
+            let output_slice = output.as_slice_mut().expect("output must be contiguous");
+            let scratch_slice = scratch.as_slice_mut().expect("scratch must be contiguous");
+            let m = self.n >> 1;
+            inverse_real_inplace_64(input_slice, output_slice, &mut scratch_slice[..m], inv_tw, post_tw);
+        } else {
+            scratch.assign(input);
+            self.inverse_complex_inplace(scratch);
+            Zip::from(output)
+                .and(scratch.view())
+                .for_each(|out, value| {
+                    *out = value.re;
+                });
+        }
     }
 
     fn inverse_complex_to_real_with_workspace(
@@ -309,13 +335,27 @@ impl FftPlan1D {
     ) {
         assert_eq!(input.len(), self.n, "inverse input length mismatch");
         assert_eq!(output.len(), self.n, "inverse output length mismatch");
-        let mut spectrum = input.to_owned();
-        self.inverse_complex_inplace(&mut spectrum);
-        Zip::from(output)
-            .and(spectrum.view())
-            .for_each(|out, value| {
-                *out = value.re;
-            });
+        // Fast path: iRFFT half-spectrum trick for PoT N ≥ 4.
+        // Uses the M-point inverse FFT (M = N/2) instead of full N-point,
+        // halving the FFT work and eliminating the per-call N-element allocation.
+        if let (Some(inv_tw), Some(post_tw), Some(scratch_mu)) = (
+            &self.twiddle_inv_64,
+            &self.real_fwd_post_twiddles,
+            &self.real_inv_scratch,
+        ) {
+            let input_slice = input.as_slice().expect("input must be contiguous");
+            let output_slice = output.as_slice_mut().expect("output must be contiguous");
+            let mut scratch = scratch_mu.lock().expect("real_inv_scratch mutex poisoned");
+            inverse_real_inplace_64(input_slice, output_slice, &mut scratch, inv_tw, post_tw);
+        } else {
+            let mut spectrum = input.to_owned();
+            self.inverse_complex_inplace(&mut spectrum);
+            Zip::from(output)
+                .and(spectrum.view())
+                .for_each(|out, value| {
+                    *out = value.re;
+                });
+        }
     }
 
     /// Forward transform of a complex signal in-place using a slice.

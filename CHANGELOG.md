@@ -11,6 +11,42 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.7] — Closure XLVI
+
+### Closure XLVI — apollo-fft: iRFFT half-spectrum inverse, cache-blocked 3D gather/scatter [patch]
+
+#### Changed
+- `apollo-fft` / `radix2.rs`: added `inverse_real_inplace_64(input, output, scratch, fft_twiddles, post_twiddles)`.
+  Pre-processes the N/2+1-point Hermitian spectrum into M=N/2 complex values via
+  `Z[k] = (X[k]+conj(X[M-k]))/2 + i·conj(W_k)·(X[k]-conj(X[M-k]))/2` (k=1..M-1) using the
+  same `post_twiddles` as the forward pass; applies an M-point normalized IFFT via
+  `inverse_inplace_64_with_twiddles`; unpacks `x[2k]=Z[k].re`, `x[2k+1]=Z[k].im`. Work
+  ≈ N/2·log₂(N/2) + O(N) vs the previous N·log₂N IFFT of the full complex spectrum.
+  Normalization verified: `inverse_inplace_64_with_twiddles` on M elements divides by M,
+  matching the 1/N normalization of the full N-point IFFT.
+- `apollo-fft` / `dimension_1d.rs`: `FftPlan1D` gains `real_inv_scratch: Option<Mutex<Vec<Complex64>>>`
+  (M=N/2 entries, allocated for PoT N ≥ 4). `inverse_complex_to_real_with_workspace` and
+  `inverse_complex_to_real_into` now dispatch to `inverse_real_inplace_64` when all fast-path
+  fields (`twiddle_inv_64`, `real_fwd_post_twiddles`, `real_inv_scratch`) are available.
+- `apollo-fft` / `dimension_3d.rs`: added `const GATHER_TILE: usize = 32`. Both
+  `axis1_pass_complex` (f64/f32) and `axis0_pass_complex` (f64/f32) replace plain nested gather
+  and scatter loops with GATHER_TILE×GATHER_TILE-blocked loops. For axis-1 the (j,k)-plane is
+  tiled per i-slice; for axis-0 the (j,k)-plane is tiled with inner i-stride. A 32×32 tile of
+  Complex64 = 16 KB, fitting in L1 cache (32–48 KB), eliminating cold-miss penalties during
+  non-contiguous axis transposes. Applied to all four gather/scatter sites (f64 axis-1, f64
+  axis-0, f32 axis-1, f32 axis-0).
+
+#### Performance (Closure XLVI vs numpy baseline)
+| Case          | After XLV | After XLVI | Change |
+|---|---|---|---|
+| 3D 32³        | 0.95×     | **1.48×**  | +56%   |
+| 2D 1024×1024  | 1.06×     | **1.84×**  | +73%   |
+| 2D 128×128    | 0.85×     | **0.93×**  | +9%    |
+| 1D real N=256 | 3.64×     | **4.27×**  | +17%   |
+| 1D real N=1024| 2.14×     | **2.42×**  | +13%   |
+
+---
+
 ## [0.13.6] — Closure XLV
 
 ### Closure XLV — apollo-fft: real FFT half-spectrum trick, rayon sequential threshold, cache-blocked transpose [patch]

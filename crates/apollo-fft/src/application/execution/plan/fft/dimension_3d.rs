@@ -58,6 +58,14 @@ use num_complex::Complex32;
 /// Below the threshold, sequential iteration avoids rayon task-spawn overhead
 /// that dominates for small volumes (e.g. 8³ = 512 elements).
 const RAYON_THRESHOLD: usize = 32768;
+
+/// Tile size for cache-blocked gather/scatter in axis-1 and axis-0 passes.
+///
+/// For each i-slice in axis-1, the gather is a [ny][nz] → [nz][ny] transpose.
+/// A 32×32 tile of Complex64 = 16 KB, fitting in L1 (32–48 KB). The same
+/// value works for axis-0 ([j,k]-plane transposes). Corresponds to the same
+/// TRANSPOSE_TILE used in dimension_2d.rs.
+const GATHER_TILE: usize = 32;
 use num_complex::Complex64;
 use rayon::prelude::*;
 
@@ -585,11 +593,20 @@ impl FftPlan3D {
             .as_slice_memory_order_mut()
             .expect("3D complex data must be contiguous");
         let mut scratch = self.scratch_y_64.lock().expect("scratch_y_64 mutex poisoned");
+        // Cache-blocked gather: data[i,j,k] (row-major) → scratch[i,k,j].
+        // For each i, tiling the [ny × nz] → [nz × ny] transpose with GATHER_TILE×GATHER_TILE
+        // tiles keeps both source and destination in L1 during the inner loop.
         for i in 0..self.nx {
-            for k in 0..self.nz {
-                let lane_base = (i * self.nz + k) * self.ny;
-                for j in 0..self.ny {
-                    scratch[lane_base + j] = data_slice[(i * self.ny + j) * self.nz + k];
+            for k_t in (0..self.nz).step_by(GATHER_TILE) {
+                let k_end = (k_t + GATHER_TILE).min(self.nz);
+                for j_t in (0..self.ny).step_by(GATHER_TILE) {
+                    let j_end = (j_t + GATHER_TILE).min(self.ny);
+                    for k in k_t..k_end {
+                        let lane_base = (i * self.nz + k) * self.ny;
+                        for j in j_t..j_end {
+                            scratch[lane_base + j] = data_slice[(i * self.ny + j) * self.nz + k];
+                        }
+                    }
                 }
             }
         }
@@ -603,11 +620,18 @@ impl FftPlan3D {
         } else {
             scratch.chunks_mut(self.ny).for_each(lane_fn_64);
         }
+        // Cache-blocked scatter: reverse the gather permutation.
         for i in 0..self.nx {
-            for k in 0..self.nz {
-                let lane_base = (i * self.nz + k) * self.ny;
-                for j in 0..self.ny {
-                    data_slice[(i * self.ny + j) * self.nz + k] = scratch[lane_base + j];
+            for k_t in (0..self.nz).step_by(GATHER_TILE) {
+                let k_end = (k_t + GATHER_TILE).min(self.nz);
+                for j_t in (0..self.ny).step_by(GATHER_TILE) {
+                    let j_end = (j_t + GATHER_TILE).min(self.ny);
+                    for k in k_t..k_end {
+                        let lane_base = (i * self.nz + k) * self.ny;
+                        for j in j_t..j_end {
+                            data_slice[(i * self.ny + j) * self.nz + k] = scratch[lane_base + j];
+                        }
+                    }
                 }
             }
         }
@@ -618,11 +642,19 @@ impl FftPlan3D {
             .as_slice_memory_order_mut()
             .expect("3D complex data must be contiguous");
         let mut scratch = self.scratch_x_64.lock().expect("scratch_x_64 mutex poisoned");
-        for j in 0..self.ny {
-            for k in 0..self.nz {
-                let lane_base = (j * self.nz + k) * self.nx;
-                for i in 0..self.nx {
-                    scratch[lane_base + i] = data_slice[(i * self.ny + j) * self.nz + k];
+        // Cache-blocked gather: data[i,j,k] → scratch[j,k,i].
+        // Tile (j,k) to keep both arrays in L1 during the inner i-loop.
+        for j_t in (0..self.ny).step_by(GATHER_TILE) {
+            let j_end = (j_t + GATHER_TILE).min(self.ny);
+            for k_t in (0..self.nz).step_by(GATHER_TILE) {
+                let k_end = (k_t + GATHER_TILE).min(self.nz);
+                for j in j_t..j_end {
+                    for k in k_t..k_end {
+                        let lane_base = (j * self.nz + k) * self.nx;
+                        for i in 0..self.nx {
+                            scratch[lane_base + i] = data_slice[(i * self.ny + j) * self.nz + k];
+                        }
+                    }
                 }
             }
         }
@@ -636,11 +668,18 @@ impl FftPlan3D {
         } else {
             scratch.chunks_mut(self.nx).for_each(lane_fn_64);
         }
-        for j in 0..self.ny {
-            for k in 0..self.nz {
-                let lane_base = (j * self.nz + k) * self.nx;
-                for i in 0..self.nx {
-                    data_slice[(i * self.ny + j) * self.nz + k] = scratch[lane_base + i];
+        // Cache-blocked scatter.
+        for j_t in (0..self.ny).step_by(GATHER_TILE) {
+            let j_end = (j_t + GATHER_TILE).min(self.ny);
+            for k_t in (0..self.nz).step_by(GATHER_TILE) {
+                let k_end = (k_t + GATHER_TILE).min(self.nz);
+                for j in j_t..j_end {
+                    for k in k_t..k_end {
+                        let lane_base = (j * self.nz + k) * self.nx;
+                        for i in 0..self.nx {
+                            data_slice[(i * self.ny + j) * self.nz + k] = scratch[lane_base + i];
+                        }
+                    }
                 }
             }
         }
@@ -688,10 +727,16 @@ impl FftPlan3D {
             .expect("3D f32 complex data must be contiguous");
         let mut scratch = self.scratch_y_32.lock().expect("scratch_y_32 mutex poisoned");
         for i in 0..self.nx {
-            for k in 0..self.nz {
-                let lane_base = (i * self.nz + k) * self.ny;
-                for j in 0..self.ny {
-                    scratch[lane_base + j] = data_slice[(i * self.ny + j) * self.nz + k];
+            for k_t in (0..self.nz).step_by(GATHER_TILE) {
+                let k_end = (k_t + GATHER_TILE).min(self.nz);
+                for j_t in (0..self.ny).step_by(GATHER_TILE) {
+                    let j_end = (j_t + GATHER_TILE).min(self.ny);
+                    for k in k_t..k_end {
+                        let lane_base = (i * self.nz + k) * self.ny;
+                        for j in j_t..j_end {
+                            scratch[lane_base + j] = data_slice[(i * self.ny + j) * self.nz + k];
+                        }
+                    }
                 }
             }
         }
@@ -706,10 +751,16 @@ impl FftPlan3D {
             scratch.chunks_mut(self.ny).for_each(lane_fn_32);
         }
         for i in 0..self.nx {
-            for k in 0..self.nz {
-                let lane_base = (i * self.nz + k) * self.ny;
-                for j in 0..self.ny {
-                    data_slice[(i * self.ny + j) * self.nz + k] = scratch[lane_base + j];
+            for k_t in (0..self.nz).step_by(GATHER_TILE) {
+                let k_end = (k_t + GATHER_TILE).min(self.nz);
+                for j_t in (0..self.ny).step_by(GATHER_TILE) {
+                    let j_end = (j_t + GATHER_TILE).min(self.ny);
+                    for k in k_t..k_end {
+                        let lane_base = (i * self.nz + k) * self.ny;
+                        for j in j_t..j_end {
+                            data_slice[(i * self.ny + j) * self.nz + k] = scratch[lane_base + j];
+                        }
+                    }
                 }
             }
         }
@@ -720,11 +771,17 @@ impl FftPlan3D {
             .as_slice_memory_order_mut()
             .expect("3D f32 complex data must be contiguous");
         let mut scratch = self.scratch_x_32.lock().expect("scratch_x_32 mutex poisoned");
-        for j in 0..self.ny {
-            for k in 0..self.nz {
-                let lane_base = (j * self.nz + k) * self.nx;
-                for i in 0..self.nx {
-                    scratch[lane_base + i] = data_slice[(i * self.ny + j) * self.nz + k];
+        for j_t in (0..self.ny).step_by(GATHER_TILE) {
+            let j_end = (j_t + GATHER_TILE).min(self.ny);
+            for k_t in (0..self.nz).step_by(GATHER_TILE) {
+                let k_end = (k_t + GATHER_TILE).min(self.nz);
+                for j in j_t..j_end {
+                    for k in k_t..k_end {
+                        let lane_base = (j * self.nz + k) * self.nx;
+                        for i in 0..self.nx {
+                            scratch[lane_base + i] = data_slice[(i * self.ny + j) * self.nz + k];
+                        }
+                    }
                 }
             }
         }
@@ -738,11 +795,17 @@ impl FftPlan3D {
         } else {
             scratch.chunks_mut(self.nx).for_each(lane_fn_32);
         }
-        for j in 0..self.ny {
-            for k in 0..self.nz {
-                let lane_base = (j * self.nz + k) * self.nx;
-                for i in 0..self.nx {
-                    data_slice[(i * self.ny + j) * self.nz + k] = scratch[lane_base + i];
+        for j_t in (0..self.ny).step_by(GATHER_TILE) {
+            let j_end = (j_t + GATHER_TILE).min(self.ny);
+            for k_t in (0..self.nz).step_by(GATHER_TILE) {
+                let k_end = (k_t + GATHER_TILE).min(self.nz);
+                for j in j_t..j_end {
+                    for k in k_t..k_end {
+                        let lane_base = (j * self.nz + k) * self.nx;
+                        for i in 0..self.nx {
+                            data_slice[(i * self.ny + j) * self.nz + k] = scratch[lane_base + i];
+                        }
+                    }
                 }
             }
         }

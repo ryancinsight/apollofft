@@ -267,6 +267,111 @@ pub fn forward_real_inplace_64(
     output[m] = Complex64::new(z0.re - z0.im, 0.0);
 }
 
+/// Inverse real FFT via half-length complex packing (conjugate of the forward trick).
+///
+/// # Algorithm
+///
+/// Given a full N-point Hermitian spectrum X (X[N-k] = X[k]* for all k), recover
+/// the real signal x of length N. The algorithm inverts `forward_real_inplace_64`:
+///
+/// **Pre-process** (solve for Z from X using the forward unpack formula):
+///
+/// From the forward unpack identity, letting a = Z[k] and b = conj(Z[M-k]):
+///
+///   X[k] = a*(1-i·W_k)/2 + b*(1+i·W_k)/2
+///   conj(X[M-k]) = a*(1+i·W_k)/2 + b*(1-i·W_k)/2
+///
+/// where W_k = post_twiddles[k] = exp(-2πi·k/N) and M = N/2.
+///
+/// Adding and subtracting:
+///   a + b = X[k] + conj(X[M-k])
+///   a - b = i·conj(W_k)·(X[k] - conj(X[M-k]))
+///
+/// Solving: Z[k] = (X[k] + conj(X[M-k]))/2 + i·conj(W_k)·(X[k] - conj(X[M-k]))/2
+///
+/// Note: i·conj(W_k) = i·(W_k.re - i·W_k.im) = (W_k.im, W_k.re) as Complex64.
+///
+/// **Special cases:**
+/// - k = 0: W_0 = 1, X[0] and X[M] are real, so Z[0] = (X[0]+X[M])/2 + i·(X[0]-X[M])/2.
+///
+/// **M-point normalized IFFT:** `inverse_inplace_64_with_twiddles` on scratch[0..M]
+/// divides by M, giving z[k] = x[2k] + i·x[2k+1].
+///
+/// **Unpack:** x[2k] = z[k].re, x[2k+1] = z[k].im.
+///
+/// # Twiddle reuse
+///
+/// `fft_twiddles` is the N-point inverse table. Stages 1..log₂M occupy
+/// positions 0..M-1, identical to the M-point inverse table.
+/// `post_twiddles` is the same table as `build_real_fwd_post_twiddles_64(N)`,
+/// reused from the plan's forward field.
+///
+/// # Complexity
+///
+/// O((N/2)·log₂(N/2)) for the inner IFFT plus O(N) pre-process and unpack.
+/// Eliminates the N-point complex IFFT and the per-call N-element allocation of
+/// the naive path.
+///
+/// # Memory
+///
+/// Requires a caller-supplied scratch of M = N/2 Complex64 entries (plan-owned
+/// via `real_inv_scratch`).
+///
+/// # Preconditions
+///
+/// - `input.len() = output.len() = N`, power of two, ≥ 4.
+/// - `scratch.len()` = N/2.
+/// - `fft_twiddles.len()` ≥ N/2 - 1.
+/// - `post_twiddles.len()` = N/2 + 1.
+/// - `input` has Hermitian symmetry: input[N-k] = input[k]* for all k.
+pub fn inverse_real_inplace_64(
+    input: &[Complex64],
+    output: &mut [f64],
+    scratch: &mut [Complex64],
+    fft_twiddles: &[Complex64],
+    post_twiddles: &[Complex64],
+) {
+    let n = input.len();
+    debug_assert!(n.is_power_of_two() && n >= 4, "iRFFT requires PoT length >= 4");
+    let m = n >> 1;
+    debug_assert_eq!(output.len(), n);
+    debug_assert_eq!(scratch.len(), m);
+    debug_assert!(fft_twiddles.len() >= m - 1);
+    debug_assert_eq!(post_twiddles.len(), m + 1);
+
+    // k = 0: W_0 = 1, conj(W_0) = 1, i*conj(W_0) = i.
+    // X[0] and X[M] are real (Hermitian spectrum at DC and Nyquist).
+    scratch[0] = Complex64::new(
+        (input[0].re + input[m].re) * 0.5,
+        (input[0].re - input[m].re) * 0.5,
+    );
+
+    // General k = 1..M-1: Z[k] = (X[k] + conj(X[M-k]))/2 + i*conj(W_k)*(X[k] - conj(X[M-k]))/2
+    // i*conj(W_k) = i*(W_k.re - i*W_k.im) = W_k.im + i*W_k.re
+    for k in 1..m {
+        let xk = input[k];
+        let xmk_conj = input[m - k].conj();
+        let sum = xk + xmk_conj;
+        let diff = xk - xmk_conj;
+        let wk = post_twiddles[k];
+        // i·conj(W_k) as a complex multiplier: real part = W_k.im, imag part = W_k.re
+        let i_conj_wk = Complex64::new(wk.im, wk.re);
+        scratch[k] = (sum + i_conj_wk * diff) * 0.5;
+    }
+
+    // M-point normalized IFFT on scratch[0..M].
+    // `inverse_inplace_64_with_twiddles` applies the 1/M scale, giving z[k] = x[2k]+i*x[2k+1].
+    // Correctness: stages 1..log₂M occupy the first M-1 positions of the N-point inverse
+    // twiddle table (same contiguous-layout invariant as the forward path).
+    inverse_inplace_64_with_twiddles(scratch, &fft_twiddles[..m - 1]);
+
+    // Unpack: z[k] = x[2k] + i*x[2k+1]
+    for k in 0..m {
+        output[2 * k] = scratch[k].re;
+        output[2 * k + 1] = scratch[k].im;
+    }
+}
+
 /// Build a contiguous per-stage inverse twiddle table for f32.
 pub fn build_inverse_twiddle_table_32(n: usize) -> Vec<Complex32> {
     debug_assert!(n.is_power_of_two());
