@@ -358,7 +358,13 @@ impl StftWgpuBackend {
     /// Execute the inverse STFT using pre-allocated GPU buffers.
     ///
     /// Reuses GPU resources from buffers.
-    pub fn execute_inverse_with_buffers(
+        /// Pre-allocated GPU resources in `buffers` are reused to avoid per-call allocation.
+        /// Non-power-of-two `frame_len` plans delegate to the allocating Chirp-Z path and
+        /// copy the result into `buffers.inv_output_host`.
+        ///
+        /// # Errors
+        /// Returns `WgpuError::InvalidPlan` if `frame_len == 0` or `hop_len == 0`.
+        pub fn execute_inverse_with_buffers(
         &self,
         plan: &StftWgpuPlan,
         spectrum: &[Complex32],

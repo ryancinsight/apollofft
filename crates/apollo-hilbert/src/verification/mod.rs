@@ -94,3 +94,45 @@ mod tests {
         }
     }
 }
+
+    #[cfg(test)]
+    mod extended_tests {
+        use crate::HilbertPlan;
+        use approx::assert_abs_diff_eq;
+
+        #[test]
+        fn instantaneous_frequency_constant_tone() {
+            // A discrete cosine at normalised frequency k/N has analytic signal
+            // exp(2πi·k·n/N), so the instantaneous frequency should be k/N cycles
+            // per sample at every step.
+            let n: usize = 64;
+            let k: usize = 5;
+            let f_expected = k as f64 / n as f64;
+            let signal: Vec<f64> = (0..n)
+                .map(|i| (std::f64::consts::TAU * k as f64 * i as f64 / n as f64).cos())
+                .collect();
+            let plan = HilbertPlan::new(n).expect("plan");
+            let analytic = plan.analytic_signal(&signal).expect("analytic");
+            let freq = analytic.instantaneous_frequency();
+            assert_eq!(freq.len(), n - 1);
+            for f in &freq {
+                assert_abs_diff_eq!(f, &f_expected, epsilon = 1.0e-10);
+            }
+        }
+
+        #[test]
+        fn double_hilbert_negates_zero_mean_signal() {
+            // H{H{x}} = −x for band-limited zero-mean discrete signals.
+            // Applying the Hilbert transform twice should recover the negation.
+            let n: usize = 32;
+            let signal: Vec<f64> = (0..n)
+                .map(|i| (std::f64::consts::TAU * 3.0 * i as f64 / n as f64).sin())
+                .collect();
+            let plan = HilbertPlan::new(n).expect("plan");
+            let h1 = plan.transform(&signal).expect("first hilbert");
+            let h2 = plan.transform(&h1).expect("second hilbert");
+            for (h2_val, original) in h2.iter().zip(signal.iter()) {
+                assert_abs_diff_eq!(h2_val, &(-original), epsilon = 1.0e-10);
+            }
+        }
+    }

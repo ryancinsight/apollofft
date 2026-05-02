@@ -455,6 +455,21 @@ pub fn run_published_reference_suite() -> SuiteResult<PublishedReferenceReport> 
         radon_theta0_column_impulse_projection_fixture()?,
         czt_inverse_vandermonde_roundtrip_fixture()?,
         mellin_inverse_spectrum_constant_roundtrip_fixture()?,
+        hilbert_instantaneous_frequency_constant_tone_fixture()?,
+        wavelet_haar_inverse_perfect_reconstruction_fixture()?,
+        gft_path_graph_inverse_roundtrip_fixture()?,
+        frft_inverse_roundtrip_order_half_fixture()?,
+        fwht_inverse_roundtrip_fixture()?,
+        qft_inverse_roundtrip_fixture()?,
+        sht_inverse_roundtrip_y10_fixture()?,
+        dht_inverse_roundtrip_fixture()?,
+        sft_inverse_roundtrip_fixture()?,
+        ntt_inverse_roundtrip_fixture()?,
+        stft_hann_wola_inverse_roundtrip_fixture()?,
+        dct4_inverse_roundtrip_two_point_fixture()?,
+        dst4_inverse_roundtrip_two_point_fixture()?,
+        dct1_inverse_roundtrip_three_point_fixture()?,
+        dst1_inverse_roundtrip_two_point_fixture()?,
     ];
     let passed = fixtures.iter().all(|fixture| fixture.passed);
     Ok(PublishedReferenceReport {
@@ -1434,6 +1449,35 @@ fn hilbert_cosine_to_sine_fixture() -> SuiteResult<PublishedFixtureReport> {
     ))
 }
 
+fn hilbert_instantaneous_frequency_constant_tone_fixture() -> SuiteResult<PublishedFixtureReport> {
+    // Instantaneous frequency of a discrete cosine at normalised frequency f₀ = k/N.
+    // The analytic signal of cos(2πkn/N) is exp(2πi·k·n/N), so:
+    //   f[n] = arg(conj(z[n]) · z[n+1]) / (2π) = k/N (constant).
+    // Reference: Boashash (1992) "Estimating and interpreting the instantaneous
+    //            frequency of a signal", Proc. IEEE 80(4): §II.A complex-derivative
+    //            formula f(t) = (1/2π) d/dt arg(z(t)).
+    const TOL: f64 = 1.0e-10;
+    let n: usize = 64;
+    let k: usize = 5;
+    let f_expected = k as f64 / n as f64;
+    let signal: Vec<f64> = (0..n)
+        .map(|i| (std::f64::consts::TAU * k as f64 * i as f64 / n as f64).cos())
+        .collect();
+    let plan = HilbertPlan::new(n)?;
+    let analytic = plan.analytic_signal(&signal)?;
+    let freq = analytic.instantaneous_frequency();
+    // freq has length N-1; compare each sample to f_expected
+    let expected: Vec<f64> = vec![f_expected; freq.len()];
+    Ok(published_real_fixture_with_threshold(
+        "Hilbert",
+        "Hilbert-instantaneous-frequency-tone(N=64,k=5)",
+        "Boashash (1992) §II.A: IF of cos(2πkn/N) is k/N via complex-derivative formula",
+        &freq,
+        &expected,
+        TOL,
+    ))
+}
+
 fn mellin_constant_function_first_moment_fixture() -> SuiteResult<PublishedFixtureReport> {
     // Mellin moment M(s) = ∫_a^b f(r) r^{s-1} dr for f(r)=1, s=1, a=1, b=3.
     // M(1) = ∫_1^3 1·r^0 dr = ∫_1^3 1 dr = b - a = 2.0.
@@ -1554,6 +1598,463 @@ fn mellin_inverse_spectrum_constant_roundtrip_fixture() -> SuiteResult<Published
     ))
 }
 
+/// Haar DWT perfect reconstruction: inverse(forward(x)) = x.
+///
+/// # Mathematical contract
+///
+/// Mallat (1989) §3.1 Theorem 2 (perfect reconstruction for two-channel QMF banks):
+/// if the synthesis filters are the exact duals of the analysis filters, then
+/// IDWT(DWT(x)) = x for every finite-energy signal x.  For the Haar pair
+/// h = [1/√2, 1/√2] (lowpass) and g = [1/√2, −1/√2] (highpass), this holds
+/// exactly in infinite precision.  f64 accumulation error for N=4, 1-level is
+/// bounded by O(N·ε_f64) ≈ 4×2.2×10⁻¹⁶ ≈ 9×10⁻¹⁶; threshold is 1×10⁻¹².
+/// Reference: Haar (1910); Mallat (1989) §3.1 Theorem 2.
+fn wavelet_haar_inverse_perfect_reconstruction_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let signal = [1.0_f64, -1.0, 0.0, 0.0];
+    let plan = DwtPlan::new(4, 1, DiscreteWavelet::Haar)?;
+    let coefficients = plan.forward(&signal)?;
+    let recovered = plan.inverse(&coefficients)?;
+    Ok(published_real_fixture_with_threshold(
+        "DWT-Haar",
+        "Haar-DWT-inverse-roundtrip(N=4,[1,-1,0,0])",
+        "Mallat (1989) §3.1 Theorem 2: perfect reconstruction IDWT(DWT(x))=x for Haar QMF; Haar (1910)",
+        &recovered,
+        &signal,
+        1.0e-12,
+    ))
+}
+
+/// GFT K₂ path graph inverse roundtrip: inverse(forward(s)) = s.
+///
+/// # Mathematical contract
+///
+/// The graph Fourier transform diagonalises the Laplacian via its real symmetric
+/// eigenbasis U: GFT(s) = Uᵀs and GFT⁻¹(ŝ) = Uŝ (Sandryhaila & Moura 2013,
+/// ICASSP, §II).  Since U is orthonormal (UUᵀ = I), the composition gives
+/// GFT⁻¹(GFT(s)) = UUᵀs = s exactly.  For the K₂ path graph with 2×2 Laplacian,
+/// eigendecomposition is exact in f64; roundtrip error is bounded by O(N·ε_f64)
+/// ≈ 4.4×10⁻¹⁶; threshold is 1×10⁻¹².
+/// Reference: Sandryhaila and Moura (2013), ICASSP: GFT via Laplacian eigendecomposition.
+fn gft_path_graph_inverse_roundtrip_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let adjacency = DMatrix::from_row_slice(2, 2, &[0.0_f64, 1.0, 1.0, 0.0]);
+    let plan = GftPlan::from_adjacency(&adjacency)?;
+    let signal = Array1::from_vec(vec![3.0_f64, -1.0]);
+    let spectrum = plan.forward(&signal)?;
+    let recovered = plan.inverse(&spectrum)?;
+    let expected = [3.0_f64, -1.0];
+    Ok(published_real_fixture_with_threshold(
+        "GFT",
+        "GFT-K2-inverse-roundtrip([3,-1])",
+        "Sandryhaila and Moura (2013) ICASSP §II: GFT\u{207b}\u{00b9}(GFT(s))=s via orthonormal Laplacian eigenbasis U; K\u{2082} path graph",
+        recovered.as_slice().unwrap(),
+        &expected,
+        1.0e-12,
+    ))
+}
+
+/// Unitary FrFT inverse roundtrip: FrFT(−α)(FrFT(α)(x)) = x for α=0.5.
+///
+/// # Mathematical contract
+///
+/// By the FrFT additivity theorem (Namias 1980, J. IMA 25(3) §2):
+/// F^α ∘ F^β = F^{α+β} for all real orders α, β.  Setting β = −α gives
+/// F^{−α}(F^α(x)) = F^0(x) = x (identity at order 0).  For α=0.5, N=4:
+/// the unitary plan's `inverse` method applies `forward` with negated order,
+/// so the composition reduces exactly to order 0, which is the identity.
+/// f64 roundtrip error via Grünbaum eigendecomposition for N=4 is bounded by
+/// O(N²·ε_f64) ≈ 16×2.2×10⁻¹⁶ ≈ 3.5×10⁻¹⁵ per transform, O(7×10⁻¹⁵) total;
+/// threshold is 1×10⁻¹² (three orders of margin).
+/// Reference: Namias (1980), J. Inst. Math. Appl. 25(3); Candan et al. (2000) §II.
+fn frft_inverse_roundtrip_order_half_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let input = Array1::from_vec(vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(2.0, 0.0),
+        Complex64::new(3.0, 0.0),
+        Complex64::new(4.0, 0.0),
+    ]);
+    let plan = UnitaryFrftPlan::new(4, 0.5)?;
+    let spectrum = plan.forward(&input)?;
+    let recovered = plan.inverse(&spectrum)?;
+    let expected = [
+        Complex64::new(1.0, 0.0),
+        Complex64::new(2.0, 0.0),
+        Complex64::new(3.0, 0.0),
+        Complex64::new(4.0, 0.0),
+    ];
+    Ok(published_complex_fixture(
+        "UnitaryFrFT",
+        "UnitaryFrFT-inverse-roundtrip(alpha=0.5,N=4,[1,2,3,4])",
+        "Namias (1980) J.IMA 25(3) sec.2 FrFT additivity: F^{-alpha}(F^alpha(x))=x; Candan et al. (2000) sec.II",
+        recovered.iter(),
+        expected.iter(),
+    ))
+}
+
+/// FWHT inverse roundtrip: `inverse(forward(x)) = x` for N=4.
+///
+/// # Mathematical contract
+///
+/// Walsh (1923) Am. J. Math. 45 §2: the Walsh-Hadamard matrix W_N satisfies
+/// W_N · W_N = N · I_N (involution), so W_N⁻¹ = (1/N)·W_N. The `inverse`
+/// method applies W_N then scales by 1/N; composition gives
+/// `inverse(forward(x)) = (1/N)·W_N·(W_N·x) = x`. For N=4 f64 butterfly
+/// arithmetic, roundtrip error is O(log₂(N)·ε_f64) ≈ 8.9×10⁻¹⁶; threshold 1×10⁻¹⁴.
+/// Reference: Walsh (1923) §2: {H_k} is a complete ONS; W_N²=N·I_N.
+fn fwht_inverse_roundtrip_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let input = [1.0_f64, 2.0, 3.0, 4.0];
+    let plan = FwhtPlan::new(4)?;
+    let signal = Array1::from_vec(input.to_vec());
+    let spectrum = plan.forward(&signal)?;
+    let recovered = plan.inverse(&spectrum)?;
+    Ok(published_real_fixture_with_threshold(
+        "FWHT",
+        "FWHT-inverse-roundtrip(N=4,[1,2,3,4])",
+        "Walsh (1923) Am. J. Math. 45 sec.2: W_N^2=N*I, IFWHT(FWHT(x))=x; Hadamard (1893)",
+        recovered.as_slice().unwrap(),
+        &input,
+        1.0e-14,
+    ))
+}
+
+/// QFT inverse roundtrip: `iqft(qft(x)) = x` for N=4.
+///
+/// # Mathematical contract
+///
+/// Shor (1994) Proc. 35th FOCS §2: QFT_N is unitary, QFT_N† · QFT_N = I_N.
+/// The `iqft` free function is the conjugate transpose QFT_N†; both `qft`
+/// and `iqft` apply the 1/√N factor (symmetric unitary normalisation). For
+/// N=4 (2-qubit computational basis |0000⟩ = [1,0,0,0]), the composition
+/// `iqft(qft([1,0,0,0])) = [1,0,0,0]` in exact f64; threshold 1×10⁻¹².
+/// Reference: Shor (1994) §2; Nielsen & Chuang (2000) §5.1.
+fn qft_inverse_roundtrip_fixture() -> SuiteResult<PublishedFixtureReport> {
+    use apollo_qft::iqft as iqft_fn;
+    let input = Array1::from_vec(vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ]);
+    let spectrum = qft_transform(&input)?;
+    let recovered = iqft_fn(&spectrum)?;
+    let expected = [
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ];
+    Ok(published_complex_fixture(
+        "QFT",
+        "QFT-inverse-roundtrip(N=4,[1,0,0,0])",
+        "Shor (1994) sec.2: QFT_N unitary, QFT_N^{dagger}*QFT_N=I; Nielsen & Chuang (2000) sec.5.1",
+        recovered.iter(),
+        expected.iter(),
+    ))
+}
+
+/// SHT inverse roundtrip for dipole Y_1^0 (Driscoll-Healy 1994).
+///
+/// # Mathematical contract
+///
+/// Driscoll & Healy (1994) Adv. Appl. Math. 15, Theorem 1: for a field
+/// band-limited to degree ≤ L, the SHT is exactly invertible when the grid
+/// satisfies N_lat > L and N_lon ≥ 2L+1. The dipole Y_1^0(θ,φ) = √(3/4π)·cos θ
+/// has degree 1 ≤ lmax=1; plan grid: N_lat=12 > 1, N_lon=25 ≥ 3. Gauss-Legendre
+/// weights integrate cos θ products to machine precision; uniform longitude DFT
+/// recovers azimuthal modes exactly. Roundtrip error O((L+1)²·ε_f64) < 1×10⁻¹³;
+/// threshold 1×10⁻¹⁰ (three orders of margin).
+/// Reference: Driscoll & Healy (1994) §2 sampling theorem on S².
+fn sht_inverse_roundtrip_y10_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = ShtPlan::new(12, 25, 1)?;
+    let n_lat = plan.grid().latitudes();
+    let n_lon = plan.grid().longitudes();
+    let mut samples_flat = Vec::with_capacity(n_lat * n_lon);
+    let mut sample_arr = ndarray::Array2::<f64>::zeros((n_lat, n_lon));
+    for lat in 0..n_lat {
+        let theta = plan.theta(lat);
+        let val = (3.0_f64 / (4.0 * std::f64::consts::PI)).sqrt() * theta.cos();
+        for lon in 0..n_lon {
+            sample_arr[[lat, lon]] = val;
+            samples_flat.push(val);
+        }
+    }
+    let coefficients = plan.forward_real(&sample_arr)?;
+    let recovered = plan.inverse_real(&coefficients)?;
+    let recovered_flat: Vec<f64> = recovered.iter().copied().collect();
+    Ok(published_real_fixture_with_threshold(
+        "SHT",
+        "SHT-Y10-inverse-roundtrip(lmax=1,lat=12,lon=25)",
+        "Driscoll & Healy (1994) Adv. Appl. Math. 15 Theorem 1: SHT invertible for band-limited fields; Y_1^0=sqrt(3/4pi)*cos(theta)",
+        &recovered_flat,
+        &samples_flat,
+        1.0e-10,
+    ))
+}
+
+/// DHT 4-point inverse roundtrip: IDHT(DHT(x)) = x.
+///
+/// # Mathematical contract
+///
+/// The DHT kernel: H[k] = Σ_{n=0}^{N-1} x[n] · cas(2πnk/N), cas(t) = cos(t) + sin(t).
+/// For the inverse: IDHT(X)[n] = (1/N) · DHT(X)[n] (self-reciprocal property, H²=NI).
+/// For x=[3,-1,2,0] and N=4:
+///   H[0] = 3-1+2+0 = 4
+///   H[1] = 3·cas(0) + (-1)·cas(π/2) + 2·cas(π) + 0·cas(3π/2) = 3-1-2 = 0
+///   H[2] = 3·cas(0) + (-1)·cas(π) + 2·cas(2π) + 0·cas(3π) = 3+1+2 = 6
+///   H[3] = 3·cas(0) + (-1)·cas(3π/2) + 2·cas(3π) + 0·cas(9π/2) = 3+1-2 = 2
+/// DHT([3,-1,2,0]) = [4,0,6,2].
+/// IDHT([4,0,6,2]) = DHT([4,0,6,2]) / 4 = [12,-4,8,0] / 4 = [3,-1,2,0]. ✓
+/// Roundtrip error bounded by butterfly accumulation: O(log₂N · ε_f64) < 1×10⁻¹⁴ for N=4.
+/// Reference: Bracewell (1983) JOSA 73(12): DHT self-reciprocal property H²=NI; inverse = (1/N)·DHT.
+fn dht_inverse_roundtrip_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = DhtPlan::new(4)?;
+    let input = [3.0_f64, -1.0, 2.0, 0.0];
+    let spectrum = plan.forward(&input)?;
+    let recovered = plan.inverse(&spectrum)?;
+    Ok(published_real_fixture_with_threshold(
+        "DHT",
+        "DHT-inverse-roundtrip([3,-1,2,0],N=4)",
+        "Bracewell (1983) JOSA 73(12): DHT self-reciprocal H\u{00b2}=NI; IDHT(DHT(x))=x; x=[3,-1,2,0]",
+        &recovered,
+        &input,
+        1.0e-14,
+    ))
+}
+
+/// SFT 1-sparse alternating tone inverse roundtrip: ISFT(SFT(x)) = x.
+///
+/// # Mathematical contract
+///
+/// Signal x[n] = (-1)^n for N=4 is a pure tone at frequency k=2.
+/// DFT: X[k] = N·δ(k-N/2) = 4·δ(k-2), so X = [0,0,4,0].
+/// SparseFftPlan::new(4,1) retains K=1 largest coefficient: freq=2, value=4+0i.
+/// SparseSpectrum is exactly [0,0,4+0i,0] when expanded.
+/// ISFT expands to dense [0,0,4,0] then applies IFFT normalized by 1/N:
+///   x_rec[n] = (1/4)·Σ_k X[k]·e^{2πink/N} = (1/4)·4·e^{iπn} = e^{iπn} = [1,-1,1,-1]. ✓
+/// Threshold 1×10⁻¹² covers IEEE 754 rounding of e^{iπn} for n=0..3.
+/// Reference: Cooley-Tukey (1965): DFT[(−1)^n]=N·δ[k−N/2];
+///            Hassanieh et al. (2012) sFFT exact K-sparse recovery;
+///            Candès & Wakin (2008) RIP exact reconstruction theorem.
+fn sft_inverse_roundtrip_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = SparseFftPlan::new(4, 1)?;
+    let signal = [
+        Complex64::new(1.0, 0.0),
+        Complex64::new(-1.0, 0.0),
+        Complex64::new(1.0, 0.0),
+        Complex64::new(-1.0, 0.0),
+    ];
+    let spectrum = plan.forward(&signal)?;
+    let recovered = plan.inverse(&spectrum)?;
+    Ok(published_complex_fixture(
+        "SFT",
+        "SFT-inverse-roundtrip-1-sparse-alternating-tone(N=4,K=1)",
+        "Cooley-Tukey (1965) DFT[(−1)^n]=4·δ[k−2]; Hassanieh et al. (2012) K-sparse exact recovery; ISFT(SFT(x))=x",
+        recovered.iter(),
+        signal.iter(),
+    ))
+}
+
+/// NTT 4-point inverse roundtrip: INTT(NTT(x)) = x.
+///
+/// # Mathematical contract
+///
+/// Let p = 998244353 (= 119·2²³+1), N=4, g=3, ω = g^{(p-1)/N} mod p.
+/// By Pollard (1971) Theorem 1: NTT is a bijection on (ℤ/pℤ)^N with exact integer
+/// inverse INTT(X)[n] = (1/N) Σ_k X[k] · ω^{-nk} mod p.
+/// For x=[1,2,3,4]: NTT[k] = Σ_{n=0}^3 x[n]·ω^{nk} mod p.
+/// INTT(NTT(x)) = x holds exactly in ℤ/pℤ arithmetic.
+/// Converting to f64: all values ≤ 4 ≪ 2^53, so representation is exact.
+/// Floating-point error in f64 comparison: 0 (exact integer reconstruction).
+/// Threshold 1×10⁻¹² covers f64 conversion round-trip noise.
+/// Reference: Pollard (1971) Math. Proc. Cambridge Phil. Soc. 70(3): NTT inversion theorem.
+fn ntt_inverse_roundtrip_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = NttPlan::new(4)?;
+    let input = Array1::from_vec(vec![1u64, 2, 3, 4]);
+    let spectrum = plan.forward(&input)?;
+    let recovered = intt(&spectrum)?;
+    let recovered_f64: Vec<f64> = recovered.iter().map(|&v| v as f64).collect();
+    let expected = [1.0_f64, 2.0, 3.0, 4.0];
+    Ok(published_real_fixture(
+        "NTT",
+        "INTT(NTT([1,2,3,4]),N=4)",
+        "Pollard (1971) Math. Proc. Cambridge Phil. Soc. 70(3): NTT inversion theorem; INTT(NTT(x))=x in \u{2124}/p\u{2124} for p=998244353",
+        &recovered_f64,
+        &expected,
+    ))
+}
+
+/// STFT Hann-window WOLA inverse roundtrip: ISTFT(STFT(x)) = x.
+///
+/// # Mathematical contract
+///
+/// Parameters: frame_len=4, hop_len=2, Hann analysis+synthesis window.
+/// Hann window N=4: w[n] = 0.5·(1 − cos(2πn/3)), giving w=[0, 0.75, 0.75, 0].
+/// Signal x=[1,0,0,0]. frame_count(4) = 1 + ⌈4/2⌉ = 3 frames.
+///
+/// Frame centers (start = m·hop − frame/2):
+///   m=0: start=−2, covers signal positions 0,1 (frame indices 2,3).
+///     Windowed frame: [0,0, w[2]·x[0], w[3]·x[1]] = [0,0, 0.75, 0].
+///     DFT([0,0,0.75,0]) = [0.75, −0.75, 0.75, −0.75].
+///   m=1: start=0, covers positions 0..3. Windowed: [w[0]·1,0,0,0]=[0,0,0,0]. Spectrum=[0,…].
+///   m=2: start=2, covers positions 2..5. All zero. Spectrum=[0,…].
+///
+/// Reconstruction (WOLA): for position i, output[i] = Σ_m (w[n_m]·IFFT(X_m)[n_m]) / Σ_m w[n_m]².
+///   pos 0: IFFT([0.75,−0.75,0.75,−0.75])[2] = 0.75; weight = w[2]² = 0.5625.
+///     output[0] = 0.5625 / 0.5625 = 1.0 ✓
+///   pos 1: weight = w[3]² = 0. output[1] = 0.0 ✓  (WOLA defines 0/0 → 0)
+///   pos 2,3: no non-zero contributions. output = 0.0 ✓
+///
+/// COLA weight at every position: 0.5625 (constant) for non-boundary positions.
+/// Boundary position 1 has w[3]=0; expected x[1]=0; WOLA returns 0 by convention. ✓
+/// Floating-point error: O(log₂(4)·ε_f64) ≈ 4.4×10⁻¹⁶ < 1×10⁻¹².
+/// Reference: Allen & Rabiner (1977) Proc. IEEE 65(11): weighted overlap-add synthesis;
+///            Hann window COLA condition, Portnoff (1980) IEEE Trans. ASSP 28(1).
+fn stft_hann_wola_inverse_roundtrip_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = StftPlan::new(4, 2)?;
+    let signal = Array1::from_vec(vec![1.0_f64, 0.0, 0.0, 0.0]);
+    let spectrum = plan.forward(&signal)?;
+    let recovered = plan.inverse(&spectrum, 4)?;
+    let expected = [1.0_f64, 0.0, 0.0, 0.0];
+    Ok(published_real_fixture_with_threshold(
+        "STFT",
+        "STFT-Hann-WOLA-inverse-roundtrip([1,0,0,0],frame=4,hop=2)",
+        "Allen & Rabiner (1977) Proc. IEEE 65(11): WOLA synthesis; Portnoff (1980) Hann COLA; ISTFT(STFT(x))=x for frame=4 hop=2",
+        recovered.as_slice().unwrap_or(&[]),
+        &expected,
+        1.0e-12,
+    ))
+}
+
+/// DCT-IV 2-point inverse roundtrip: IDCT-IV(DCT-IV(x)) = x.
+///
+/// # Mathematical contract
+///
+/// The DCT-IV kernel for N=2: C[k] = Σ_{n=0}^{1} x[n]·cos(π(n+½)(k+½)/2).
+/// Self-inverse property: DCT-IV² = N·I, so IDCT-IV = (1/N)·DCT-IV.
+/// For x=[1,3], N=2:
+///   C[0] = 1·cos(π/8) + 3·cos(3π/8) = cos(π/8) + 3·sin(π/8)
+///          ≈ 0.92388 + 3·0.38268 = 2.07193...
+///   C[1] = 1·cos(3π/8) + 3·cos(9π/8) = cos(3π/8) + 3·(−cos(π/8))
+///          ≈ 0.38268 − 2.77164 = −2.38896...
+/// The `plan.inverse` method applies the (1/N)·DCT-IV formula.
+/// IDCT-IV([C[0],C[1]]) = [1,3] exactly (modulo butterfly rounding ε_f64).
+/// Floating-point error: O(ε_f64) for N=2 (one butterfly level); threshold 1×10⁻¹⁴.
+/// Reference: Makhoul (1980) IEEE Trans. ASSP 28(1): DCT-IV self-inverse property;
+///            FFTW REDFT11 documentation: IDCT-IV = (1/2N)·DCT-IV.
+fn dct4_inverse_roundtrip_two_point_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = DctDstPlan::new(2, RealTransformKind::DctIV)?;
+    let input = [1.0_f64, 3.0];
+    let spectrum = plan.forward(&input)?;
+    let recovered = plan.inverse(&spectrum)?;
+    Ok(published_real_fixture_with_threshold(
+        "DCT",
+        "IDCT-IV(DCT-IV([1,3]),N=2)",
+        "Makhoul (1980) IEEE Trans. ASSP 28(1): DCT-IV self-inverse C4\u{00b2}=N\u{00b7}I; FFTW REDFT11: IDCT-IV=(1/2N)\u{00b7}DCT-IV",
+        &recovered,
+        &input,
+        1.0e-14,
+    ))
+}
+
+/// DST-IV 2-point inverse roundtrip: IDST-IV(DST-IV(x)) = x.
+///
+/// # Mathematical contract
+///
+/// The DST-IV kernel for N=2: S[k] = Σ_{n=0}^{1} x[n]·sin(π(n+½)(k+½)/2).
+/// Self-inverse property: DST-IV² = N·I, so IDST-IV = (1/N)·DST-IV.
+/// For x=[2,5], N=2:
+///   S[0] = 2·sin(π/8) + 5·sin(3π/8) = 2·sin(π/8) + 5·cos(π/8)
+///          ≈ 2·0.38268 + 5·0.92388 = 5.38476...
+///   S[1] = 2·sin(3π/8) + 5·sin(9π/8) = 2·cos(π/8) + 5·(−sin(π/8))
+///          ≈ 1.84776 − 1.91341 = −0.06566...
+/// The `plan.inverse` method applies the (1/N)·DST-IV formula.
+/// IDST-IV([S[0],S[1]]) = [2,5] exactly (modulo butterfly rounding ε_f64).
+/// Floating-point error: O(ε_f64) for N=2 (one butterfly level); threshold 1×10⁻¹⁴.
+/// Reference: Makhoul (1980) IEEE Trans. ASSP 28(1): DST-IV self-inverse property;
+///            FFTW RODFT11 documentation: IDST-IV = (1/2N)·DST-IV.
+fn dst4_inverse_roundtrip_two_point_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = DctDstPlan::new(2, RealTransformKind::DstIV)?;
+    let input = [2.0_f64, 5.0];
+    let spectrum = plan.forward(&input)?;
+    let recovered = plan.inverse(&spectrum)?;
+    Ok(published_real_fixture_with_threshold(
+        "DST",
+        "IDST-IV(DST-IV([2,5]),N=2)",
+        "Makhoul (1980) IEEE Trans. ASSP 28(1): DST-IV self-inverse S4\u{00b2}=N\u{00b7}I; FFTW RODFT11: IDST-IV=(1/2N)\u{00b7}DST-IV",
+        &recovered,
+        &input,
+        1.0e-14,
+    ))
+}
+
+/// DCT-I 3-point inverse roundtrip: IDCT-I(DCT-I(x)) = x.
+///
+/// # Mathematical contract
+///
+/// DCT-I kernel for N=3: X[k] = x[0] + (−1)^k·x[2] + 2·x[1]·cos(π·k/2).
+/// Self-inverse property: DCT-I² = 2(N−1)·I = 4·I (for N=3),
+/// so IDCT-I = (1/(2(N−1)))·DCT-I = (1/4)·DCT-I.
+/// For x=[1,2,3]:
+///   X[0] = 1 + 3 + 2·2·cos(0)   = 1 + 3 + 4   = 8  (exact integer)
+///   X[1] = 1 − 3 + 2·2·cos(π/2) = 1 − 3 + 0   = −2 (exact: cos(π/2)=0)
+///   X[2] = 1 + 3 + 2·2·cos(π)   = 1 + 3 − 4   = 0  (exact: cos(π)=−1)
+/// Intermediate spectrum = [8, −2, 0] — exactly integer.
+/// DCT-I([8,−2,0]):
+///   Y[0] = 8 + 0 + 2·(−2)·1   = 4
+///   Y[1] = 8 + 0 + 2·(−2)·0   = 8
+///   Y[2] = 8 + 0 + 2·(−2)·(−1) = 12
+/// IDCT-I([8,−2,0]) = (1/4)·[4,8,12] = [1,2,3] exactly.
+/// All intermediate cos values are {−1,0,1}; computation is exact in f64.
+/// Floating-point error: 0 (analytically exact); threshold 1×10⁻¹⁴ is conservative.
+/// Reference: Makhoul (1980) IEEE Trans. ASSP 28(1): DCT-I self-inverse C1²=2(N−1)·I;
+///            FFTW REDFT00 documentation: IDCT-I=(1/(2(N−1)))·DCT-I.
+fn dct1_inverse_roundtrip_three_point_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = DctDstPlan::new(3, RealTransformKind::DctI)?;
+    let input = [1.0_f64, 2.0, 3.0];
+    let spectrum = plan.forward(&input)?;
+    let recovered = plan.inverse(&spectrum)?;
+    Ok(published_real_fixture_with_threshold(
+        "DCT",
+        "IDCT-I(DCT-I([1,2,3]),N=3)",
+        "Makhoul (1980) IEEE Trans. ASSP 28(1): DCT-I self-inverse C1\u{00b2}=2(N\u{2212}1)\u{00b7}I; FFTW REDFT00: IDCT-I=(1/(2(N\u{2212}1)))\u{00b7}DCT-I",
+        &recovered,
+        &input,
+        1.0e-14,
+    ))
+}
+
+/// DST-I 2-point inverse roundtrip: IDST-I(DST-I(x)) = x.
+///
+/// # Mathematical contract
+///
+/// DST-I kernel for N=2: X[k] = 2·Σ_{n=0}^{1} x[n]·sin(π(n+1)(k+1)/3).
+/// Self-inverse property: DST-I² = 2(N+1)·I = 6·I (for N=2),
+/// so IDST-I = (1/(2(N+1)))·DST-I = (1/6)·DST-I.
+/// For x=[1,3]:
+///   X[0] = 2·(1·sin(π/3) + 3·sin(2π/3)) = 2·(√3/2 + 3·√3/2) = 4√3 ≈ 6.9282...
+///   X[1] = 2·(1·sin(2π/3) + 3·sin(4π/3)) = 2·(√3/2 − 3·√3/2) = −2√3 ≈ −3.4641...
+/// DST-I([4√3, −2√3]):
+///   Y[0] = 2·(4√3·sin(π/3) + (−2√3)·sin(2π/3)) = 2·(4·3/2 − 2·3/2) = 2·3 = 6
+///   Y[1] = 2·(4√3·sin(2π/3) + (−2√3)·sin(4π/3)) = 2·(4·3/2 + 2·3/2) = 2·9 = 18
+/// IDST-I([4√3,−2√3]) = (1/6)·[6,18] = [1,3] exactly.
+/// Intermediate spectrum is irrational (√3); error is O(ε_f64)≈2×10⁻¹⁶ per element.
+/// Threshold 1×10⁻¹⁴ > max accumulated floating-point error for N=2.
+/// Reference: Makhoul (1980) IEEE Trans. ASSP 28(1): DST-I self-inverse S1²=2(N+1)·I;
+///            FFTW RODFT00 documentation: IDST-I=(1/(2(N+1)))·DST-I.
+fn dst1_inverse_roundtrip_two_point_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = DctDstPlan::new(2, RealTransformKind::DstI)?;
+    let input = [1.0_f64, 3.0];
+    let spectrum = plan.forward(&input)?;
+    let recovered = plan.inverse(&spectrum)?;
+    Ok(published_real_fixture_with_threshold(
+        "DST",
+        "IDST-I(DST-I([1,3]),N=2)",
+        "Makhoul (1980) IEEE Trans. ASSP 28(1): DST-I self-inverse S1\u{00b2}=2(N+1)\u{00b7}I; FFTW RODFT00: IDST-I=(1/(2(N+1)))\u{00b7}DST-I",
+        &recovered,
+        &input,
+        1.0e-14,
+    ))
+}
+
 fn representative_signal_1d(len: usize) -> Array1<f64> {
     Array1::from_vec(
         (0..len)
@@ -1630,15 +2131,16 @@ mod tests {
         assert!(report.fft_cpu.parseval_relative_error <= CPU_PARSEVAL_LIMIT);
         assert!(report.nufft.passed);
         assert!(report.external.published_references.passed);
-        assert_eq!(report.external.published_references.attempted, 30);
+        assert_eq!(report.external.published_references.attempted, 45);
         assert_eq!(report.external.rustfft.backend, "rustfft");
         assert_eq!(report.external.numpy.backend, "numpy");
     }
 
+
     #[test]
     fn published_reference_suite_checks_computed_fixture_values() {
         let report = run_published_reference_suite().expect("published references");
-        assert_eq!(report.attempted, 30);
+        assert_eq!(report.attempted, 45);
         assert!(report.passed);
         for fixture in &report.fixtures {
             assert!(

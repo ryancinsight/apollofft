@@ -4,7 +4,8 @@
 //!
 //! Tests that require a live WGPU device use an early-return guard:
 //!
-//! ```rust,ignore
+//! ```rust,no_run
+//! # use apollo_ntt_wgpu::NttWgpuBackend;
 //! let Ok(backend) = NttWgpuBackend::try_default() else { return; };
 //! ```
 //!

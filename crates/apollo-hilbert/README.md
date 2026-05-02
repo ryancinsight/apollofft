@@ -39,10 +39,24 @@ z[n] = x[n] + i H{x}[n]
 
 with envelope `|z[n]|` and instantaneous phase `arg(z[n])`.
 
+The instantaneous frequency is derived from the analytic signal using the
+complex-derivative formula
+
+```text
+f[n] = arg(conj(z[n]) · z[n+1]) / (2π)     cycles per sample
+```
+
+which avoids explicit phase unwrapping and is well-defined whenever
+`|z[n]| > 0`. `AnalyticSignal::instantaneous_frequency()` returns a `Vec<f64>`
+of length `N − 1`. For a discrete cosine at normalised frequency `k/N` the
+result is constant and equal to `k/N` (verified by fixture 31 in
+`apollo-validation`; reference: Boashash 1992, Proc. IEEE 80(4)).
+
 ## Verification
 
 Tests cover cosine-to-sine quadrature, constant/DC behavior, even-length
-Nyquist behavior, analytic real-part preservation, unit-cosine envelope, and
+Nyquist behavior, analytic real-part preservation, unit-cosine envelope,
+instantaneous-frequency constant-tone, double-Hilbert negation, and
 random real-signal preservation. Typed tests cover `f64`, `f32`, mixed `f16`,
 caller-owned quadrature parity, analytic-signal real-part preservation, and
 precision/profile mismatch rejection.

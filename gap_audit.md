@@ -11,6 +11,108 @@ quantized storage (implemented and verified). Floating-point NTT is architectura
 by design and will not be implemented.
 
 ## Closed Gaps
+### Closure XXXI — DCT-I and DST-I Self-Inverse Published-Reference Fixtures [patch]
+- **Gap**: `apollo-validation` had 43 published-reference fixtures. DCT-I and DST-I expose
+  `.forward()` and `.inverse()` APIs (Makhoul 1980: C1²=2(N−1)·I, S1²=2(N+1)·I) but had no
+  published-reference inverse-roundtrip fixture.
+- **Closed by**: Added fixtures 44–45:
+  - Fixture 44: `dct1_inverse_roundtrip_three_point_fixture` — DCT-I N=3,
+    IDCT-I(DCT-I([1,2,3]))=[1,2,3]; Makhoul (1980) C1²=2(N−1)·I; FFTW REDFT00;
+    intermediate spectrum [8,−2,0] (exactly integer); threshold 1×10⁻¹⁴.
+  - Fixture 45: `dst1_inverse_roundtrip_two_point_fixture` — DST-I N=2,
+    IDST-I(DST-I([1,3]))=[1,3]; Makhoul (1980) S1²=2(N+1)·I; FFTW RODFT00;
+    intermediate spectrum [4√3,−2√3]; threshold 1×10⁻¹⁴.
+- **Verification**: `cargo test -p apollo-validation -p apollo-dctdst` → 0 FAILED, 0 ignored.
+
+### Closure XXX — DCT-IV and DST-IV Self-Inverse Published-Reference Fixtures [patch]
+- **Gap**: `apollo-validation` had 41 published-reference fixtures. DCT-IV and DST-IV expose
+  `.forward()` and `.inverse()` APIs (Makhoul 1980 self-inverse property: T²=N·I), but had no
+  published-reference inverse-roundtrip fixture.
+- **Closed by**: Added fixtures 42–43:
+  - Fixture 42: `dct4_inverse_roundtrip_two_point_fixture` — DCT-IV N=2,
+    IDCT-IV(DCT-IV([1,3]))=[1,3]; Makhoul (1980) C4²=N·I; FFTW REDFT11; threshold 1×10⁻¹⁴.
+  - Fixture 43: `dst4_inverse_roundtrip_two_point_fixture` — DST-IV N=2,
+    IDST-IV(DST-IV([2,5]))=[2,5]; Makhoul (1980) S4²=N·I; FFTW RODFT11; threshold 1×10⁻¹⁴.
+- **Verification**: `cargo test --workspace` 0 FAILED, 0 ignored.
+
+### Closure XXIX — Inverse-Roundtrip Published-Reference Fixtures: NTT, STFT [patch]
+- **Gap**: `apollo-validation` had 39 published-reference fixtures. NTT exposes `intt` (used
+  only inside the polynomial-convolution fixture) without a standalone inverse-roundtrip fixture.
+  STFT exposes `StftPlan::inverse` (WOLA reconstruction) without any inverse-roundtrip fixture.
+- **Closed by**: Added fixtures 40–41:
+  - Fixture 40: `ntt_inverse_roundtrip_fixture` — NTT N=4, INTT(NTT([1,2,3,4]))=[1,2,3,4];
+    Pollard (1971) Math. Proc. Cambridge Phil. Soc. 70(3): inversion theorem in ℤ/pℤ;
+    threshold 1×10⁻¹².
+  - Fixture 41: `stft_hann_wola_inverse_roundtrip_fixture` — STFT frame=4,hop=2,
+    ISTFT(STFT([1,0,0,0]))=[1,0,0,0]; COLA weight=0.5625 uniform; Allen & Rabiner (1977)
+    Proc. IEEE 65(11); Portnoff (1980) Hann COLA; threshold 1×10⁻¹².
+  - Count assertions updated 39→41. Root `README.md` fixture count updated 39→41.
+- **Verification**: `cargo test --workspace` → 0 FAILED, 0 ignored.
+
+### Closure XXVIII — Inverse-Roundtrip Published-Reference Fixtures: DHT, SFT [patch]
+- **Gap**: `apollo-validation` had 37 published-reference fixtures. Transforms DHT and SFT
+  each expose a public inverse API (`DhtPlan::inverse`, `SparseFftPlan::inverse`) but had
+  no inverse-roundtrip published-reference fixture exercising the full forward→inverse chain.
+- **Closed by**: Added fixtures 38–39:
+  - Fixture 38: `dht_inverse_roundtrip_fixture` — DHT N=4, IDHT(DHT([3,-1,2,0]))=[3,-1,2,0];
+    Bracewell (1983) JOSA 73(12): H²=NI; inverse=(1/N)·DHT; threshold 1×10⁻¹⁴.
+  - Fixture 39: `sft_inverse_roundtrip_fixture` — SFT N=4,K=1, ISFT(SFT([1,-1,1,-1]))=[1,-1,1,-1];
+    Cooley-Tukey (1965) tone at k=2; Hassanieh et al. (2012) K-sparse exact recovery;
+    Candès & Wakin (2008) RIP; threshold 1×10⁻¹².
+  - Count assertions updated 37→39. Root `README.md` fixture count updated 37→39.
+- **Verification**: `cargo test --workspace` → 0 FAILED, 0 ignored.
+
+### Closure XXVII — Inverse-Roundtrip Published-Reference Fixtures: FWHT, QFT, SHT [patch]
+- **Gap**: `apollo-validation` had 34 published-reference fixtures. Transforms FWHT, QFT,
+  and SHT each expose a public inverse API (`FwhtPlan::inverse`, `iqft`, `ShtPlan::inverse_real`)
+  but no inverse-roundtrip published-reference fixture exercising it.
+- **Closed by**: Added fixtures 35–37:
+  - Fixture 35: `fwht_inverse_roundtrip_fixture` — FWHT N=4, IFWHT(FWHT([1,2,3,4]))=[1,2,3,4];
+    Walsh (1923) Am. J. Math. 45 §2: W_N²=N·I; threshold 1×10⁻¹⁴.
+  - Fixture 36: `qft_inverse_roundtrip_fixture` — QFT N=4, iqft(qft([1,0,0,0]))=[1,0,0,0];
+    Shor (1994) §2 unitarity; Nielsen & Chuang (2000) §5.1; threshold 1×10⁻¹².
+  - Fixture 37: `sht_inverse_roundtrip_y10_fixture` — SHT lmax=1, dipole Y_1^0 roundtrip;
+    Driscoll & Healy (1994) Adv. Appl. Math. 15 Theorem 1; threshold 1×10⁻¹⁰.
+  - Count assertions updated 34→37. Root `README.md` fixture count updated 34→37.
+- **Verification**: `cargo test --workspace` → 0 FAILED, 0 ignored.
+
+### Closure XXVI — Inverse-Roundtrip Published-Reference Fixtures: DWT, GFT, FrFT [patch]
+- **Gap**: `apollo-validation` had 31 published-reference fixtures but no inverse-roundtrip
+  fixture for DWT (wavelet), GFT, or FrFT, despite all three transforms having verified
+  inverse APIs (`DwtPlan::inverse`, `GftPlan::inverse`, `UnitaryFrFT::inverse`).
+- **Closed by**: Added fixtures 32–34:
+  - Fixture 32: `wavelet_haar_inverse_perfect_reconstruction_fixture` — Haar DWT N=4 1-level,
+    IDWT(DWT([1,−1,0,0])) = [1,−1,0,0]; Mallat (1989) §3.1 Theorem 2; threshold 1e-12.
+  - Fixture 33: `gft_path_graph_inverse_roundtrip_fixture` — GFT K₂ path graph,
+    GFT⁻¹(GFT([3,−1])) = [3,−1]; Sandryhaila & Moura (2013) ICASSP; threshold 1e-12.
+  - Fixture 34: `frft_inverse_roundtrip_order_half_fixture` — UnitaryFrFT α=0.5 N=4,
+    FrFT(−0.5)(FrFT(0.5)([1,2,3,4])) = [1,2,3,4]; Namias (1980) additivity; threshold 1e-12.
+  - Count assertions updated 31→34 in both test functions in `suite.rs`.
+  - Root `README.md` fixture count updated 31→34; three new entries appended.
+- **Verification**: `cargo test --workspace` → 0 FAILED, 0 ignored.
+
+### Closure XXIV — GPU Adapter Preference, Test Runtime-Skip, Bluestein CZT Fix [patch]
+### Closure XXV — Hilbert Instantaneous Frequency + Doc/Test/PM Cleanup [patch]
+- **Gap (ignored doc-test)**: `apollo-ntt-wgpu/src/verification.rs` line-7 code block used
+  `rust,ignore`, causing one ignored test to appear in `cargo test --workspace`. The example
+  showed the early-return GPU test policy but could not compile as a doc-test.
+- **Closed by**: Changed `rust,ignore` to `rust,no_run` with `# use apollo_ntt_wgpu::NttWgpuBackend;`
+  preamble. Doc-test now compiles and reports "ok compile"; 0 ignored workspace-wide.
+- **Gap (incomplete doc)**: `execute_inverse_with_buffers` in `apollo-stft-wgpu/device.rs` had
+  stub doc comment "Reuses GPU resources from buffers." without documenting the non-PoT
+  delegation or error conditions.
+- **Closed by**: Expanded doc comment with non-PoT delegation note and `# Errors` section.
+- **Gap (missing CHANGELOG)**: `CHANGELOG.md` was missing Closure XXIII (0.12.3) and
+  Closure XXIV (0.12.4) entries; the most recent entry was 0.12.2 (Closure XXII).
+- **Closed by**: Added both entries to `CHANGELOG.md` with full change descriptions.
+- **Gap (`AnalyticSignal` missing observable)**: `AnalyticSignal` exposed `envelope()` and
+  `phase()` but lacked `instantaneous_frequency()`. The IF is a fundamental analytic signal
+  observable used for FM demodulation, pitch detection, and frequency tracking.
+- **Closed by**: Added `instantaneous_frequency()` using the complex-derivative formula
+  `f[n] = arg(conj(z[n])·z[n+1]) / (2π)` (length N−1, values in (−0.5, +0.5] cycles/sample).
+  Two new tests added; validation fixture 31 added. Root README updated 30→31.
+- **Verification**: `cargo test --workspace` → 0 FAILED, 0 ignored.
+
 ### Closure XXIV — GPU Adapter Preference, Test Runtime-Skip, Bluestein CZT Fix [patch]
 - **Gap (adapter selection)**: All 20 `wgpu::RequestAdapterOptions::default()` sites used
   `PowerPreference::None`, causing wgpu to select any available adapter (often integrated

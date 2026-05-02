@@ -1,7 +1,64 @@
 # Apollo Backlog
 
-## Closed in this sprint (Closure XXIII phase)
-## Closed in this sprint (Closure XXIV phase)
+## Closed in this sprint (Closure XXXI phase)
+- [x] [patch] Validation fixture 44: `dct1_inverse_roundtrip_three_point_fixture`
+  (DCT-I N=3: IDCT-I(DCT-I([1,2,3]))=[1,2,3]; Makhoul 1980 C1²=2(N−1)·I; FFTW REDFT00; threshold 1e-14).
+- [x] [patch] Validation fixture 45: `dst1_inverse_roundtrip_two_point_fixture`
+  (DST-I N=2: IDST-I(DST-I([1,3]))=[1,3]; Makhoul 1980 S1²=2(N+1)·I; FFTW RODFT00; threshold 1e-14).
+- [x] [patch] Root `README.md` fixture count updated 43->45; two new entries appended.
+- [x] [patch] Both count assertions in `apollo-validation` updated: 43->45.
+- Final state: `cargo test -p apollo-validation -p apollo-dctdst` 0 FAILED, 0 ignored.
+
+## Closed in this sprint (Closure XXX phase)
+- [x] [patch] Validation fixture 42: `dct4_inverse_roundtrip_two_point_fixture`
+  (DCT-IV N=2: IDCT-IV(DCT-IV([1,3]))=[1,3]; Makhoul 1980 C4²=N·I; FFTW REDFT11; threshold 1e-14).
+- [x] [patch] Validation fixture 43: `dst4_inverse_roundtrip_two_point_fixture`
+  (DST-IV N=2: IDST-IV(DST-IV([2,5]))=[2,5]; Makhoul 1980 S4²=N·I; FFTW RODFT11; threshold 1e-14).
+- [x] [patch] Root `README.md` fixture count updated 41->43; two new entries appended.
+- [x] [patch] Both count assertions in `apollo-validation` updated: 41->43.
+- Final state: `cargo test --workspace` 0 FAILED, 0 ignored across all 38+ crates.
+
+## Closed in this sprint (Closure XXIX phase)
+- [x] [patch] Validation fixture 40: `ntt_inverse_roundtrip_fixture`
+  (NTT N=4: INTT(NTT([1,2,3,4]))=[1,2,3,4]; Pollard 1971 inversion theorem in Z/pZ; threshold 1e-12).
+- [x] [patch] Validation fixture 41: `stft_hann_wola_inverse_roundtrip_fixture`
+  (STFT frame=4,hop=2: ISTFT(STFT([1,0,0,0]))=[1,0,0,0]; Allen-Rabiner 1977 WOLA; Portnoff 1980 Hann COLA; threshold 1e-12).
+- [x] [patch] Root `README.md` fixture count updated 39->41; two new entries appended.
+- [x] [patch] Both count assertions in `apollo-validation` updated: 39->41.
+- Final state: `cargo test --workspace` 0 FAILED, 0 ignored across all 38+ crates.
+
+## Closed in this sprint (Closure XXVIII phase)
+- [x] [patch] Validation fixture 38: `dht_inverse_roundtrip_fixture`
+  (DHT N=4: IDHT(DHT([3,-1,2,0]))=[3,-1,2,0]; Bracewell 1983 H²=NI; threshold 1e-14).
+- [x] [patch] Validation fixture 39: `sft_inverse_roundtrip_fixture`
+  (SFT N=4,K=1: ISFT(SFT([1,-1,1,-1]))=[1,-1,1,-1]; Hassanieh et al. 2012 K-sparse exact; threshold 1e-12).
+- [x] [patch] Root `README.md` fixture count updated 37->39; two new entries appended.
+- [x] [patch] Both count assertions in `apollo-validation` updated: 37->39.
+- Final state: `cargo test --workspace` 0 FAILED, 0 ignored across all 38+ crates.
+
+## Closed in this sprint (Closure XXVII phase)
+- [x] [patch] Validation fixture 35: `fwht_inverse_roundtrip_fixture`
+  (FWHT N=4: IFWHT(FWHT([1,2,3,4]))=[1,2,3,4]; Walsh 1923 W_N^2=N*I; threshold 1e-14).
+- [x] [patch] Validation fixture 36: `qft_inverse_roundtrip_fixture`
+  (QFT N=4: iqft(qft([1,0,0,0]))=[1,0,0,0]; Shor 1994 unitarity; threshold 1e-12).
+- [x] [patch] Validation fixture 37: `sht_inverse_roundtrip_y10_fixture`
+  (SHT lmax=1: Y_1^0 dipole roundtrip; Driscoll-Healy 1994 Theorem 1; threshold 1e-10).
+- [x] [patch] Root `README.md` fixture count updated 34->37; three new entries appended.
+- [x] [patch] Both count assertions in `apollo-validation` updated: 34->37.
+- Final state: `cargo test --workspace` 0 FAILED, 0 ignored across all 38+ crates.
+
+## Closed in this sprint (Closure XXVI phase)
+- [x] [patch] Validation fixture 32: `wavelet_haar_inverse_perfect_reconstruction_fixture`
+  (Haar DWT N=4 1-level: IDWT(DWT([1,-1,0,0]))=[1,-1,0,0]; Mallat 1989 Theorem 2; threshold 1e-12).
+- [x] [patch] Validation fixture 33: `gft_path_graph_inverse_roundtrip_fixture`
+  (GFT K2 path graph: GFT-1(GFT([3,-1]))=[3,-1]; Sandryhaila-Moura 2013; threshold 1e-12).
+- [x] [patch] Validation fixture 34: `frft_inverse_roundtrip_order_half_fixture`
+  (FrFT alpha=0.5 N=4: FrFT(-0.5)(FrFT(0.5)([1,2,3,4]))=[1,2,3,4]; Namias 1980; threshold 1e-12).
+- [x] [patch] Root `README.md` fixture count updated 31->34; three new fixture descriptions appended.
+- [x] [patch] Both count assertions in `apollo-validation` updated: 31->34.
+- Final state: `cargo test --workspace` 0 FAILED, 0 ignored across all 38+ crates.
+
+## Closed in this sprint (Closure XXV phase)
 - [x] [patch] GPU adapter selection: replaced all 20 `wgpu::RequestAdapterOptions::default()`
   sites with `PowerPreference::HighPerformance` across all wgpu crates (fft-wgpu, czt-wgpu,
   mellin-wgpu, ntt-wgpu, stft-wgpu, radon-wgpu, nufft-wgpu, hilbert-wgpu, sft-wgpu, qft-wgpu,
@@ -34,6 +91,29 @@
 
 ## Closed in this sprint (Closure XXII phase)
 - [x] [patch] Implement GPU benchmark runner infrastructure: manual self-hosted workflow
+## Closed in this sprint (Closure XXV phase)
+- [x] [patch] `AnalyticSignal::instantaneous_frequency()` in `apollo-hilbert`:
+  new method using the complex-derivative formula
+  `f[n] = arg(conj(z[n])·z[n+1]) / (2π)` (length N−1, cycles per sample).
+  Avoids phase unwrapping; well-defined whenever |z[n]| > 0. Reference: Boashash (1992).
+- [x] [patch] Two new verification tests in `apollo-hilbert`:
+  `instantaneous_frequency_constant_tone` (cosine at k/N has IF=k/N, ε<1e-10) and
+  `double_hilbert_negates_zero_mean_signal` (H{H{x}}=−x for sinusoidal signals, ε<1e-10).
+- [x] [patch] Validation fixture 31 in `apollo-validation`:
+  `hilbert_instantaneous_frequency_constant_tone_fixture` (N=64, k=5, threshold 1e-10).
+  Root README updated 30→31; fixture count assertions updated in both test functions.
+- [x] [patch] `apollo-hilbert/README.md`: added "Instantaneous Frequency" subsection
+  documenting the complex-derivative formula, validation fixture reference, and Boashash 1992 cite.
+- [x] [patch] `CHANGELOG.md`, `gap_audit.md`, `checklist.md` updated for Closure XXV.
+- [x] [patch] Ignored doc-test in `apollo-ntt-wgpu/src/verification.rs` converted from
+  `rust,ignore` to `rust,no_run` with `# use apollo_ntt_wgpu::NttWgpuBackend;` preamble.
+  Eliminated last remaining ignored test in workspace; doc-test now compiles and reports "ok".
+- [x] [patch] `execute_inverse_with_buffers` doc comment in `apollo-stft-wgpu/src/infrastructure/device.rs`:
+  expanded from stub ("Reuses GPU resources from buffers.") to full description noting
+  non-PoT delegation and `WgpuError::InvalidPlan` conditions.
+- [x] [patch] `CHANGELOG.md` updated with missing Closure XXIII (0.12.3) and Closure XXIV (0.12.4) entries.
+- Final state: `cargo test --workspace` 0 FAILED, 0 ignored across all 38+ crates.
+
   `.github/workflows/gpu-benchmarks.yml`, PowerShell driver `scripts/run_gpu_benchmarks.ps1`,
   tracked artifact root `.benchmarks/gpu-runner/.gitkeep`, root `README.md` runner docs, and
   root README capability corrections for CZT/Mellin/STFT/Radon WGPU surfaces.

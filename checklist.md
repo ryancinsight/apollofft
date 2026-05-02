@@ -1,4 +1,97 @@
 # Apollo Checklist
+## Closure XXXI — DCT-I and DST-I Self-Inverse Published-Reference Fixtures [patch]
+Sprint target version: 0.12.11
+
+- [x] Triage: identify DCT/DST family remaining gaps (DCT-I, DST-I inverse-roundtrip fixtures absent).
+- [x] Add validation fixture 44: `dct1_inverse_roundtrip_three_point_fixture`
+  (DCT-I N=3, IDCT-I∘DCT-I=I, Makhoul 1980 C1²=2(N−1)·I, FFTW REDFT00, threshold 1e-14).
+- [x] Add validation fixture 45: `dst1_inverse_roundtrip_two_point_fixture`
+  (DST-I N=2, IDST-I∘DST-I=I, Makhoul 1980 S1²=2(N+1)·I, FFTW RODFT00, threshold 1e-14).
+- [x] Update `run_published_reference_suite` call list: 43 → 45 fixtures.
+- [x] Update both count assertions in `apollo-validation/suite.rs`: 43 → 45.
+- [x] Update root `README.md` fixture count 43 → 45; append two new entries.
+- [x] Update sprint PM artifacts: CHANGELOG.md, backlog.md, checklist.md, gap_audit.md.
+- [x] `cargo test -p apollo-validation -p apollo-dctdst`: 0 FAILED, 0 ignored.
+
+## Closure XXX — DCT-IV and DST-IV Self-Inverse Published-Reference Fixtures [patch]
+Sprint target version: 0.12.10
+
+- [x] Triage: identify DCT/DST family gaps (DCT-IV, DST-IV inverse-roundtrip fixtures absent).
+- [x] Add validation fixture 42: `dct4_inverse_roundtrip_two_point_fixture`
+  (DCT-IV N=2, IDCT-IV∘DCT-IV=I, Makhoul 1980 C4²=N·I, FFTW REDFT11, threshold 1e-14).
+- [x] Add validation fixture 43: `dst4_inverse_roundtrip_two_point_fixture`
+  (DST-IV N=2, IDST-IV∘DST-IV=I, Makhoul 1980 S4²=N·I, FFTW RODFT11, threshold 1e-14).
+- [x] Update `run_published_reference_suite` call list: 41 → 43 fixtures.
+- [x] Update both count assertions in `apollo-validation/suite.rs`: 41 → 43.
+- [x] Update root `README.md` fixture count 41 → 43; append two new entries.
+- [x] Update sprint PM artifacts: CHANGELOG.md, backlog.md, checklist.md, gap_audit.md.
+- [x] `cargo test --workspace`: 0 FAILED, 0 ignored.
+
+## Closure XXIX — Inverse-Roundtrip Published-Reference Fixtures: NTT, STFT [patch]
+Sprint target version: 0.12.9
+
+- [x] Triage: identify transforms with inverse API but no inverse-roundtrip fixture (NTT, STFT).
+- [x] Add validation fixture 40: `ntt_inverse_roundtrip_fixture`
+  (NTT N=4, INTT∘NTT=I in Z/pZ, Pollard 1971, threshold 1e-12).
+- [x] Add validation fixture 41: `stft_hann_wola_inverse_roundtrip_fixture`
+  (STFT frame=4 hop=2, Hann COLA WOLA, Allen-Rabiner 1977, threshold 1e-12).
+- [x] Update `run_published_reference_suite` call list: 39 → 41 fixtures.
+- [x] Update both count assertions in `apollo-validation/suite.rs`: 39 → 41.
+- [x] Update root `README.md` fixture count 39 → 41; append two new entries.
+- [x] Update sprint PM artifacts: CHANGELOG.md, backlog.md, checklist.md, gap_audit.md.
+- [x] `cargo test --workspace`: 0 FAILED, 0 ignored.
+
+## Closure XXVIII — Inverse-Roundtrip Published-Reference Fixtures: DHT, SFT [patch]
+Sprint target version: 0.12.8
+
+- [x] Triage: identify transforms with inverse API but no inverse-roundtrip fixture (DHT, SFT).
+- [x] Add validation fixture 38: `dht_inverse_roundtrip_fixture`
+  (DHT N=4, IDHT∘DHT=I, Bracewell 1983, threshold 1e-14).
+- [x] Add validation fixture 39: `sft_inverse_roundtrip_fixture`
+  (SFT N=4 K=1, ISFT∘SFT=I, Hassanieh et al. 2012, threshold 1e-12).
+- [x] Update `run_published_reference_suite` call list: 37 → 39 fixtures.
+- [x] Update both count assertions in `apollo-validation/suite.rs`: 37 → 39.
+- [x] Update root `README.md` fixture count 37 → 39; append two new entries.
+- [x] Update sprint PM artifacts: CHANGELOG.md, backlog.md, checklist.md, gap_audit.md.
+- [x] `cargo test --workspace`: 0 FAILED, 0 ignored.
+
+## Closure XXVII — Inverse-Roundtrip Published-Reference Fixtures: FWHT, QFT, SHT [patch]
+Sprint target version: 0.12.7
+
+- [x] Triage: identify transforms with inverse API but no inverse-roundtrip fixture.
+- [x] Add validation fixture 35: `fwht_inverse_roundtrip_fixture`
+  (FWHT N=4, IFWHT∘FWHT=I, Walsh 1923, threshold 1e-14).
+- [x] Add validation fixture 36: `qft_inverse_roundtrip_fixture`
+  (QFT N=4, iqft∘qft=I, Shor 1994, threshold 1e-12).
+- [x] Add validation fixture 37: `sht_inverse_roundtrip_y10_fixture`
+  (SHT lmax=1, dipole Y_1^0 roundtrip, Driscoll-Healy 1994, threshold 1e-10).
+- [x] Update `run_published_reference_suite` call list: 34 → 37 fixtures.
+- [x] Update both count assertions in `apollo-validation/suite.rs`: 34 → 37.
+- [x] Update root `README.md` fixture count 34 → 37; append three new entries.
+- [x] Update sprint PM artifacts: CHANGELOG.md, backlog.md, checklist.md, gap_audit.md.
+- [x] `cargo test --workspace`: 0 FAILED, 0 ignored.
+
+## Closure XXVI — Inverse-Roundtrip Published-Reference Fixtures: DWT, GFT, FrFT [patch]
+## Closure XXIV — GPU Adapter Preference, Test Runtime-Skip, Bluestein CZT Fix [patch]
+## Closure XXV — Hilbert Instantaneous Frequency + Doc/Test/PM Cleanup [patch]
+
+- [x] Convert `apollo-ntt-wgpu` doc-test from `rust,ignore` to `rust,no_run` with preamble; verify 0 ignored workspace-wide.
+- [x] Expand `execute_inverse_with_buffers` doc comment in `apollo-stft-wgpu/device.rs`.
+- [x] Add missing `CHANGELOG.md` entries for Closure XXIII (0.12.3) and Closure XXIV (0.12.4).
+- [x] Implement `AnalyticSignal::instantaneous_frequency()` using complex-derivative formula.
+- [x] Add `instantaneous_frequency_constant_tone` test (ε<1e-10, k/N=5/64).
+- [x] Add `double_hilbert_negates_zero_mean_signal` test (ε<1e-10, sinusoidal input N=32).
+- [x] Add validation fixture 31: `hilbert_instantaneous_frequency_constant_tone_fixture` (N=64, k=5, threshold 1e-10).
+- [x] Update `run_published_reference_suite` call list to include fixture 31.
+- [x] Update `assert_eq!(report.external.published_references.attempted, 30)` → 31.
+- [x] Update `assert_eq!(report.attempted, 30)` → 31.
+- [x] Update root `README.md` fixture count: 30 → 31; append new fixture entry.
+- [x] Update `apollo-hilbert/README.md` with instantaneous frequency subsection.
+- [x] `cargo test -p apollo-hilbert`: 11 passed, 0 failed, 0 ignored.
+- [x] `cargo test -p apollo-validation`: 3 passed, 0 failed, 0 ignored.
+- [x] `cargo test --workspace`: 0 FAILED, 0 ignored.
+- [x] Artifact sync: backlog.md, checklist.md, gap_audit.md, CHANGELOG.md.
+
 ## Closure XXIV — GPU Adapter Preference, Test Runtime-Skip, Bluestein CZT Fix [patch]
 Sprint target version: 0.12.4
 

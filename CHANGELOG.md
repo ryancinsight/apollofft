@@ -11,8 +11,235 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
-## [0.12.2] — Closure XXII
+## [0.12.11] — Closure XXXI
 
+### Closure XXXI — DCT-I and DST-I Self-Inverse Published-Reference Fixtures [patch]
+
+#### Added
+- Validation fixture 44 in `apollo-validation`: `dct1_inverse_roundtrip_three_point_fixture` —
+  DCT-I N=3: `IDCT-I(DCT-I([1,2,3])) = [1,2,3]`. Makhoul (1980) IEEE Trans. ASSP 28(1):
+  DCT-I self-inverse C1²=2(N−1)·I; FFTW REDFT00: IDCT-I=(1/(2(N−1)))·DCT-I.
+  Intermediate spectrum [8,−2,0] is exactly integer (cos values in {−1,0,1});
+  round-trip error = 0 analytically; threshold 1×10⁻¹⁴.
+- Validation fixture 45 in `apollo-validation`: `dst1_inverse_roundtrip_two_point_fixture` —
+  DST-I N=2: `IDST-I(DST-I([1,3])) = [1,3]`. Makhoul (1980) IEEE Trans. ASSP 28(1):
+  DST-I self-inverse S1²=2(N+1)·I; FFTW RODFT00: IDST-I=(1/(2(N+1)))·DST-I.
+  Intermediate spectrum [4√3,−2√3]; O(ε_f64) error; threshold 1×10⁻¹⁴.
+- Root `README.md` fixture count updated 43 → 45; two new entries appended.
+
+#### Final state
+- Both count assertions in `apollo-validation/suite.rs` updated 43 → 45.
+- `cargo test -p apollo-validation -p apollo-dctdst`: 0 FAILED, 0 ignored.
+
+---
+
+## [0.12.10] — Closure XXX
+
+### Closure XXX — DCT-IV and DST-IV Self-Inverse Published-Reference Fixtures [patch]
+
+#### Added
+- Validation fixture 42 in `apollo-validation`: `dct4_inverse_roundtrip_two_point_fixture` —
+  DCT-IV N=2: `IDCT-IV(DCT-IV([1,3])) = [1,3]`. Makhoul (1980) IEEE Trans. ASSP 28(1):
+  DCT-IV self-inverse property C4²=N·I; FFTW REDFT11 IDCT-IV=(1/2N)·DCT-IV;
+  threshold 1×10⁻¹⁴.
+- Validation fixture 43 in `apollo-validation`: `dst4_inverse_roundtrip_two_point_fixture` —
+  DST-IV N=2: `IDST-IV(DST-IV([2,5])) = [2,5]`. Makhoul (1980) IEEE Trans. ASSP 28(1):
+  DST-IV self-inverse property S4²=N·I; FFTW RODFT11 IDST-IV=(1/2N)·DST-IV;
+  threshold 1×10⁻¹⁴.
+- Root `README.md` fixture count updated 41 → 43; two new entries appended.
+
+#### Final state
+- Both count assertions in `apollo-validation/suite.rs` updated 41 → 43.
+- `cargo test --workspace`: 0 FAILED, 0 ignored.
+
+---
+
+## [0.12.9] — Closure XXIX
+
+### Closure XXIX — Inverse-Roundtrip Published-Reference Fixtures: NTT, STFT [patch]
+
+#### Added
+- Validation fixture 40 in `apollo-validation`: `ntt_inverse_roundtrip_fixture` —
+  NTT N=4: `INTT(NTT([1,2,3,4])) = [1,2,3,4]`. Pollard (1971) Math. Proc. Cambridge
+  Phil. Soc. 70(3): NTT inversion theorem in ℤ/pℤ; threshold 1×10⁻¹².
+- Validation fixture 41 in `apollo-validation`: `stft_hann_wola_inverse_roundtrip_fixture` —
+  STFT frame=4,hop=2: `ISTFT(STFT([1,0,0,0])) = [1,0,0,0]`. Allen & Rabiner (1977)
+  Proc. IEEE 65(11) WOLA synthesis; Portnoff (1980) Hann COLA;
+  Hann w=[0,0.75,0.75,0], COLA weight=0.5625; threshold 1×10⁻¹².
+- Root `README.md` fixture count updated 39 → 41; two new entries appended.
+
+#### Final state
+- Both count assertions in `apollo-validation/suite.rs` updated 39 → 41.
+- `cargo test --workspace`: 0 FAILED, 0 ignored.
+
+---
+
+## [0.12.8] — Closure XXVIII
+
+### Closure XXVIII — Inverse-Roundtrip Published-Reference Fixtures: DHT, SFT [patch]
+
+#### Added
+- Validation fixture 38 in `apollo-validation`: `dht_inverse_roundtrip_fixture` —
+  DHT N=4: `IDHT(DHT([3,-1,2,0])) = [3,-1,2,0]`. Bracewell (1983) JOSA 73(12):
+  H²=NI; inverse = (1/N)·DHT; threshold 1×10⁻¹⁴.
+- Validation fixture 39 in `apollo-validation`: `sft_inverse_roundtrip_fixture` —
+  SFT N=4, K=1: `ISFT(SFT([1,-1,1,-1])) = [1,-1,1,-1]`. Cooley-Tukey (1965)
+  DFT[(−1)^n]=4·δ[k−2]; Hassanieh et al. (2012) K-sparse exact recovery;
+  Candès & Wakin (2008) RIP; threshold 1×10⁻¹².
+- Root `README.md` fixture count updated 37 → 39; two new entries appended.
+
+#### Final state
+- Both count assertions in `apollo-validation/suite.rs` updated 37 → 39.
+- `cargo test --workspace`: 0 FAILED, 0 ignored.
+
+---
+
+## [0.12.7] — Closure XXVII
+
+### Closure XXVII — Inverse-Roundtrip Published-Reference Fixtures: FWHT, QFT, SHT [patch]
+
+#### Added
+- Validation fixture 35 in `apollo-validation`: `fwht_inverse_roundtrip_fixture` —
+  FWHT N=4: `IFWHT(FWHT([1,2,3,4])) = [1,2,3,4]`. Walsh (1923) Am. J. Math. 45 §2:
+  W_N² = N·I; threshold 1×10⁻¹⁴.
+- Validation fixture 36 in `apollo-validation`: `qft_inverse_roundtrip_fixture` —
+  QFT N=4: `iqft(qft([1,0,0,0])) = [1,0,0,0]`. Shor (1994) §2: QFT_N unitary;
+  Nielsen & Chuang (2000) §5.1; threshold 1×10⁻¹².
+- Validation fixture 37 in `apollo-validation`: `sht_inverse_roundtrip_y10_fixture` —
+  SHT lmax=1, lat=12, lon=25: dipole Y_1^0 = √(3/4π)·cosθ roundtrip;
+  Driscoll & Healy (1994) Adv. Appl. Math. 15 Theorem 1; threshold 1×10⁻¹⁰.
+- Root `README.md` fixture count updated 34 → 37; three new entries appended.
+
+#### Final state
+- `cargo test --workspace`: 0 FAILED, 0 ignored, all doc-tests compile.
+- Published-reference fixture count: 37.
+
+---
+
+## [0.12.6] — Closure XXVI
+
+### Closure XXVI — Inverse-Roundtrip Published-Reference Fixtures: DWT, GFT, FrFT [patch]
+
+#### Added
+- Validation fixture 32 in `apollo-validation`: `wavelet_haar_inverse_perfect_reconstruction_fixture` —
+  Haar DWT N=4, 1-level: `IDWT(DWT([1,−1,0,0])) = [1,−1,0,0]`. Mallat (1989) §3.1 Theorem 2
+  perfect reconstruction. Threshold 1×10⁻¹².
+- Validation fixture 33 in `apollo-validation`: `gft_path_graph_inverse_roundtrip_fixture` —
+  GFT K₂ path graph: `GFT⁻¹(GFT([3,−1])) = [3,−1]`. Sandryhaila & Moura (2013) ICASSP
+  eigendecomposition invertibility. Threshold 1×10⁻¹².
+- Validation fixture 34 in `apollo-validation`: `frft_inverse_roundtrip_order_half_fixture` —
+  FrFT α=0.5, N=4: `FrFT(−0.5)(FrFT(0.5)([1,2,3,4])) = [1,2,3,4]`. Namias (1980) J.IMA 25(3)
+  additivity theorem F⁻α ∘ Fα = I. Threshold 1×10⁻¹².
+- Root `README.md` fixture count updated 31 → 34; three new fixture entries appended.
+
+#### Final state
+- `cargo test --workspace`: 0 FAILED, 0 ignored, all doc-tests compile.
+- Published-reference fixture count: 34 (assertions in both test functions updated 31 → 34).
+
+---
+
+## [0.12.5] — Closure XXV
+
+### Closure XXV — Hilbert Instantaneous Frequency + Doc/Test/PM Cleanup [patch]
+
+#### Added
+- `AnalyticSignal::instantaneous_frequency()` in `apollo-hilbert`
+  (`domain/signal/analytic.rs`): computes instantaneous frequency in cycles per
+  sample using the complex-derivative formula
+  `f[n] = arg(conj(z[n]) · z[n+1]) / (2π)`. Returns a `Vec<f64>` of length
+  `N − 1`. Avoids explicit phase unwrapping; values in `(−0.5, +0.5]`.
+  Reference: Boashash (1992) Proc. IEEE 80(4).
+- Validation fixture 31 in `apollo-validation`:
+  `hilbert_instantaneous_frequency_constant_tone_fixture` — verifies that
+  `cos(2π5·n/64)` has instantaneous frequency `5/64` at every sample
+  (threshold 1e-10). Root `README.md` fixture count updated 30 → 31.
+
+#### Added (Tests — apollo-hilbert)
+- `instantaneous_frequency_constant_tone`: asserts `IF = k/N` for all N−1
+  samples of a single-tone cosine at `k=5`, `N=64`; tolerance 1e-10.
+- `double_hilbert_negates_zero_mean_signal`: asserts `H{H{x}} = −x` for a
+  sinusoidal input at `N=32`; tolerance 1e-10.
+
+#### Changed
+- `apollo-ntt-wgpu/src/verification.rs` module doc: `rust,ignore` code block
+  converted to `rust,no_run` with `# use apollo_ntt_wgpu::NttWgpuBackend;`
+  preamble. Eliminates the last workspace-wide ignored test; doc-test now
+  reports "ok compile" instead of "ignored".
+- `apollo-stft-wgpu/src/infrastructure/device.rs`:
+  `execute_inverse_with_buffers` doc comment expanded from stub to full
+  description including non-PoT delegation behaviour and `# Errors` section.
+- `CHANGELOG.md`: back-filled missing Closure XXIII (0.12.3) and Closure XXIV
+  (0.12.4) entries.
+- `apollo-hilbert/README.md`: added "Instantaneous Frequency" subsection
+  documenting formula, `N−1` length contract, and Boashash 1992 reference.
+
+#### Final state
+- `cargo test --workspace`: 0 FAILED, 0 ignored, all doc-tests compile.
+
+---
+
+## [0.12.4] — Closure XXIV
+
+### Closure XXIV — GPU Adapter Preference + Test Runtime-Skip Conversion + Bluestein CZT Sign Fix [patch]
+
+#### Changed
+- All 20 `wgpu::RequestAdapterOptions::default()` sites replaced with
+  `power_preference: PowerPreference::HighPerformance` across every wgpu crate
+  (`apollo-fft-wgpu`, `apollo-czt-wgpu`, `apollo-mellin-wgpu`, `apollo-ntt-wgpu`,
+  `apollo-stft-wgpu`, `apollo-radon-wgpu`, `apollo-nufft-wgpu`, `apollo-hilbert-wgpu`,
+  `apollo-sft-wgpu`, `apollo-qft-wgpu`, `apollo-frft-wgpu`, `apollo-fwht-wgpu`,
+  `apollo-dht-wgpu`, `apollo-sdft-wgpu`, `apollo-sht-wgpu`, `apollo-dctdst-wgpu`,
+  `apollo-gft-wgpu`, `apollo-wavelet-wgpu`, `f16_plan.rs`, `buffer_reuse` bench).
+  Ensures NVIDIA discrete GPU is preferred over integrated/software adapters.
+- `apollo-ntt-wgpu` verification: removed all 10 `#[ignore]` attributes; converted
+  to `let Ok(backend) = NttWgpuBackend::try_default() else { return; }` runtime-skip
+  pattern. Tests run unconditionally on GPU-enabled hosts and skip silently on CI.
+- `apollo-stft-wgpu` verification: removed all 7 `#[ignore]` attributes; same
+  runtime-skip pattern applied.
+- `apollo-stft-wgpu/src/infrastructure/shaders/stft_chirp.wgsl`: corrected all four
+  Bluestein sign errors (`premul_fwd`: `exp(−πi·n²/N)`, `premul_inv`: `exp(+πi·n²/N)`,
+  `postmul_fwd`: `exp(−πi·k²/N)`, `postmul_inv`: `exp(+πi·n²/N)/N`); added new
+  `stft_chirp_pointmul_fwd` entry point that conjugates the stored kernel
+  `h_stored = exp(−πi·j²/N)` to recover `h_fwd = exp(+πi·j²/N)`.
+- `StftChirpData` (`chirp.rs`): added `pointmul_fwd_pipeline: wgpu::ComputePipeline`
+  field; `new()` builds pipeline from `stft_chirp_pointmul_fwd` entry point.
+- `kernel.rs` forward CZT dispatch (Pass C): uses `pointmul_fwd_pipeline` instead of
+  `pointmul_pipeline`; inverse Pass C unchanged.
+- `device.rs`: added non-PoT guards to `execute_forward_with_buffers` and
+  `execute_inverse_with_buffers` that delegate to the allocating Chirp-Z path and copy
+  results into `fwd_output_host` / `inv_output_host`.
+- `stft-wgpu` forward CZT test tolerance updated `1e-2 → 2e-2` (analytically justified
+  by f32 GPU argument-reduction at phase magnitudes up to ~1254 rad for N=400).
+
+#### Final state
+- `cargo test --workspace`: 0 FAILED, 0 ignored across all 38+ crates and all doc-tests.
+
+---
+
+## [0.12.3] — Closure XXIII
+
+### Closure XXIII — ARCHITECTURE.md Capability Annotations + Validation Fixtures 29–30 [patch]
+
+#### Changed
+- `ARCHITECTURE.md` Mixed-Precision Capability Table: added `"forward + inverse CZT"` and
+  `"forward + inverse Mellin spectrum"` annotations to the `Notes` column for
+  `apollo-czt-wgpu` and `apollo-mellin-wgpu`, matching the bidirectional-WGPU annotation
+  pattern already established for other transform pairs.
+
+#### Added
+- `apollo-validation`: two new published-reference fixtures (fixtures 29 and 30).
+  - `czt_inverse_vandermonde_roundtrip_fixture`: N=4 Björck-Pereyra Vandermonde solve,
+    threshold 1e-12. Validates exact numeric contract from Björck & Pereyra (1970).
+  - `mellin_inverse_spectrum_constant_roundtrip_fixture`: N=32 constant signal IDFT +
+    exp-resample roundtrip, threshold 1e-10.
+  - `published_real_fixture_with_threshold` helper function added.
+  - README fixture count updated 28 → 30.
+  - `validation_suite_produces_value_semantic_reports` assertion updated to 30.
+  - All 30 fixtures pass.
+
+---
+
+## [0.12.2] — Closure XXII
 ### Closure XXII — GPU Benchmark Runner Workflow + Root README Correction [patch]
 
 #### Added
@@ -318,7 +545,6 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 ---
 
 ## [0.3.0] — Closure VII
-
 
 ### Added
 - Six new published-reference fixtures in `apollo-validation`: SFT 1-sparse alternating tone, SHT monopole Y₀⁰ coefficient, STFT rectangular-window impulse frame, Hilbert cosine-to-sine 4-point, Mellin constant-function first moment, Radon θ=0 column-impulse projection. Fixture count rises from 22 to 28. [minor]
