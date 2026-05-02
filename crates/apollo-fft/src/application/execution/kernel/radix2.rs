@@ -508,9 +508,12 @@ pub fn forward_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
             { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
             for j in 1..half {
                 let u = lo[j];
-                let t = stage_twiddles[j] * hi[j];
-                lo[j] = u + t;
-                hi[j] = u - t;
+                let v = hi[j];
+                let w = stage_twiddles[j];
+                let tr = w.re * v.re - w.im * v.im;
+                let ti = w.re * v.im + w.im * v.re;
+                lo[j] = Complex64::new(u.re + tr, u.im + ti);
+                hi[j] = Complex64::new(u.re - tr, u.im - ti);
             }
         }
         base += half;
@@ -544,11 +547,15 @@ pub fn inverse_inplace_unnorm_64_with_twiddles(data: &mut [Complex64], twiddles:
         let stage_twiddles = &twiddles[base..base + half];
         for chunk in data.chunks_exact_mut(len) {
             let (lo, hi) = chunk.split_at_mut(half);
-            for j in 0..half {
+            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+            for j in 1..half {
                 let u = lo[j];
-                let t = stage_twiddles[j] * hi[j];
-                lo[j] = u + t;
-                hi[j] = u - t;
+                let v = hi[j];
+                let w = stage_twiddles[j];
+                let tr = w.re * v.re - w.im * v.im;
+                let ti = w.re * v.im + w.im * v.re;
+                lo[j] = Complex64::new(u.re + tr, u.im + ti);
+                hi[j] = Complex64::new(u.re - tr, u.im - ti);
             }
         }
         base += half;
@@ -597,9 +604,12 @@ pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
             { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
             for j in 1..half {
                 let u = lo[j];
-                let t = stage_twiddles[j] * hi[j];
-                lo[j] = u + t;
-                hi[j] = u - t;
+                let v = hi[j];
+                let w = stage_twiddles[j];
+                let tr = w.re * v.re - w.im * v.im;
+                let ti = w.re * v.im + w.im * v.re;
+                lo[j] = Complex64::new(u.re + tr, u.im + ti);
+                hi[j] = Complex64::new(u.re - tr, u.im - ti);
             }
         }
         base += half;
@@ -612,9 +622,12 @@ pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
     { let u = lo[0]; let v = hi[0]; lo[0] = (u + v) * scale; hi[0] = (u - v) * scale; }
     for j in 1..half {
         let u = lo[j];
-        let t = stage_twiddles[j] * hi[j];
-        lo[j] = (u + t) * scale;
-        hi[j] = (u - t) * scale;
+        let v = hi[j];
+        let w = stage_twiddles[j];
+        let tr = w.re * v.re - w.im * v.im;
+        let ti = w.re * v.im + w.im * v.re;
+        lo[j] = Complex64::new((u.re + tr) * scale, (u.im + ti) * scale);
+        hi[j] = Complex64::new((u.re - tr) * scale, (u.im - ti) * scale);
     }
 }
 
@@ -646,9 +659,12 @@ pub fn forward_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
             { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
             for j in 1..half {
                 let u = lo[j];
-                let t = stage_twiddles[j] * hi[j];
-                lo[j] = u + t;
-                hi[j] = u - t;
+                let v = hi[j];
+                let w = stage_twiddles[j];
+                let tr = w.re * v.re - w.im * v.im;
+                let ti = w.re * v.im + w.im * v.re;
+                lo[j] = Complex32::new(u.re + tr, u.im + ti);
+                hi[j] = Complex32::new(u.re - tr, u.im - ti);
             }
         }
         base += half;
@@ -684,9 +700,12 @@ pub fn inverse_inplace_unnorm_32_with_twiddles(data: &mut [Complex32], twiddles:
             { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
             for j in 1..half {
                 let u = lo[j];
-                let t = stage_twiddles[j] * hi[j];
-                lo[j] = u + t;
-                hi[j] = u - t;
+                let v = hi[j];
+                let w = stage_twiddles[j];
+                let tr = w.re * v.re - w.im * v.im;
+                let ti = w.re * v.im + w.im * v.re;
+                lo[j] = Complex32::new(u.re + tr, u.im + ti);
+                hi[j] = Complex32::new(u.re - tr, u.im - ti);
             }
         }
         base += half;
@@ -730,9 +749,12 @@ pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
             { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
             for j in 1..half {
                 let u = lo[j];
-                let t = stage_twiddles[j] * hi[j];
-                lo[j] = u + t;
-                hi[j] = u - t;
+                let v = hi[j];
+                let w = stage_twiddles[j];
+                let tr = w.re * v.re - w.im * v.im;
+                let ti = w.re * v.im + w.im * v.re;
+                lo[j] = Complex32::new(u.re + tr, u.im + ti);
+                hi[j] = Complex32::new(u.re - tr, u.im - ti);
             }
         }
         base += half;
@@ -744,9 +766,12 @@ pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
     { let u = lo[0]; let v = hi[0]; lo[0] = (u + v) * scale; hi[0] = (u - v) * scale; }
     for j in 1..half {
         let u = lo[j];
-        let t = stage_twiddles[j] * hi[j];
-        lo[j] = (u + t) * scale;
-        hi[j] = (u - t) * scale;
+        let v = hi[j];
+        let w = stage_twiddles[j];
+        let tr = w.re * v.re - w.im * v.im;
+        let ti = w.re * v.im + w.im * v.re;
+        lo[j] = Complex32::new((u.re + tr) * scale, (u.im + ti) * scale);
+        hi[j] = Complex32::new((u.re - tr) * scale, (u.im - ti) * scale);
     }
 }
 

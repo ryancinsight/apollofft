@@ -11,6 +11,35 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.10] — Closure XLIX
+
+### Closure XLIX — apollo-fft/apollo-python: scalar butterfly hot loop + single-copy complex Python wrappers [patch]
+
+#### Changed
+- `apollo-fft` / `radix2.rs`: replaced operator-based hot-loop complex arithmetic
+  (`t = w * v; u ± t`) with explicit scalar real/imag fused arithmetic in all precomputed-twiddle
+  butterflies (f64/f32 forward + inverse variants, including normalized final stages).
+  This removes temporary `Complex` values in the inner loop and improves autovectorization
+  opportunities under `target-cpu=native`.
+- `apollo-fft` / `radix2.rs`: restored j=0 bypass in `inverse_inplace_unnorm_64_with_twiddles`
+  (`W_L^0 = 1+0i`), matching the optimized forward and normalized inverse paths and removing one
+  unnecessary complex multiply per chunk per stage.
+- `apollo-python` / `lib.rs`: rewired complex FFT wrappers (`fft_complex{1,2,3}`,
+  `ifft_complex{1,2,3}` and plan methods) to use in-place APIs on one owned ndarray buffer
+  instead of the prior double-copy path (`to_owned()` + library-level clone-return API).
+  This reduces peak host memory traffic for complex transforms and lowers Python binding overhead.
+
+#### Verification
+- `cargo test -p apollo-fft -p apollo-python` → pass (`apollo-fft`: 63/63).
+- `python -m pytest tests/test_smoke.py -q` → pass (34/34).
+
+#### Benchmark Highlights (vs numpy, Closure XLIX run)
+- 1D complex FFT: `N=4096` improved to **1.27x**; `N=65536` improved to **1.37x**.
+- 1D real FFT: `N=65536` measured **2.84x**.
+- 3D real FFT: `N=128^3` measured **1.57x**.
+
+---
+
 ## [0.13.9] — Closure XLVIII
 
 ### Closure XLVIII — apollo-fft: codegen-units=1, thin LTO, target-cpu=native, j=0 butterfly bypass [patch]

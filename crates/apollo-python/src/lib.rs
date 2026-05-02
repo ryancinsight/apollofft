@@ -8,10 +8,10 @@ pub mod infrastructure;
 use apollo_dctdst::{dct2, dct3, dst2, dst3};
 use apollo_dht::{DhtPlan, HartleySpectrum};
 use apollo_fft::{
-    f16, fft_1d_complex, fft_2d_complex, fft_3d_complex, fftfreq, fftshift, ifft_1d_complex,
-    ifft_2d_complex, ifft_3d_complex, ifftshift, rfftfreq, Complex32, Complex64, CpuBackend,
-    FftBackend, FftPlan1D, FftPlan2D, FftPlan3D, PrecisionMode, PrecisionProfile, Shape1D,
-    Shape2D, Shape3D, StoragePrecision,
+    f16, fft_1d_complex_inplace, fft_2d_complex_inplace, fft_3d_complex_inplace, fftfreq,
+    fftshift, ifft_1d_complex_inplace, ifft_2d_complex_inplace, ifft_3d_complex_inplace,
+    ifftshift, rfftfreq, Complex32, Complex64, CpuBackend, FftBackend, FftPlan1D, FftPlan2D,
+    FftPlan3D, PrecisionMode, PrecisionProfile, Shape1D, Shape2D, Shape3D, StoragePrecision,
 };
 use apollo_fwht::{FwhtPlan, FwhtPlan2D, FwhtPlan3D};
 use apollo_nufft::{
@@ -198,10 +198,9 @@ impl PyFftPlan1D {
         input: PyReadonlyArray1<'_, Complex64>,
     ) -> PyResult<Bound<'py, PyArray1<Complex64>>> {
         require_contiguous_1d(&input, "fft_complex input")?;
-        Ok(PyArray1::from_owned_array(
-            py,
-            fft_1d_complex(&input.as_array().to_owned()),
-        ))
+        let mut output = input.as_array().to_owned();
+        fft_1d_complex_inplace(&mut output);
+        Ok(PyArray1::from_owned_array(py, output))
     }
 
     /// Complex-to-complex inverse FFT using the plan's cached twiddle factors.
@@ -211,10 +210,9 @@ impl PyFftPlan1D {
         input: PyReadonlyArray1<'_, Complex64>,
     ) -> PyResult<Bound<'py, PyArray1<Complex64>>> {
         require_contiguous_1d(&input, "ifft_complex input")?;
-        Ok(PyArray1::from_owned_array(
-            py,
-            ifft_1d_complex(&input.as_array().to_owned()),
-        ))
+        let mut output = input.as_array().to_owned();
+        ifft_1d_complex_inplace(&mut output);
+        Ok(PyArray1::from_owned_array(py, output))
     }
 }
 
@@ -316,10 +314,9 @@ impl PyFftPlan2D {
         input: PyReadonlyArray2<'_, Complex64>,
     ) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
         require_contiguous_2d(&input, "fft_complex input")?;
-        Ok(PyArray2::from_owned_array(
-            py,
-            fft_2d_complex(&input.as_array().to_owned()),
-        ))
+        let mut output = input.as_array().to_owned();
+        fft_2d_complex_inplace(&mut output);
+        Ok(PyArray2::from_owned_array(py, output))
     }
 
     /// Complex-to-complex inverse 2D FFT.
@@ -329,10 +326,9 @@ impl PyFftPlan2D {
         input: PyReadonlyArray2<'_, Complex64>,
     ) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
         require_contiguous_2d(&input, "ifft_complex input")?;
-        Ok(PyArray2::from_owned_array(
-            py,
-            ifft_2d_complex(&input.as_array().to_owned()),
-        ))
+        let mut output = input.as_array().to_owned();
+        ifft_2d_complex_inplace(&mut output);
+        Ok(PyArray2::from_owned_array(py, output))
     }
 }
 
@@ -1034,10 +1030,9 @@ fn fft_complex1<'py>(
     input: PyReadonlyArray1<'_, Complex64>,
 ) -> PyResult<Bound<'py, PyArray1<Complex64>>> {
     require_contiguous_1d(&input, "fft_complex1 input")?;
-    Ok(PyArray1::from_owned_array(
-        py,
-        fft_1d_complex(&input.as_array().to_owned()),
-    ))
+    let mut output = input.as_array().to_owned();
+    fft_1d_complex_inplace(&mut output);
+    Ok(PyArray1::from_owned_array(py, output))
 }
 
 /// Complex-to-complex inverse 1D FFT. Accepts complex128, returns complex128.
@@ -1047,10 +1042,9 @@ fn ifft_complex1<'py>(
     input: PyReadonlyArray1<'_, Complex64>,
 ) -> PyResult<Bound<'py, PyArray1<Complex64>>> {
     require_contiguous_1d(&input, "ifft_complex1 input")?;
-    Ok(PyArray1::from_owned_array(
-        py,
-        ifft_1d_complex(&input.as_array().to_owned()),
-    ))
+    let mut output = input.as_array().to_owned();
+    ifft_1d_complex_inplace(&mut output);
+    Ok(PyArray1::from_owned_array(py, output))
 }
 
 /// Complex-to-complex forward 2D FFT.
@@ -1060,10 +1054,9 @@ fn fft_complex2<'py>(
     input: PyReadonlyArray2<'_, Complex64>,
 ) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
     require_contiguous_2d(&input, "fft_complex2 input")?;
-    Ok(PyArray2::from_owned_array(
-        py,
-        fft_2d_complex(&input.as_array().to_owned()),
-    ))
+    let mut output = input.as_array().to_owned();
+    fft_2d_complex_inplace(&mut output);
+    Ok(PyArray2::from_owned_array(py, output))
 }
 
 /// Complex-to-complex inverse 2D FFT.
@@ -1073,10 +1066,9 @@ fn ifft_complex2<'py>(
     input: PyReadonlyArray2<'_, Complex64>,
 ) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
     require_contiguous_2d(&input, "ifft_complex2 input")?;
-    Ok(PyArray2::from_owned_array(
-        py,
-        ifft_2d_complex(&input.as_array().to_owned()),
-    ))
+    let mut output = input.as_array().to_owned();
+    ifft_2d_complex_inplace(&mut output);
+    Ok(PyArray2::from_owned_array(py, output))
 }
 
 /// Complex-to-complex forward 3D FFT.
@@ -1086,10 +1078,9 @@ fn fft_complex3<'py>(
     input: PyReadonlyArray3<'_, Complex64>,
 ) -> PyResult<Bound<'py, PyArray3<Complex64>>> {
     require_contiguous_3d(&input, "fft_complex3 input")?;
-    Ok(PyArray3::from_owned_array(
-        py,
-        fft_3d_complex(&input.as_array().to_owned()),
-    ))
+    let mut output = input.as_array().to_owned();
+    fft_3d_complex_inplace(&mut output);
+    Ok(PyArray3::from_owned_array(py, output))
 }
 
 /// Complex-to-complex inverse 3D FFT.
@@ -1099,10 +1090,9 @@ fn ifft_complex3<'py>(
     input: PyReadonlyArray3<'_, Complex64>,
 ) -> PyResult<Bound<'py, PyArray3<Complex64>>> {
     require_contiguous_3d(&input, "ifft_complex3 input")?;
-    Ok(PyArray3::from_owned_array(
-        py,
-        ifft_3d_complex(&input.as_array().to_owned()),
-    ))
+    let mut output = input.as_array().to_owned();
+    ifft_3d_complex_inplace(&mut output);
+    Ok(PyArray3::from_owned_array(py, output))
 }
 
 // ── Discrete Hartley Transform ────────────────────────────────────────────────
