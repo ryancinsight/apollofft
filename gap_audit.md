@@ -2,9 +2,6 @@
 
 ## Open Gaps
 
-- `apollo-dctdst-wgpu` dimensional parity gap: GPU DCT/DST currently exposes 1D forward/inverse execution only.
-  Separable 2D (`N x N`) and 3D (`N x N x N`) forward/inverse execution APIs are not yet implemented on WGPU,
-  while CPU parity is now present in `apollo-dctdst`.
 - `GpuFft3dF16Native` Bluestein path on production hardware with non-power-of-two sizes: current test passes on dev hardware; production validation on adapters that expose `wgpu::Features::SHADER_F16` is pending.
 - Criterion buffer-reuse bench results on representative GPU hardware: allocation-vs-reuse speedup ratios for FFT/NUFFT/STFT/Radon WGPU benchmark suites are not yet recorded as numbers. Closure XXII added the manual self-hosted GPU workflow and runner script; the residual gap is the first benchmark execution on real labeled hardware and publication of the measured ratios.
 
@@ -14,6 +11,23 @@ quantized storage (implemented and verified). Floating-point NTT is architectura
 by design and will not be implemented.
 
 ## Closed Gaps
+### Closure XL — GPU DCT/DST 2D and 3D Separable Execution [minor]
+- **Gap**: `apollo-dctdst-wgpu` exposed only 1D forward/inverse execution while CPU had full 2D/3D
+  parity after Closure XXXIX.
+- **Closed by**: Added separable GPU APIs `execute_forward_2d`, `execute_inverse_2d`,
+  `execute_forward_3d`, `execute_inverse_3d` to `DctDstWgpuBackend`. Dispatch reuses the existing
+  1D GPU kernel per row/column/fiber — no new WGSL shaders. Added `WgpuError::ShapeMismatch` and
+  `WgpuError::ShapeMismatch3d` for contract-checked rejection of non-square/non-cubic inputs.
+  Re-exported `ndarray::Array2` and `ndarray::Array3` from the crate root.
+- **Verification**:
+  - GPU 2D DCT-II forward output parity with CPU separable reference.
+  - GPU 2D DCT-II inverse roundtrip recovery.
+  - GPU 3D DCT-II forward output parity with CPU separable reference.
+  - GPU 3D DCT-II inverse roundtrip recovery.
+  - Non-square 2D shape rejection (`ShapeMismatch`).
+  - Non-cubic 3D shape rejection (`ShapeMismatch3d`).
+- **Evidence**: `cargo test -p apollo-dctdst-wgpu` — 28 passed, 0 FAILED, 0 ignored.
+
 ### Closure XXXIX — CPU DCT/DST 2D and 3D Separable Plans [minor]
 - **Gap**: `apollo-dctdst` exposed only 1D `forward`/`inverse` APIs. Under the 1D/2D/3D objective,
   DCT/DST lacked CPU plan-level multidimensional execution paths.

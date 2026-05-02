@@ -87,6 +87,7 @@ dependencies = [
  "apollo-dctdst",
  "apollo-fft",
  "bytemuck",
+ "ndarray",
  "pollster",
  "thiserror 1.0.69",
  "wgpu",

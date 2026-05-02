@@ -1,4 +1,20 @@
 # Apollo Checklist
+## Closure XL — GPU DCT/DST 2D and 3D Separable Execution [minor]
+Sprint target version: 0.13.1
+
+- [x] Triage: identify GPU dimensional gap (`apollo-dctdst-wgpu` 1D-only vs CPU 2D/3D in XXXIX).
+- [x] Add `ndarray = "0.16"` to `apollo-dctdst-wgpu/Cargo.toml`.
+- [x] Add `WgpuError::ShapeMismatch` and `WgpuError::ShapeMismatch3d` to `domain/error.rs`.
+- [x] Implement `execute_forward_2d` and `execute_inverse_2d` in `infrastructure/device.rs`.
+- [x] Implement `execute_forward_3d` and `execute_inverse_3d` in `infrastructure/device.rs`.
+- [x] Re-export `ndarray::Array2` and `ndarray::Array3` from `lib.rs`.
+- [x] Add value-semantic verification tests:
+  2D forward parity, 2D inverse roundtrip, 3D forward parity, 3D inverse roundtrip,
+  non-square shape rejection, non-cubic shape rejection.
+- [x] Update sprint PM artifacts: CHANGELOG.md, backlog.md, checklist.md, gap_audit.md.
+- [x] `cargo test -p apollo-dctdst-wgpu`: 28 passed, 0 FAILED, 0 ignored.
+- [x] `cargo test -p apollo-validation -- --include-ignored`: 3 passed, 0 FAILED, 0 ignored.
+
 ## Closure XXXIX — CPU DCT/DST 2D and 3D Separable Plans [minor]
 Sprint target version: 0.13.0
 

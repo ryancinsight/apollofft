@@ -1,5 +1,16 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure XL phase)
+- [x] [minor] Add GPU separable 2D DCT/DST APIs to `apollo-dctdst-wgpu` `DctDstWgpuBackend`:
+  `execute_forward_2d`, `execute_inverse_2d`.
+- [x] [minor] Add GPU separable 3D DCT/DST APIs to `apollo-dctdst-wgpu` `DctDstWgpuBackend`:
+  `execute_forward_3d`, `execute_inverse_3d`.
+- [x] [minor] Add `WgpuError::ShapeMismatch` and `WgpuError::ShapeMismatch3d` variants.
+- [x] [minor] Add `ndarray = "0.16"` dependency and re-export `Array2`, `Array3` from crate root.
+- [x] [minor] Add verification tests: 2D/3D GPU-CPU parity, roundtrip recovery, shape rejection.
+- Final state: `cargo test -p apollo-dctdst-wgpu` 28 passed, 0 FAILED, 0 ignored;
+  `cargo test -p apollo-validation -- --include-ignored` 3 passed, 0 FAILED, 0 ignored.
+
 ## Closed in this sprint (Closure XXXIX phase)
 - [x] [minor] Add CPU separable 2D DCT/DST APIs to `apollo-dctdst` `DctDstPlan`:
   `forward_2d`, `forward_2d_into`, `inverse_2d`, `inverse_2d_into`.

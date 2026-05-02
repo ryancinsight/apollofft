@@ -11,6 +11,33 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.1] — Closure XL
+
+### Closure XL — GPU DCT/DST 2D and 3D Separable Execution [minor]
+
+#### Added
+- `apollo-dctdst-wgpu` `DctDstWgpuBackend` now exposes separable multidimensional GPU APIs:
+  `execute_forward_2d`, `execute_inverse_2d`, `execute_forward_3d`, `execute_inverse_3d`.
+- `WgpuError::ShapeMismatch { expected, rows, cols }` — returned when a 2D input is not `N×N`.
+- `WgpuError::ShapeMismatch3d { expected, d0, d1, d2 }` — returned when a 3D input is not `N×N×N`.
+- `ndarray = "0.16"` added to `apollo-dctdst-wgpu` dependencies; `Array2` and `Array3` re-exported
+  from `apollo-dctdst-wgpu`.
+- Verification coverage added in `apollo-dctdst-wgpu`:
+  - 2D DCT-II forward GPU parity against CPU separable reference.
+  - 2D DCT-II inverse roundtrip recovery.
+  - 3D DCT-II forward GPU parity against CPU separable reference.
+  - 3D DCT-II inverse roundtrip recovery.
+  - Non-square 2D shape rejection (`ShapeMismatch`).
+  - Non-cubic 3D shape rejection (`ShapeMismatch3d`).
+- Separable strategy: 1D GPU kernel dispatched per row/column/fiber — no new WGSL shaders required.
+
+#### Final state
+- `cargo test -p apollo-dctdst-wgpu`: 28 passed, 0 FAILED, 0 ignored.
+- `cargo test -p apollo-validation -- --include-ignored`: 3 passed, 0 FAILED, 0 ignored.
+- `apollo-dctdst-wgpu` dimensional parity gap in `gap_audit.md` closed.
+
+---
+
 ## [0.13.0] — Closure XXXIX
 
 ### Closure XXXIX — CPU DCT/DST 2D and 3D Separable Plans [minor]

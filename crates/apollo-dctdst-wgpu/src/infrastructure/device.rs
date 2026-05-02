@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use apollo_dctdst::{RealTransformKind, RealTransformStorage};
 use apollo_fft::PrecisionProfile;
+use ndarray::{Array2, Array3};
 
 use crate::application::plan::DctDstWgpuPlan;
 use crate::domain::capabilities::WgpuCapabilities;
@@ -248,5 +249,193 @@ impl DctDstWgpuBackend {
             });
         }
         Ok(())
+    }
+
+    /// Execute the unnormalized 2D separable forward real-to-real transform.
+    ///
+    /// Applies the 1D forward transform along each row then each column.
+    /// Requires a square `n × n` input where `n == plan.len()`.
+    pub fn execute_forward_2d(
+        &self,
+        plan: &DctDstWgpuPlan,
+        input: &Array2<f32>,
+    ) -> WgpuResult<Array2<f32>> {
+        let n = plan.len();
+        let (rows, cols) = input.dim();
+        if rows != n || cols != n {
+            return Err(WgpuError::ShapeMismatch {
+                expected: n,
+                rows,
+                cols,
+            });
+        }
+        // Row pass.
+        let mut tmp = Array2::<f32>::zeros((n, n));
+        for r in 0..n {
+            let row: Vec<f32> = input.row(r).iter().copied().collect();
+            let out = self.execute_forward(plan, &row)?;
+            for c in 0..n {
+                tmp[[r, c]] = out[c];
+            }
+        }
+        // Column pass.
+        let mut result = Array2::<f32>::zeros((n, n));
+        for c in 0..n {
+            let col: Vec<f32> = tmp.column(c).iter().copied().collect();
+            let out = self.execute_forward(plan, &col)?;
+            for r in 0..n {
+                result[[r, c]] = out[r];
+            }
+        }
+        Ok(result)
+    }
+
+    /// Execute the normalized 2D separable inverse real-to-real transform.
+    ///
+    /// Applies the 1D inverse transform along each column then each row.
+    /// Requires a square `n × n` input where `n == plan.len()`.
+    pub fn execute_inverse_2d(
+        &self,
+        plan: &DctDstWgpuPlan,
+        input: &Array2<f32>,
+    ) -> WgpuResult<Array2<f32>> {
+        let n = plan.len();
+        let (rows, cols) = input.dim();
+        if rows != n || cols != n {
+            return Err(WgpuError::ShapeMismatch {
+                expected: n,
+                rows,
+                cols,
+            });
+        }
+        // Column pass (inverse).
+        let mut tmp = Array2::<f32>::zeros((n, n));
+        for c in 0..n {
+            let col: Vec<f32> = input.column(c).iter().copied().collect();
+            let out = self.execute_inverse(plan, &col)?;
+            for r in 0..n {
+                tmp[[r, c]] = out[r];
+            }
+        }
+        // Row pass (inverse).
+        let mut result = Array2::<f32>::zeros((n, n));
+        for r in 0..n {
+            let row: Vec<f32> = tmp.row(r).iter().copied().collect();
+            let out = self.execute_inverse(plan, &row)?;
+            for c in 0..n {
+                result[[r, c]] = out[c];
+            }
+        }
+        Ok(result)
+    }
+
+    /// Execute the unnormalized 3D separable forward real-to-real transform.
+    ///
+    /// Applies the 1D forward transform along axes 0, 1, and 2 in sequence.
+    /// Requires a cubic `n × n × n` input where `n == plan.len()`.
+    pub fn execute_forward_3d(
+        &self,
+        plan: &DctDstWgpuPlan,
+        input: &Array3<f32>,
+    ) -> WgpuResult<Array3<f32>> {
+        let n = plan.len();
+        let (d0, d1, d2) = input.dim();
+        if d0 != n || d1 != n || d2 != n {
+            return Err(WgpuError::ShapeMismatch3d {
+                expected: n,
+                d0,
+                d1,
+                d2,
+            });
+        }
+        // Axis-0 pass.
+        let mut tmp0 = Array3::<f32>::zeros((n, n, n));
+        for j in 0..n {
+            for k in 0..n {
+                let fiber: Vec<f32> = (0..n).map(|i| input[[i, j, k]]).collect();
+                let out = self.execute_forward(plan, &fiber)?;
+                for i in 0..n {
+                    tmp0[[i, j, k]] = out[i];
+                }
+            }
+        }
+        // Axis-1 pass.
+        let mut tmp1 = Array3::<f32>::zeros((n, n, n));
+        for i in 0..n {
+            for k in 0..n {
+                let fiber: Vec<f32> = (0..n).map(|j| tmp0[[i, j, k]]).collect();
+                let out = self.execute_forward(plan, &fiber)?;
+                for j in 0..n {
+                    tmp1[[i, j, k]] = out[j];
+                }
+            }
+        }
+        // Axis-2 pass.
+        let mut result = Array3::<f32>::zeros((n, n, n));
+        for i in 0..n {
+            for j in 0..n {
+                let fiber: Vec<f32> = (0..n).map(|k| tmp1[[i, j, k]]).collect();
+                let out = self.execute_forward(plan, &fiber)?;
+                for k in 0..n {
+                    result[[i, j, k]] = out[k];
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    /// Execute the normalized 3D separable inverse real-to-real transform.
+    ///
+    /// Applies the 1D inverse transform along axes 2, 1, and 0 in sequence.
+    /// Requires a cubic `n × n × n` input where `n == plan.len()`.
+    pub fn execute_inverse_3d(
+        &self,
+        plan: &DctDstWgpuPlan,
+        input: &Array3<f32>,
+    ) -> WgpuResult<Array3<f32>> {
+        let n = plan.len();
+        let (d0, d1, d2) = input.dim();
+        if d0 != n || d1 != n || d2 != n {
+            return Err(WgpuError::ShapeMismatch3d {
+                expected: n,
+                d0,
+                d1,
+                d2,
+            });
+        }
+        // Axis-2 pass (inverse).
+        let mut tmp0 = Array3::<f32>::zeros((n, n, n));
+        for i in 0..n {
+            for j in 0..n {
+                let fiber: Vec<f32> = (0..n).map(|k| input[[i, j, k]]).collect();
+                let out = self.execute_inverse(plan, &fiber)?;
+                for k in 0..n {
+                    tmp0[[i, j, k]] = out[k];
+                }
+            }
+        }
+        // Axis-1 pass (inverse).
+        let mut tmp1 = Array3::<f32>::zeros((n, n, n));
+        for i in 0..n {
+            for k in 0..n {
+                let fiber: Vec<f32> = (0..n).map(|j| tmp0[[i, j, k]]).collect();
+                let out = self.execute_inverse(plan, &fiber)?;
+                for j in 0..n {
+                    tmp1[[i, j, k]] = out[j];
+                }
+            }
+        }
+        // Axis-0 pass (inverse).
+        let mut result = Array3::<f32>::zeros((n, n, n));
+        for j in 0..n {
+            for k in 0..n {
+                let fiber: Vec<f32> = (0..n).map(|i| tmp1[[i, j, k]]).collect();
+                let out = self.execute_inverse(plan, &fiber)?;
+                for i in 0..n {
+                    result[[i, j, k]] = out[i];
+                }
+            }
+        }
+        Ok(result)
     }
 }
