@@ -504,7 +504,9 @@ pub fn forward_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
         let stage_twiddles = &twiddles[base..base + half];
         for chunk in data.chunks_exact_mut(len) {
             let (lo, hi) = chunk.split_at_mut(half);
-            for j in 0..half {
+            // j=0: W_L^0 = 1+0i for every stage — no multiply.
+            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+            for j in 1..half {
                 let u = lo[j];
                 let t = stage_twiddles[j] * hi[j];
                 lo[j] = u + t;
@@ -584,6 +586,7 @@ pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
         chunk[1] = u - v;
     }
     // Intermediate stages: len=4, 8, …, n/2 (unnormalized).
+    // j=0: W_L^0 = 1+0i — no multiply.
     let mut len = 4usize;
     let mut base = 1usize;
     while len < n {
@@ -591,7 +594,8 @@ pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
         let stage_twiddles = &twiddles[base..base + half];
         for chunk in data.chunks_exact_mut(len) {
             let (lo, hi) = chunk.split_at_mut(half);
-            for j in 0..half {
+            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+            for j in 1..half {
                 let u = lo[j];
                 let t = stage_twiddles[j] * hi[j];
                 lo[j] = u + t;
@@ -601,12 +605,12 @@ pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
         base += half;
         len <<= 1;
     }
-    // Final stage (len=n): one chunk = whole array. Fuse 1/N scale here to
-    // avoid a separate O(N) pass. Proof: (unnorm_out[k]) * (1/N) = norm_out[k].
+    // Final stage (len=n): fuse 1/N scale. j=0: W_N^0 = 1, no multiply.
     let half = n >> 1;
     let stage_twiddles = &twiddles[base..base + half];
     let (lo, hi) = data.split_at_mut(half);
-    for j in 0..half {
+    { let u = lo[0]; let v = hi[0]; lo[0] = (u + v) * scale; hi[0] = (u - v) * scale; }
+    for j in 1..half {
         let u = lo[j];
         let t = stage_twiddles[j] * hi[j];
         lo[j] = (u + t) * scale;
@@ -639,7 +643,8 @@ pub fn forward_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
         let stage_twiddles = &twiddles[base..base + half];
         for chunk in data.chunks_exact_mut(len) {
             let (lo, hi) = chunk.split_at_mut(half);
-            for j in 0..half {
+            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+            for j in 1..half {
                 let u = lo[j];
                 let t = stage_twiddles[j] * hi[j];
                 lo[j] = u + t;
@@ -676,7 +681,8 @@ pub fn inverse_inplace_unnorm_32_with_twiddles(data: &mut [Complex32], twiddles:
         let stage_twiddles = &twiddles[base..base + half];
         for chunk in data.chunks_exact_mut(len) {
             let (lo, hi) = chunk.split_at_mut(half);
-            for j in 0..half {
+            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+            for j in 1..half {
                 let u = lo[j];
                 let t = stage_twiddles[j] * hi[j];
                 lo[j] = u + t;
@@ -688,7 +694,7 @@ pub fn inverse_inplace_unnorm_32_with_twiddles(data: &mut [Complex32], twiddles:
     }
 }
 
-/// Normalized inverse FFT (f32) using a precomputed contiguous per-stage twiddle table.
+/// Normalized inverse FFT using a precomputed contiguous per-stage twiddle table.
 ///
 /// `twiddles` must be the output of `build_inverse_twiddle_table_32(n)`.
 #[inline]
@@ -721,7 +727,8 @@ pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
         let stage_twiddles = &twiddles[base..base + half];
         for chunk in data.chunks_exact_mut(len) {
             let (lo, hi) = chunk.split_at_mut(half);
-            for j in 0..half {
+            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+            for j in 1..half {
                 let u = lo[j];
                 let t = stage_twiddles[j] * hi[j];
                 lo[j] = u + t;
@@ -734,7 +741,8 @@ pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
     let half = n >> 1;
     let stage_twiddles = &twiddles[base..base + half];
     let (lo, hi) = data.split_at_mut(half);
-    for j in 0..half {
+    { let u = lo[0]; let v = hi[0]; lo[0] = (u + v) * scale; hi[0] = (u - v) * scale; }
+    for j in 1..half {
         let u = lo[j];
         let t = stage_twiddles[j] * hi[j];
         lo[j] = (u + t) * scale;

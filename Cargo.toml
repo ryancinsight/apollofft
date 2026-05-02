@@ -41,6 +41,15 @@ members = [
 ]
 resolver = "2"
 
+[profile.release]
+# Single codegen unit: allows LLVM to inline num_complex::Complex64::mul and
+# all internal helpers into one module, enabling autovectorization of the
+# butterfly inner loop with AVX2/FMA across the full optimization scope.
+codegen-units = 1
+# Thin LTO: cross-crate inlining (e.g. num_complex, rayon closures) without
+# the full compilation overhead of fat LTO.
+lto = "thin"
+
 [workspace.package]
 version = "0.8.5"
 edition = "2021"

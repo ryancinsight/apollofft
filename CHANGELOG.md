@@ -11,6 +11,28 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.9] — Closure XLVIII
+
+### Closure XLVIII — apollo-fft: codegen-units=1, thin LTO, target-cpu=native, j=0 butterfly bypass [patch]
+
+#### Changed
+- `Cargo.toml` workspace `[profile.release]`: set `codegen-units = 1` (single LLVM module for
+  the entire workspace) and `lto = "thin"` (cross-crate inlining without fat-LTO compile time
+  overhead). Together these allow LLVM to inline `num_complex::Complex64::mul` directly into the
+  butterfly loops and apply AVX2/FMA autovectorization across crate boundaries.
+- `.cargo/config.toml` `[build] rustflags`: added `["-C", "target-cpu=native"]` to enable all
+  CPU features on the build machine (AVX2, FMA, BMI2). Butterfly arithmetic now uses `vfmadd256`
+  where applicable.
+- `apollo-fft` / `radix2.rs`: j=0 bypass applied to all six butterfly inner loops
+  (`forward_inplace_64`, `inverse_inplace_unnorm_64`, `inverse_inplace_64` intermediate and
+  final stages, and their f32 counterparts). W_L^0 = exp(0) = 1+0i for every stage, so
+  `t = twiddles[0] * hi[0]` reduces to `t = hi[0]`; the j=0 case is hoisted out of the loop
+  as a scalar add/subtract, eliminating one complex multiply per chunk per stage
+  (~3% arithmetic reduction for large N). The inner loop is now `for j in 1..half`, improving
+  loop-bound regularity for LLVM unrolling heuristics.
+
+---
+
 ## [0.13.8] — Closure XLVII
 
 ### Closure XLVII — apollo-fft: O(N) bit-reversal, stage-1 no-mul, split_at_mut butterfly, fused IFFT scale [patch]
