@@ -38,7 +38,7 @@ use apollo_sdft::SdftPlan;
 use apollo_sft::SparseFftPlan;
 use apollo_sht::ShtPlan;
 use apollo_stft::StftPlan;
-use apollo_wavelet::{DiscreteWavelet, DwtPlan};
+use apollo_wavelet::{ContinuousWavelet, CwtPlan, DiscreteWavelet, DwtPlan};
 use nalgebra::DMatrix;
 use ndarray::{Array1, Array2, Array3};
 use num_complex::{Complex32, Complex64};
@@ -444,6 +444,7 @@ pub fn run_published_reference_suite() -> SuiteResult<PublishedReferenceReport> 
         gft_path_graph_forward_fixture()?,
         frft_unitary_order2_reversal_fixture()?,
         wavelet_haar_one_level_detail_fixture()?,
+        wavelet_daubechies4_one_level_known_coefficients_fixture()?,
         sdft_bin_zero_unit_impulse_fixture()?,
         ntt_n16_impulse_fixture()?,
         ntt_n16_polynomial_product_fixture()?,
@@ -457,6 +458,7 @@ pub fn run_published_reference_suite() -> SuiteResult<PublishedReferenceReport> 
         mellin_inverse_spectrum_constant_roundtrip_fixture()?,
         hilbert_instantaneous_frequency_constant_tone_fixture()?,
         wavelet_haar_inverse_perfect_reconstruction_fixture()?,
+        wavelet_daubechies4_inverse_perfect_reconstruction_fixture()?,
         gft_path_graph_inverse_roundtrip_fixture()?,
         frft_inverse_roundtrip_order_half_fixture()?,
         fwht_inverse_roundtrip_fixture()?,
@@ -470,6 +472,16 @@ pub fn run_published_reference_suite() -> SuiteResult<PublishedReferenceReport> 
         dst4_inverse_roundtrip_two_point_fixture()?,
         dct1_inverse_roundtrip_three_point_fixture()?,
         dst1_inverse_roundtrip_two_point_fixture()?,
+        nufft_type1_type2_adjoint_inner_product_fixture()?,
+        radon_fourier_slice_theorem_theta0_fixture()?,
+        sdft_sliding_recurrence_unit_impulse_all_bins_fixture()?,
+        frft_order4_identity_fixture()?,
+        czt_off_unit_circle_z_transform_fixture()?,
+        hilbert_pure_cosine_envelope_is_unity_fixture()?,
+        cwt_ricker_impulse_peak_value_fixture()?,
+        cwt_ricker_scale_normalization_fixture()?,
+        dct3_dc_input_flat_output_fixture()?,
+        dst3_nyquist_input_alternating_output_fixture()?,
     ];
     let passed = fixtures.iter().all(|fixture| fixture.passed);
     Ok(PublishedReferenceReport {
@@ -2055,6 +2067,509 @@ fn dst1_inverse_roundtrip_two_point_fixture() -> SuiteResult<PublishedFixtureRep
     ))
 }
 
+/// NUFFT Type-1/Type-2 adjoint inner-product identity (Dutt-Rokhlin 1993).
+///
+/// # Mathematical contract
+///
+/// Type-1 operator A and Type-2 operator A* are defined as:
+///   (A·c)[k] = Σ_j c_j · exp(-2πi·k·x_j/L),  k = 0, …, N-1
+///   (A*·f)[j] = Σ_k f_k · exp(+2πi·k·x_j/L)
+///
+/// They satisfy the adjoint identity (proof by index swap):
+///   Re(⟨A·c, f⟩) = Re(⟨c, A*·f⟩)
+///
+/// Analytically derived values for N=2, dx=0.5, L=1.0,
+/// positions=[0.0, 0.5], c=[1+0i, 2+0i], f=[3+0i, 4+0i]:
+///   All exp factors are exp(-2πi·k·x_j/L) ∈ {1, exp(-πi)} = {1, -1}.
+///   Type-1: F[0] = 1·1 + 2·1 = 3;  F[1] = 1·1 + 2·(-1) = -1
+///   Type-2: G[0] = 3·1 + 4·1 = 7;  G[1] = 3·1 + 4·(-1) = -1
+///   LHS = Re(conj(3)·3 + conj(-1)·4) = 9 - 4 = 5  (exact integer)
+///   RHS = Re(conj(1)·7 + conj(2)·(-1)) = 7 - 2 = 5  (exact integer)
+///
+/// All arithmetic is exact in f64 (factors ∈ {1, −1}); accumulated FP error = 0.
+/// Threshold 1×10⁻¹² is conservative; actual error is identically 0.
+///
+/// Reference: Dutt & Rokhlin (1993) SIAM J. Sci. Comput. 14(6) 1368–1393:
+///            adjoint identity eq. (1.8); Greengard & Lee (2004) §2 proof.
+fn nufft_type1_type2_adjoint_inner_product_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let domain = UniformDomain1D::new(2, 0.5)?;
+    let positions = vec![0.0_f64, 0.5];
+    let c = vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)];
+    let f_arr = Array1::from_vec(vec![Complex64::new(3.0, 0.0), Complex64::new(4.0, 0.0)]);
+    let capital_f = nufft_type1_1d(&positions, &c, domain);
+    let g = nufft_type2_1d(&f_arr, &positions, domain);
+    let lhs: f64 = capital_f
+        .iter()
+        .zip(f_arr.iter())
+        .map(|(fk, dk)| (fk.conj() * dk).re)
+        .sum();
+    let rhs: f64 = c
+        .iter()
+        .zip(g.iter())
+        .map(|(cj, gj)| (cj.conj() * gj).re)
+        .sum();
+    Ok(published_real_fixture_with_threshold(
+        "NUFFT",
+        "Re(<A\u{00b7}c,f>)=Re(<c,A*\u{00b7}f>),N=2,pos=[0,0.5],c=[1,2],f=[3,4]",
+        "Dutt & Rokhlin (1993) SIAM J. Sci. Comput. 14(6): NUFFT Type-1/Type-2 adjoint identity (1.8); Greengard-Lee (2004) \u{00a7}2",
+        &[lhs, rhs],
+        &[5.0_f64, 5.0],
+        1.0e-12,
+    ))
+}
+
+/// Radon Fourier Slice Theorem at \u{03b8}=0: DFT_1(R_{\u{03b8}=0}f) equals the horizontal
+/// slice of the 2D DFT of f (Natterer 1986, Radon 1917).
+///
+/// # Mathematical contract
+///
+/// Projection-Slice Theorem (Natterer 1986, §I.2, Theorem 1.1):
+///   \u{1d4d5}_1{R_\u{03b8} f}(\u{03c9}) = \u{1d4d5}_2{f}(\u{03c9}·cos\u{03b8}, \u{03c9}·sin\u{03b8})
+///
+/// For \u{03b8}=0 (parallel-beam at θ=0 = column sums):
+///   p_0[n] = Σ_m f[m,n]   (projection = sum over rows at each column detector n)
+///   DFT_1(p_0)[k] = Σ_n p_0[n]·exp(-2πi·k·n/N)
+///                 = Σ_n (Σ_m f[m,n])·exp(-2πi·k·n/N)
+///                 = F_2[0,k]  (horizontal slice of 2D DFT)
+///
+/// For image f=[[1,2],[3,4]], N=M=2:
+///   p_0 = [1+3, 2+4] = [4, 6]  (column sums)
+///   DFT_1([4,6]): P[0] = 4+6 = 10,  P[1] = 4+6·exp(-i\u{03c0}) = 4-6 = -2
+///   2D DFT check: F_2[0,0]=1+2+3+4=10 ✓,  F_2[0,1]=1-2+3-4=-2 ✓
+///
+/// All DFT factors are exp(-2πi·k·n/N) ∈ {1, exp(-i\u{03c0})} = {1, -1};
+/// computation is exact in f64; accumulated floating-point error = 0.
+/// Threshold 1×10⁻¹² is conservative.
+///
+/// Reference: Natterer (1986) The Mathematics of Computerized Tomography §I.2,
+///            Theorem 1.1 (Projection-Slice Theorem); Radon (1917) original
+///            parallel-beam projection definition.
+fn radon_fourier_slice_theorem_theta0_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let image = Array2::from_shape_vec((2, 2), vec![1.0_f64, 2.0, 3.0, 4.0])
+        .expect("(2,2) shape is valid for 4 elements");
+    let plan = RadonPlan::new(2, 2, vec![0.0_f64], 2, 1.0)?;
+    let sinogram = plan.forward(&image)?;
+    let projection = sinogram.values().row(0).to_owned();
+    let dft_of_projection = fft_1d_array(&projection);
+    let expected = [
+        Complex64::new(10.0, 0.0),
+        Complex64::new(-2.0, 0.0),
+    ];
+    Ok(published_complex_fixture(
+        "Radon",
+        "DFT_1(R_\u{03b8}=0([[1,2],[3,4]]))-vs-2D-DFT-slice,N=2",
+        "Natterer (1986) §I.2 Thm 1.1 Projection-Slice Theorem: DFT_1(R_\u{03b8}f)=F_2{f}(\u{03c9}cos\u{03b8},\u{03c9}sin\u{03b8}); Radon (1917)",
+        dft_of_projection.iter(),
+        expected.iter(),
+    ))
+}
+
+/// SDFT sliding-update recurrence agreement: after N updates on zero state
+/// fed with the unit impulse [1,0,0,0], all 4 tracked bins equal 1+0i.
+///
+/// # Mathematical contract
+///
+/// Jacobsen & Lyons (2003) §2, eq.(2): the sliding DFT recurrence
+///   X_k[n] = (X_k[n-1] + x[n] - x[n-N]) \u00b7 exp(2\u03c0i\u00b7k/N)
+/// produces exactly the DFT of the current window x[n-N+1..=n] at every step.
+///
+/// Analytical derivation for N=4, zero_state, input [1,0,0,0]:
+///   Twiddles (exp(2\u03c0ik/4)): k=0 \u21a6 1, k=1 \u21a6 i, k=2 \u21a6 -1, k=3 \u21a6 -i.
+///   Update 0 (x_new=1): bins = [1,i,-1,-i] (window=[0,0,0,1])
+///     DFT([0,0,0,1])[k] = exp(-2\u03c0i\u00b73k/4): k=0\u21a61, k=1\u21a6i, k=2\u21a6-1, k=3\u21a6-i \u2713
+///   Update 1 (x_new=0): bins\u2190bins*twiddles = [1,-1,1,-1] (window=[0,0,1,0])
+///     DFT([0,0,1,0])[k] = exp(-2\u03c0i\u00b72k/4): k=0\u21a61, k=1\u21a6-1, k=2\u21a61, k=3\u21a6-1 \u2713
+///   Update 2 (x_new=0): bins\u2190bins*twiddles = [1,-i,-1,i] (window=[0,1,0,0])
+///     DFT([0,1,0,0])[k] = exp(-2\u03c0i\u00b7k/4): k=0\u21a61, k=1\u21a6-i, k=2\u21a6-1, k=3\u21a6i \u2713
+///   Update 3 (x_new=0): bins\u2190bins*twiddles = [1,1,1,1] (window=[1,0,0,0])
+///     DFT([1,0,0,0])[k] = 1 for all k \u2713
+///
+/// All factors \u2208{1,i,-1,-i}; result is exact integers; accumulated FP error = 0.
+/// Threshold 1\u00d710\u207b\u00b9\u00b2 is conservative.
+///
+/// Reference: Jacobsen, E. & Lyons, R. (2003). \"The Sliding DFT.\"
+///            IEEE Signal Processing Magazine 20(2), 74\u201379. Section 2, eq.(2).
+fn sdft_sliding_recurrence_unit_impulse_all_bins_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = SdftPlan::new(4, 4)?;
+    let mut state = plan.zero_state();
+    for &sample in &[1.0_f64, 0.0, 0.0, 0.0] {
+        state.update(sample);
+    }
+    let bins = state.bins().to_vec();
+    let expected = [
+        Complex64::new(1.0, 0.0),
+        Complex64::new(1.0, 0.0),
+        Complex64::new(1.0, 0.0),
+        Complex64::new(1.0, 0.0),
+    ];
+    Ok(published_complex_fixture(
+        "SDFT",
+        "SDFT-sliding-recurrence-impulse(N=4,[1,0,0,0]),all-bins=1",
+        "Jacobsen & Lyons (2003) IEEE SPM 20(2) §2 eq.(2): sliding-update recurrence X_k[n]=(X_k[n-1]+x[n]-x[n-N])·exp(2πik/N); DFT([1,0,0,0])=[1,1,1,1]",
+        bins.iter(),
+        expected.iter(),
+    ))
+}
+
+/// Unitary FrFT order \u03b1=4 is the identity on any input.
+///
+/// # Mathematical contract
+///
+/// Candan, Kutay & Ozaktas (2000) \u00a7II, Corollary (periodicity):
+///   DFrFT_a(x) = V \u00b7 diag(exp(\u2212i\u00b7a\u00b7k\u00b7\u03c0/2)) \u00b7 V\u1d40 \u00b7 x
+/// For a=4: exp(\u22124\u00b7k\u00b7\u03c0\u00b7i/2) = exp(\u22122\u03c0ki) = 1 for every integer k.
+/// Therefore DFrFT_4 = V \u00b7 I \u00b7 V\u1d40 = I (since V is orthogonal, V\u1d40V = I).
+///
+/// This holds for any N and any input x, independent of the eigenvector
+/// ordering in V and without requiring a=1 to equal the DFT.
+///
+/// For N=4, two O(N\u00b2) matrix\u2013vector products: accumulated FP error
+/// \u2248 2\u00b7N\u00b7\u03b5_f64 = 2\u00b74\u00b72.2\u00d710\u207b\u00b9\u2076 \u2248 1.8\u00d710\u207b\u00b9\u2075; threshold 1\u00d710\u207b\u00b9\u00b2 (\u00d770 margin).
+///
+/// Reference: Candan, \u00c7., Kutay, M.A., & Ozaktas, H.M. (2000).
+///            \"The Discrete Fractional Fourier Transform.\"
+///            IEEE Trans. Signal Process. 48(5), 1329\u20131337. \u00a7II Corollary.
+fn frft_order4_identity_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let input = Array1::from_vec(vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(2.0, 0.0),
+        Complex64::new(3.0, 0.0),
+        Complex64::new(4.0, 0.0),
+    ]);
+    let plan = UnitaryFrftPlan::new(4, 4.0)?;
+    let output = plan.forward(&input)?;
+    let expected = [
+        Complex64::new(1.0, 0.0),
+        Complex64::new(2.0, 0.0),
+        Complex64::new(3.0, 0.0),
+        Complex64::new(4.0, 0.0),
+    ];
+    Ok(published_complex_fixture(
+        "UnitaryFrFT",
+        "UnitaryFrFT-order4-identity(N=4,[1,2,3,4])",
+        "Candan et al. (2000) IEEE TSP 48(5) §II Corollary: DFrFT_4=I; exp(-i·4kπ/2)=exp(-2πki)=1; V·I·V^T=I",
+        output.iter(),
+        expected.iter(),
+    ))
+}
+
+/// CZT off-unit-circle Z-transform evaluation: A=2 (real, |A|=2>1), W=exp(-πi).
+///
+/// # Mathematical contract
+///
+/// The Chirp Z-Transform evaluates the one-sided Z-transform at spiral points
+/// z_k = A·W^{-k} (Rabiner, Schafer & Rader 1969, §II):
+///   X[k] = Σ_{n=0}^{N-1} x[n] · A^{-n} · W^{nk},  k=0..M-1
+///
+/// For N=2, M=2, A=2, W=exp(-πi)=-1, x=[1,1]:
+///   z_0 = A·W^0 = 2  (real axis, |z_0|=2 > 1, off the unit circle)
+///   z_1 = A·W^{-1} = 2·(-1) = -2  (real axis, |z_1|=2 > 1)
+///
+///   Z{x}(z) = x[0]·z^{-0} + x[1]·z^{-1} = 1 + z^{-1}
+///   X[0] = Z{x}(2)  = 1 + 2^{-1}     = 3/2 = 1.5  (exact dyadic rational)
+///   X[1] = Z{x}(-2) = 1 + (-2)^{-1}  = 1/2 = 0.5  (exact dyadic rational)
+///
+/// Direct check via definition:
+///   X[0] = 1·A^0·W^0 + 1·A^{-1}·W^0 = 1 + 0.5           = 1.5 ✓
+///   X[1] = 1·A^0·W^0 + 1·A^{-1}·W^1 = 1 + 0.5·(-1) = 0.5 ✓
+///
+/// 3/2 and 1/2 are exactly representable as IEEE 754 f64 (dyadic fractions);
+/// accumulated floating-point error is identically 0. Threshold 1×10^{-12}
+/// is conservative (actual error = 0 in exact arithmetic).
+///
+/// Reference: Rabiner, L.R., Schafer, R.W. & Rader, C.M. (1969).
+///            "The Chirp z-Transform Algorithm."
+///            IEEE Trans. Audio Electroacoustics 17(2), 86–92. §II.
+fn czt_off_unit_circle_z_transform_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let a = Complex64::new(2.0, 0.0);
+    let w = Complex64::from_polar(1.0, -std::f64::consts::PI);
+    let plan = CztPlan::new(2, 2, a, w)?;
+    let input = Array1::from_vec(vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(1.0, 0.0),
+    ]);
+    let actual = plan.forward(&input)?;
+    let expected = [
+        Complex64::new(1.5, 0.0),
+        Complex64::new(0.5, 0.0),
+    ];
+    Ok(published_complex_fixture(
+        "CZT",
+        "CZT2(A=2,W=exp(-πi),[1,1]): Z{x}(2)=1.5,Z{x}(-2)=0.5",
+        "Rabiner, Schafer & Rader (1969) IEEE TAE 17(2) §II: CZT at z_k=A·W^{-k}; A=2 evaluates Z-transform off unit circle at z={2,-2}",
+        actual.iter(),
+        expected.iter(),
+    ))
+}
+
+/// Hilbert envelope of a pure discrete cosine tone is identically unity.
+///
+/// # Mathematical contract
+///
+/// For a real bandpass signal x[n] = A·cos(ω₀n + φ), the analytic signal
+/// z[n] = x[n] + i·H{x}[n] = A·exp(i(ω₀n + φ)) and the instantaneous
+/// envelope |z[n]| = A (constant). (Oppenheim & Schafer 2010 §12.1, eq.(12.8))
+///
+/// Analytical derivation for x=[1,0,-1,0] = cos(πn/2), N=4:
+///   DFT(x): X[0]=0, X[1]=2, X[2]=0, X[3]=2
+///   Hilbert analytic mask for N=4 (even): [1, 2, 1, 0]
+///   Y = X ⊙ mask = [0, 4, 0, 0]
+///   z = IDFT(Y)/1 = exp(iπn/2): z[0]=1, z[1]=i, z[2]=-1, z[3]=-i
+///   |z[0]|=1, |z[1]|=1, |z[2]|=1, |z[3]|=1
+///
+/// All DFT factors ∈{1,i,-1,-i} and mask values ∈{0,1,2}; the envelope
+/// vector [1,1,1,1] is an exact integer result. Accumulated FP error is
+/// O(log₂(N)·ε_f64) ≈ 8.9×10^{-16} << threshold 1×10^{-12}.
+///
+/// Reference: Oppenheim, A.V. & Schafer, R.W. (2010).
+///            Discrete-Time Signal Processing (3rd ed.) §12.1, eq.(12.8).
+///            Bedrosian, E. (1963) Proc. IEEE 51(5): analytic signal envelope theorem.
+fn hilbert_pure_cosine_envelope_is_unity_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let signal = [1.0_f64, 0.0, -1.0, 0.0];
+    let plan = HilbertPlan::new(4)?;
+    let envelope = plan.envelope(&signal)?;
+    let expected = [1.0_f64, 1.0, 1.0, 1.0];
+    Ok(published_real_fixture_with_threshold(
+        "Hilbert",
+        "Hilbert-envelope(cos(πn/2),N=4)=[1,1,1,1]",
+        "Oppenheim & Schafer (2010) DTSP 3rd ed. §12.1 eq.(12.8): |z[n]|=A for x[n]=A·cos(ω₀n+φ); Bedrosian (1963)",
+        &envelope,
+        &expected,
+        1.0e-12,
+    ))
+}
+
+/// Daubechies-4 DWT one-level coefficients for x=[1,0,0,0] under periodic extension.
+///
+/// # Mathematical contract
+///
+/// For db4 analysis filters (Daubechies 1992, p.198):
+///   h = [h0,h1,h2,h3]
+///     = [0.4829629131445341,
+///        0.8365163037378079,
+///        0.2241438680420134,
+///       -0.12940952255126034]
+/// and QMF highpass g[k] = (−1)^k h[3-k], hence:
+///   g = [h3, −h2, h1, −h0]
+///     = [−0.12940952255126034,
+///        −0.2241438680420134,
+///         0.8365163037378079,
+///        −0.4829629131445341].
+///
+/// For N=4, level=1, periodic analysis_stage:
+///   a0 = Σ_{m=0}^3 h[m] x[(0+m) mod 4] = h0
+///   d0 = Σ_{m=0}^3 g[m] x[(0+m) mod 4] = g0 = h3
+///   a1 = Σ_{m=0}^3 h[m] x[(2+m) mod 4] = h2
+///   d1 = Σ_{m=0}^3 g[m] x[(2+m) mod 4] = g2 = h1
+/// so [a0,a1,d0,d1] = [h0,h2,h3,h1].
+///
+/// Because x is a basis impulse, each coefficient is a single filter tap;
+/// no summation round-off occurs. Error is exactly 0 in f64 representation.
+/// Threshold 1×10⁻¹⁵ is conservative.
+///
+/// Reference: Daubechies (1992), Ten Lectures on Wavelets, p.198 (db4 taps);
+///            Mallat (1989), two-channel periodic filter-bank analysis.
+fn wavelet_daubechies4_one_level_known_coefficients_fixture(
+) -> SuiteResult<PublishedFixtureReport> {
+    let plan = DwtPlan::new(4, 1, DiscreteWavelet::Daubechies4)?;
+    let coefficients = plan.forward(&[1.0_f64, 0.0, 0.0, 0.0])?;
+    let mut actual = Vec::with_capacity(4);
+    actual.extend_from_slice(coefficients.approximation());
+    actual.extend_from_slice(&coefficients.details()[0]);
+    let expected = [
+        0.482_962_913_144_534_1,
+        0.224_143_868_042_013_4,
+        -0.129_409_522_551_260_34,
+        0.836_516_303_737_807_9,
+    ];
+    Ok(published_real_fixture_with_threshold(
+        "DWT-Db4",
+        "DWT-Db4-1level([1,0,0,0])-coefficients",
+        "Daubechies (1992) p.198 db4 taps with periodic QMF analysis: [a0,a1,d0,d1]=[h0,h2,h3,h1]",
+        &actual,
+        &expected,
+        1.0e-15,
+    ))
+}
+
+/// Daubechies-4 perfect reconstruction: inverse(forward(x)) = x for level 1.
+///
+/// # Mathematical contract
+///
+/// For an orthogonal two-channel filter bank (Mallat 1989, Thm.2),
+/// synthesis is the inverse of analysis on the same wavelet family:
+///   IDWT(DWT(x)) = x.
+///
+/// This fixture uses db4, N=4, level=1 with a non-trivial signal
+/// x=[1,−2,0.5,4].
+///
+/// f64 periodic convolution + one reconstruction stage gives
+/// O(filter_len·ε_f64) ≈ O(4·ε_f64) per output sample; threshold 1×10⁻¹²
+/// is >10³× larger than worst-case round-off.
+///
+/// Reference: Mallat (1989) IEEE TPAMI 11(7), Theorem 2 (perfect reconstruction);
+///            Daubechies (1992) db4 orthogonal wavelet construction.
+fn wavelet_daubechies4_inverse_perfect_reconstruction_fixture(
+) -> SuiteResult<PublishedFixtureReport> {
+    let input = [1.0_f64, -2.0, 0.5, 4.0];
+    let plan = DwtPlan::new(4, 1, DiscreteWavelet::Daubechies4)?;
+    let coefficients = plan.forward(&input)?;
+    let recovered = plan.inverse(&coefficients)?;
+    Ok(published_real_fixture_with_threshold(
+        "DWT-Db4",
+        "DWT-Db4-inverse-roundtrip-1level(N=4,[1,-2,0.5,4])",
+        "Mallat (1989) Thm.2 perfect reconstruction: IDWT(DWT(x))=x for orthogonal db4 filter bank",
+        &recovered,
+        &input,
+        1.0e-12,
+    ))
+}
+
+/// CWT Ricker impulse response: peak value equals ψ(0) and zero-crossing neighbors are exact zeros.
+///
+/// # Mathematical contract
+///
+/// The continuous wavelet transform coefficient at scale a and translation b is:
+///   W(a, b) = (1/√a) Σ_n x[n] ψ((n−b)/a)
+///
+/// For a discrete impulse x = δ_{n₀} (x[n₀]=1, all other samples 0) and scale a=1:
+///   W(1, n₀) = ψ(0)
+///   W(1, n₀±1) = ψ(±1)
+///
+/// The normalized Ricker (Mexican hat) wavelet (Daubechies 1992 §2.1 eq.(2.1.4)):
+///   ψ(t) = (2/(√3·π^{1/4})) · (1 − t²) · exp(−t²/2)
+///
+/// Evaluation:
+///   ψ(0) = 2/(√3·π^{1/4}) (factor (1−0)·exp(0)=1).
+///   ψ(1) = (2/(√3·π^{1/4})) · (1−1) · exp(−0.5) = 0   (exact; (1−t²)=0 when t=±1).
+///   ψ(−1) = 0  (ψ is even; same zero factor).
+///
+/// Threshold 1×10⁻¹⁴: each computed value involves at most one scalar product
+/// of the impulse sample (1.0) with a constant. Accumulated FP error is O(ε_f64) ≈ 2×10⁻¹⁶.
+///
+/// Reference: Daubechies (1992), Ten Lectures on Wavelets, §2.1 eq.(2.1.4);
+///            Marr & Hildreth (1980), Proc. R. Soc. Lond. B 207:187–217.
+fn cwt_ricker_impulse_peak_value_fixture() -> SuiteResult<PublishedFixtureReport> {
+    // Impulse at sample 3 in a 7-sample signal.
+    let signal = [0.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+    let plan = CwtPlan::new(7, vec![1.0], ContinuousWavelet::Ricker)?;
+    let coeffs = plan.transform(&signal)?;
+    let actual = [
+        coeffs.values()[[0, 2]], // W(1, 2) = ψ(1) = 0 exactly
+        coeffs.values()[[0, 3]], // W(1, 3) = ψ(0) = 2/(√3·π^{1/4})
+        coeffs.values()[[0, 4]], // W(1, 4) = ψ(−1) = 0 exactly
+    ];
+    let psi0 = 2.0_f64 / (3.0_f64.sqrt() * std::f64::consts::PI.powf(0.25));
+    let expected = [0.0_f64, psi0, 0.0_f64];
+    Ok(published_real_fixture_with_threshold(
+        "CWT-Ricker",
+        "CWT-Ricker(δ_{3},N=7,a=1): W(1,2)=0, W(1,3)=ψ(0)=2/(√3·π^¼), W(1,4)=0",
+        "Daubechies (1992) Ten Lectures on Wavelets §2.1 eq.(2.1.4): ψ(0)=2/(√3·π^¼); ψ(±1)=0 exact zero crossing",
+        &actual,
+        &expected,
+        1.0e-14,
+    ))
+}
+
+/// CWT Ricker L² scale-normalization: W(a=2,b=n₀) = ψ(0)/√2.
+///
+/// # Mathematical contract
+///
+/// The 1/√a prefactor (L² normalization) from Daubechies (1992) §2.1 is tested
+/// directly by comparing impulse-response peaks at two different scales.
+///
+/// For x = δ_{n₀}, a=2, b=n₀:
+///   W(2, n₀) = (1/√2) · ψ((n₀−n₀)/2) = (1/√2) · ψ(0) = ψ(0)/√2
+///
+/// With ψ(0) = 2/(√3·π^{1/4}) (see fixture 54):
+///   W(2, n₀) = 2/(√3·π^{1/4}·√2) = √2/(√3·π^{1/4})
+///
+/// Threshold 1×10⁻¹³: the only additional computation vs fixture 54 is one
+/// multiplication by 1/√2, adding at most one ε_f64 of error. O(2·ε_f64) ≤ 1×10⁻¹³.
+///
+/// Reference: Daubechies (1992), Ten Lectures on Wavelets, §2.1 L² normalization;
+///            Grossmann & Morlet (1984), SIAM J. Math. Anal. 15(4):723–736, eq.(1.3).
+fn cwt_ricker_scale_normalization_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let signal = [0.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+    let plan = CwtPlan::new(7, vec![2.0], ContinuousWavelet::Ricker)?;
+    let coeffs = plan.transform(&signal)?;
+    let actual = [coeffs.values()[[0, 3]]]; // W(2, 3) = ψ(0)/√2
+    let psi0_over_sqrt2 = 2.0_f64
+        / (3.0_f64.sqrt() * std::f64::consts::PI.powf(0.25) * std::f64::consts::SQRT_2);
+    let expected = [psi0_over_sqrt2];
+    Ok(published_real_fixture_with_threshold(
+        "CWT-Ricker",
+        "CWT-Ricker(δ_{3},N=7,a=2): W(2,3)=ψ(0)/√2=√2/(√3·π^¼)",
+        "Daubechies (1992) §2.1 L² normalization: W(a,b)=(1/√a)·CWT; Grossmann-Morlet (1984) eq.(1.3)",
+        &actual,
+        &expected,
+        1.0e-13,
+    ))
+}
+
+/// DCT-III DC input → flat output: DCT-III₄([1,0,0,0]) = [½,½,½,½].
+///
+/// # Mathematical contract
+///
+/// DCT-III kernel (FFTW REDFT01 convention, unnormalized):
+///   y[k] = x[0]/2 + Σ_{n=1}^{N-1} x[n]·cos(π·n·(k+½)/N)
+///
+/// For x = [1,0,0,0] and N=4, every summed term has x[n]=0 for n≥1, so the
+/// formula reduces to y[k] = x[0]/2 = 1/2 for all k ∈ {0,1,2,3}.
+/// This is the DC basis vector property of DCT-III: the DC spectral coefficient
+/// X[0] maps to a flat time-domain sequence of amplitude X[0]/2.
+///
+/// Threshold 1×10⁻¹⁵: single multiplication x[0]×0.5; no summation;
+/// error ≤ ε_f64·0.5 < 1.2×10⁻¹⁶ (below threshold by one order).
+///
+/// Reference: Makhoul (1980) IEEE Trans. Acoust. Speech Signal Process. 28(1)
+/// Table I: DCT-III definition; FFTW REDFT01 documentation §3.
+fn dct3_dc_input_flat_output_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = DctDstPlan::new(4, RealTransformKind::DctIII)?;
+    let actual = plan.forward(&[1.0_f64, 0.0, 0.0, 0.0])?;
+    let expected = [0.5_f64, 0.5, 0.5, 0.5];
+    Ok(published_real_fixture_with_threshold(
+        "DCT-III",
+        "DCT-III4([1,0,0,0])=[1/2,1/2,1/2,1/2]",
+        "Makhoul (1980) IEEE Trans. ASSP 28(1) Table I: DCT-III DC input X[0]=1, X[k>0]=0 \u{2192} y[n]=X[0]/2=1/2 for all n; FFTW REDFT01",
+        &actual,
+        &expected,
+        1.0e-15,
+    ))
+}
+
+/// DST-III Nyquist input → alternating output: DST-III₄([0,0,0,1]) = [½,−½,½,−½].
+///
+/// # Mathematical contract
+///
+/// DST-III kernel (FFTW RODFT01 convention, unnormalized):
+///   y[k] = (−1)^k·x[N−1]/2 + Σ_{n=0}^{N-2} x[n]·sin(π·(n+1)·(k+½)/N)
+///
+/// For x = [0,0,0,1] and N=4, every summed term has x[n]=0 for n≤2, so the
+/// formula reduces to y[k] = (−1)^k·x[3]/2 = (−1)^k/2.
+/// Result: y = [1/2, −1/2, 1/2, −1/2].
+/// This is the Nyquist basis vector property of DST-III: the Nyquist spectral
+/// coefficient X[N-1] maps to an alternating sequence of amplitude X[N-1]/2.
+///
+/// Threshold 1×10⁻¹⁵: single multiplication x[N-1]×0.5 with a sign from (−1)^k;
+/// no summation; error ≤ ε_f64·0.5 < 1.2×10⁻¹⁶.
+///
+/// Reference: Makhoul (1980) IEEE Trans. Acoust. Speech Signal Process. 28(1)
+/// Table II: DST-III definition; FFTW RODFT01 documentation §3.
+fn dst3_nyquist_input_alternating_output_fixture() -> SuiteResult<PublishedFixtureReport> {
+    let plan = DctDstPlan::new(4, RealTransformKind::DstIII)?;
+    let actual = plan.forward(&[0.0_f64, 0.0, 0.0, 1.0])?;
+    let expected = [0.5_f64, -0.5, 0.5, -0.5];
+    Ok(published_real_fixture_with_threshold(
+        "DST-III",
+        "DST-III4([0,0,0,1])=[1/2,-1/2,1/2,-1/2]",
+        "Makhoul (1980) IEEE Trans. ASSP 28(1) Table II: DST-III Nyquist input X[N-1]=1, X[k<N-1]=0 \u{2192} y[n]=(-1)^n/2; FFTW RODFT01",
+        &actual,
+        &expected,
+        1.0e-15,
+    ))
+}
+
 fn representative_signal_1d(len: usize) -> Array1<f64> {
     Array1::from_vec(
         (0..len)
@@ -2131,7 +2646,7 @@ mod tests {
         assert!(report.fft_cpu.parseval_relative_error <= CPU_PARSEVAL_LIMIT);
         assert!(report.nufft.passed);
         assert!(report.external.published_references.passed);
-        assert_eq!(report.external.published_references.attempted, 45);
+        assert_eq!(report.external.published_references.attempted, 57);
         assert_eq!(report.external.rustfft.backend, "rustfft");
         assert_eq!(report.external.numpy.backend, "numpy");
     }
@@ -2140,7 +2655,7 @@ mod tests {
     #[test]
     fn published_reference_suite_checks_computed_fixture_values() {
         let report = run_published_reference_suite().expect("published references");
-        assert_eq!(report.attempted, 45);
+        assert_eq!(report.attempted, 57);
         assert!(report.passed);
         for fixture in &report.fixtures {
             assert!(

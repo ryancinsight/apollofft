@@ -1,4 +1,89 @@
 # Apollo Checklist
+## Closure XXXVII — DCT-III and DST-III Published-Reference Fixtures [patch]
+Sprint target version: 0.12.17
+
+- [x] Triage: identify remaining DCT-III/DST-III published-reference gaps.
+- [x] Add validation fixture 56: `dct3_dc_input_flat_output_fixture`
+  (DCT-III N=4 DC input [1,0,0,0]: y=[½,½,½,½]; Makhoul 1980 Table I; FFTW REDFT01; threshold 1e-15).
+- [x] Add validation fixture 57: `dst3_nyquist_input_alternating_output_fixture`
+  (DST-III N=4 Nyquist input [0,0,0,1]: y=[½,−½,½,−½]; Makhoul 1980 Table II; FFTW RODFT01; threshold 1e-15).
+- [x] Update `run_published_reference_suite` call list: 55 → 57 fixtures.
+- [x] Update both count assertions in `apollo-validation/suite.rs`: 55 → 57.
+- [x] Update root `README.md` fixture count 55 → 57; append two new entries.
+- [x] Update sprint PM artifacts: CHANGELOG.md, backlog.md, checklist.md, gap_audit.md.
+- [x] `cargo test -p apollo-validation`: 3 passed, 0 FAILED, 0 ignored.
+
+## Closure XXXVI — CWT Ricker Impulse Peak and Scale-Normalization Fixtures [patch]
+Sprint target version: 0.12.16
+
+- [x] Triage: identify remaining CWT published-reference gaps (impulse response value, L² scale normalization).
+- [x] Add validation fixture 54: `cwt_ricker_impulse_peak_value_fixture`
+  (N=7 a=1 δ_{3}: W(1,3)=ψ(0), W(1,2)=W(1,4)=0; Daubechies 1992 §2.1 eq.(2.1.4); threshold 1e-14).
+- [x] Add validation fixture 55: `cwt_ricker_scale_normalization_fixture`
+  (N=7 a=2 δ_{3}: W(2,3)=ψ(0)/√2; Daubechies 1992 §2.1 / Grossmann-Morlet 1984 eq.(1.3); threshold 1e-13).
+- [x] Update imports: add `ContinuousWavelet, CwtPlan` to `apollo-validation` use statement.
+- [x] Update `run_published_reference_suite` call list: 53 → 55 fixtures.
+- [x] Update both count assertions in `apollo-validation/suite.rs`: 53 → 55.
+- [x] Update root `README.md` fixture count 53 → 55; append two new entries.
+- [x] Update sprint PM artifacts: CHANGELOG.md, backlog.md, checklist.md, gap_audit.md.
+- [x] `cargo test -p apollo-validation`: 3 passed, 0 FAILED, 0 ignored.
+
+## Closure XXXV — Daubechies-4 DWT Coefficient and Reconstruction Fixtures [patch]
+Sprint target version: 0.12.15
+
+- [x] Triage: identify remaining wavelet published-reference gaps (db4 coefficients and db4 PR roundtrip).
+- [x] Add validation fixture 52: `wavelet_daubechies4_one_level_known_coefficients_fixture`
+  (db4 N=4 level=1 x=[1,0,0,0]: [a0,a1,d0,d1]=[h0,h2,h3,h1]; Daubechies 1992 taps; threshold 1e-15).
+- [x] Add validation fixture 53: `wavelet_daubechies4_inverse_perfect_reconstruction_fixture`
+  (db4 N=4 level=1: IDWT(DWT([1,-2,0.5,4]))=[1,-2,0.5,4]; Mallat 1989 Thm.2; threshold 1e-12).
+- [x] Update `run_published_reference_suite` call list: 51 → 53 fixtures.
+- [x] Update both count assertions in `apollo-validation/suite.rs`: 51 → 53.
+- [x] Update root `README.md` fixture count 51 → 53; append two new entries.
+- [x] Update sprint PM artifacts: CHANGELOG.md, backlog.md, checklist.md, gap_audit.md.
+- [x] `cargo test -p apollo-validation`: 3 passed, 0 FAILED, 0 ignored.
+
+## Closure XXXIV — CZT Off-Unit-Circle and Hilbert Envelope Fixtures [patch]
+Sprint target version: 0.12.14
+
+- [x] Triage: identify remaining published-reference gaps (CZT A≠1, Hilbert envelope).
+- [x] Add validation fixture 50: `czt_off_unit_circle_z_transform_fixture`
+  (N=2 A=2 W=exp(-πi); Z{x}(2)=1.5, Z{x}(-2)=0.5; exact dyadic; threshold 1e-12).
+- [x] Add validation fixture 51: `hilbert_pure_cosine_envelope_is_unity_fixture`
+  (cos(πn/2) N=4; envelope=[1,1,1,1]; exact integers; threshold 1e-12).
+- [x] Update `run_published_reference_suite` call list: 49 → 51 fixtures.
+- [x] Update both count assertions in `apollo-validation/suite.rs`: 49 → 51.
+- [x] Update root `README.md` fixture count 49 → 51; append two new entries.
+- [x] Update sprint PM artifacts: CHANGELOG.md, backlog.md, checklist.md, gap_audit.md.
+- [x] `cargo test -p apollo-validation`: 3 passed, 0 FAILED, 0 ignored.
+
+## Closure XXXIII — SDFT Sliding Recurrence and FrFT Order-4 Identity Fixtures [patch]
+Sprint target version: 0.12.13
+
+- [x] Triage: identify next published-reference gaps (SDFT sliding path, FrFT periodicity).
+- [x] Add validation fixture 48: `sdft_sliding_recurrence_unit_impulse_all_bins_fixture`
+  (N=4 zero_state, feed [1,0,0,0], all bins=1+0i; Jacobsen-Lyons 2003 eq.(2); exact; threshold 1e-12).
+- [x] Add validation fixture 49: `frft_order4_identity_fixture`
+  (UnitaryFrFT N=4 order=4.0: output=[1,2,3,4]=input; Candan 2000 §II Corollary; exact; threshold 1e-12).
+- [x] Update `run_published_reference_suite` call list: 47 → 49 fixtures.
+- [x] Update both count assertions in `apollo-validation/suite.rs`: 47 → 49.
+- [x] Update root `README.md` fixture count 47 → 49; append two new entries.
+- [x] Update sprint PM artifacts: CHANGELOG.md, backlog.md, checklist.md, gap_audit.md.
+- [x] `cargo test -p apollo-validation`: 3 passed, 0 FAILED, 0 ignored.
+
+## Closure XXXII — NUFFT Adjoint Identity and Radon Fourier Slice Theorem Fixtures [patch]
+Sprint target version: 0.12.12
+
+- [x] Triage: identify remaining published-reference gaps (NUFFT adjoint, Radon FST).
+- [x] Add validation fixture 46: `nufft_type1_type2_adjoint_inner_product_fixture`
+  (N=2 adjoint Re(〈Ac,f〉)=Re(〈c,A*f〉)=5; Dutt-Rokhlin 1993; exact; threshold 1e-12).
+- [x] Add validation fixture 47: `radon_fourier_slice_theorem_theta0_fixture`
+  (Radon θ=0 FST on [[1,2],[3,4]]; Natterer 1986 Thm 1.1; exact; threshold 1e-12).
+- [x] Update `run_published_reference_suite` call list: 45 → 47 fixtures.
+- [x] Update both count assertions in `apollo-validation/suite.rs`: 45 → 47.
+- [x] Update root `README.md` fixture count 45 → 47; append two new entries.
+- [x] Update sprint PM artifacts: CHANGELOG.md, backlog.md, checklist.md, gap_audit.md.
+- [x] `cargo test -p apollo-validation`: 3 passed, 0 FAILED, 0 ignored.
+
 ## Closure XXXI — DCT-I and DST-I Self-Inverse Published-Reference Fixtures [patch]
 Sprint target version: 0.12.11
 

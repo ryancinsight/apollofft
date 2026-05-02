@@ -11,6 +11,95 @@ quantized storage (implemented and verified). Floating-point NTT is architectura
 by design and will not be implemented.
 
 ## Closed Gaps
+### Closure XXXVII — DCT-III and DST-III Published-Reference Fixtures [patch]
+- **Gap**: `apollo-validation` had 55 published-reference fixtures. DCT-III (`RealTransformKind::DctIII`)
+  and DST-III (`RealTransformKind::DstIII`) were fully implemented in `apollo-dctdst` and exercised
+  via `plan.inverse()` indirectly, but had no direct forward-path fixtures asserting specific output values
+  against the Makhoul (1980) table definitions.
+- **Closed by**: Added fixtures 56–57:
+  - Fixture 56: `dct3_dc_input_flat_output_fixture` — DCT-III N=4, DC input [1,0,0,0]; y[k]=x[0]/2=½
+    for all k; expected [½,½,½,½]; threshold 1×10⁻¹⁵ (single-term kernel, no summation).
+  - Fixture 57: `dst3_nyquist_input_alternating_output_fixture` — DST-III N=4, Nyquist input [0,0,0,1];
+    y[k]=(−1)^k/2; expected [½,−½,½,−½]; threshold 1×10⁻¹⁵ (single-term kernel, no summation).
+- **Evidence**: `cargo test -p apollo-validation` — 3 passed, 0 FAILED, 0 ignored.
+- **Reference**: Makhoul (1980) IEEE Trans. Acoust. Speech Signal Process. 28(1) Tables I–II; FFTW REDFT01/RODFT01.
+
+### Closure XXXVI — CWT Ricker Impulse Peak and Scale-Normalization Fixtures [patch]
+- **Gap**: `apollo-validation` had 53 published-reference fixtures. CWT coverage was limited to
+  relational inequality tests at crate level (peak location, resonance ordering); no fixture
+  provided the actual numerical value of ψ(0) or tested the 1/√a L² normalization directly.
+- **Closed by**: Added fixtures 54–55:
+  - Fixture 54: `cwt_ricker_impulse_peak_value_fixture` — CWT Ricker N=7, a=1, δ at n₀=3;
+    W(1,3)=ψ(0)=2/(√3·π^¼); W(1,2)=W(1,4)=0 exact (zero-crossing at t=±1); threshold 1×10⁻¹⁴.
+    Reference: Daubechies (1992) §2.1 eq.(2.1.4); Marr & Hildreth (1980) Proc. R. Soc. B 207.
+  - Fixture 55: `cwt_ricker_scale_normalization_fixture` — CWT Ricker N=7, a=2, δ at n₀=3;
+    W(2,3)=ψ(0)/√2=√2/(√3·π^¼); tests 1/√a prefactor from Daubechies (1992) §2.1 and
+    Grossmann & Morlet (1984) SIAM J. Math. Anal. 15(4) eq.(1.3); threshold 1×10⁻¹³.
+- **Verification**: `cargo test -p apollo-validation` → 3 passed, 0 FAILED, 0 ignored.
+
+### Closure XXXV — Daubechies-4 DWT Coefficient and Reconstruction Fixtures [patch]
+- **Gap**: `apollo-validation` had 51 published-reference fixtures. Wavelet fixtures covered
+  Haar forward known values and Haar inverse PR only; Daubechies-4 had crate-level verification
+  tests but no published-reference fixture for (1) explicit db4 coefficient values and
+  (2) db4 inverse perfect reconstruction.
+- **Closed by**: Added fixtures 52–53:
+  - Fixture 52: `wavelet_daubechies4_one_level_known_coefficients_fixture` — db4 N=4 level=1,
+    x=[1,0,0,0], periodic analysis gives [a0,a1,d0,d1]=[h0,h2,h3,h1] using published db4 taps
+    h=[0.4829629131, 0.8365163037, 0.2241438680, -0.1294095226]; exact basis-impulse mapping;
+    threshold 1×10⁻¹⁵.
+  - Fixture 53: `wavelet_daubechies4_inverse_perfect_reconstruction_fixture` — db4 N=4 level=1,
+    IDWT(DWT([1,-2,0.5,4]))=[1,-2,0.5,4]; orthogonal two-channel PR theorem (Mallat 1989 Thm.2);
+    threshold 1×10⁻¹².
+- **Verification**: `cargo test -p apollo-validation` → 3 passed, 0 FAILED, 0 ignored.
+
+### Closure XXXIV — CZT Off-Unit-Circle and Hilbert Envelope Fixtures [patch]
+- **Gap**: `apollo-validation` had 49 published-reference fixtures. Both CZT fixtures (16 and 29)
+  used A=1 (unit-circle start, DFT reduction); the Chirp Z-Transform's core generality—evaluating
+  the Z-transform off the unit circle at z_k=A·W^{-k} with |A|≠1—was not covered. The Hilbert
+  envelope theorem (Oppenheim-Schafer 2010 §12.1, Bedrosian 1963) was not a distinct fixture;
+  existing fixtures 26 and 31 covered cosine-to-sine and instantaneous frequency only.
+- **Closed by**: Added fixtures 50–51:
+  - Fixture 50: `czt_off_unit_circle_z_transform_fixture` — N=2, M=2, A=2, W=exp(−πi);
+    X=[1.5+0i, 0.5+0i]; evaluation points z={2,−2} on real axis off unit circle;
+    exact dyadic rationals; Rabiner, Schafer & Rader (1969) §II; threshold 1×10⁻¹².
+  - Fixture 51: `hilbert_pure_cosine_envelope_is_unity_fixture` — x=[1,0,−1,0]=cos(πn/2),
+    N=4; envelope=[1,1,1,1]; DFT factors ∈{1,i,−1,−i}; exact integers;
+    Oppenheim & Schafer (2010) §12.1 eq.(12.8); Bedrosian (1963); threshold 1×10⁻¹².
+- **Verification**: `cargo test -p apollo-validation` → 3 passed, 0 FAILED, 0 ignored.
+
+### Closure XXXIII — SDFT Sliding Recurrence and FrFT Order-4 Identity Fixtures [patch]
+- **Gap**: `apollo-validation` had 47 published-reference fixtures. The SDFT sliding-update
+  recurrence path (Jacobsen & Lyons 2003 §2 eq.(2)) was not exercised as a published-reference
+  fixture; only `direct_bins` was covered (fixture 20). The UnitaryFrFT periodicity corollary
+  (Candan et al. 2000 §II: DFrFT_4=I) was not covered; only the additivity roundtrip at
+  α=0.5 was present (fixture 34).
+- **Closed by**: Added fixtures 48–49:
+  - Fixture 48: `sdft_sliding_recurrence_unit_impulse_all_bins_fixture` — N=4 zero_state,
+    4 sequential updates [1,0,0,0]; all tracked bins = 1+0i (DFT of [1,0,0,0]);
+    factors ∈{1,i,−1,−i}; exact integer arithmetic; Jacobsen & Lyons (2003) eq.(2);
+    threshold 1×10⁻¹².
+  - Fixture 49: `frft_order4_identity_fixture` — UnitaryFrFT N=4, order=4.0,
+    input=[1,2,3,4]: output=[1,2,3,4]; exp(−4kπi/2)=exp(−2πki)=1; V·I·V^T=I;
+    independent of eigenvector ordering; Candan et al. (2000) §II Corollary;
+    threshold 1×10⁻¹².
+- **Verification**: `cargo test -p apollo-validation` → 3 passed, 0 FAILED, 0 ignored.
+
+### Closure XXXII — NUFFT Adjoint Identity and Radon Fourier Slice Theorem Fixtures [patch]
+- **Gap**: `apollo-validation` had 45 published-reference fixtures. The NUFFT Type-1/Type-2
+  adjoint identity (Dutt-Rokhlin 1993 eq. 1.8) existed as a unit test in `apollo-nufft`
+  but had no published-reference fixture in `apollo-validation`. The Radon Fourier Slice
+  Theorem (Natterer 1986, Theorem 1.1) was not represented as a distinct fixture (the
+  existing fixture 28 tests only column-sum projection, not the FFT-slice equality).
+- **Closed by**: Added fixtures 46–47:
+  - Fixture 46: `nufft_type1_type2_adjoint_inner_product_fixture` — N=2, pos=[0,0.5],
+    c=[1,2], f=[3,4]; Re(〈Ac,f〉)=Re(〈c,A*f〉)=5 (exact integers, all exp∈{1,−1});
+    Dutt & Rokhlin (1993) SIAM J. Sci. Comput. 14(6) adjoint identity (1.8);
+    threshold 1×10⁻¹².
+  - Fixture 47: `radon_fourier_slice_theorem_theta0_fixture` — 2×2 image [[1,2],[3,4]],
+    DFT_1(R_{θ=0}f)=[10+0i,−2+0i]=F_2{f}[0,:]; Natterer (1986) §I.2 Thm 1.1;
+    all DFT factors ∈{1,−1}; threshold 1×10⁻¹².
+- **Verification**: `cargo test -p apollo-validation` → 3 passed, 0 FAILED, 0 ignored.
+
 ### Closure XXXI — DCT-I and DST-I Self-Inverse Published-Reference Fixtures [patch]
 - **Gap**: `apollo-validation` had 43 published-reference fixtures. DCT-I and DST-I expose
   `.forward()` and `.inverse()` APIs (Makhoul 1980: C1²=2(N−1)·I, S1²=2(N+1)·I) but had no

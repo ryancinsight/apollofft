@@ -1,5 +1,59 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure XXXVII phase)
+- [x] [patch] Validation fixture 56: `dct3_dc_input_flat_output_fixture`
+  (DCT-III N=4 [1,0,0,0]: y=[½,½,½,½]; y[k]=x[0]/2 (single term, all cosines vanish); Makhoul 1980 Table I; FFTW REDFT01; threshold 1e-15).
+- [x] [patch] Validation fixture 57: `dst3_nyquist_input_alternating_output_fixture`
+  (DST-III N=4 [0,0,0,1]: y=[½,−½,½,−½]; y[k]=(−1)^k/2 (single term, all sines vanish); Makhoul 1980 Table II; FFTW RODFT01; threshold 1e-15).
+- [x] [patch] Root `README.md` fixture count updated 55→57; two new entries appended.
+- [x] [patch] Both count assertions in `apollo-validation` updated: 55→57.
+- Final state: `cargo test -p apollo-validation` 3 passed, 0 FAILED, 0 ignored.
+
+## Closed in this sprint (Closure XXXVI phase)
+- [x] [patch] Validation fixture 54: `cwt_ricker_impulse_peak_value_fixture`
+  (CWT Ricker N=7 a=1 δ_{3}: W(1,3)=ψ(0)=2/(√3·π^¼); W(1,2)=W(1,4)=0 exact; Daubechies 1992 §2.1 eq.(2.1.4); threshold 1e-14).
+- [x] [patch] Validation fixture 55: `cwt_ricker_scale_normalization_fixture`
+  (CWT Ricker N=7 a=2 δ_{3}: W(2,3)=ψ(0)/√2=√2/(√3·π^¼); Daubechies 1992 §2.1 L² norm; Grossmann-Morlet 1984 eq.(1.3); threshold 1e-13).
+- [x] [patch] Root `README.md` fixture count updated 53->55; two new entries appended.
+- [x] [patch] Both count assertions in `apollo-validation` updated: 53->55.
+- Final state: `cargo test -p apollo-validation` 3 passed, 0 FAILED, 0 ignored.
+
+## Closed in this sprint (Closure XXXV phase)
+- [x] [patch] Validation fixture 52: `wavelet_daubechies4_one_level_known_coefficients_fixture`
+  (DWT db4 N=4 level=1 x=[1,0,0,0]: [a0,a1,d0,d1]=[h0,h2,h3,h1]; Daubechies 1992 taps; exact basis-impulse mapping; threshold 1e-15).
+- [x] [patch] Validation fixture 53: `wavelet_daubechies4_inverse_perfect_reconstruction_fixture`
+  (DWT db4 N=4 level=1: IDWT(DWT([1,-2,0.5,4]))=[1,-2,0.5,4]; Mallat 1989 Thm.2 perfect reconstruction; threshold 1e-12).
+- [x] [patch] Root `README.md` fixture count updated 51->53; two new entries appended.
+- [x] [patch] Both count assertions in `apollo-validation` updated: 51->53.
+- Final state: `cargo test -p apollo-validation` 3 passed, 0 FAILED, 0 ignored.
+
+## Closed in this sprint (Closure XXXIV phase)
+- [x] [patch] Validation fixture 50: `czt_off_unit_circle_z_transform_fixture`
+  (CZT N=2 A=2 W=exp(-πi): X=[1.5,0.5]; Z-transform off unit circle at z={2,-2}; Rabiner-Schafer-Rader 1969 §II; exact dyadic; threshold 1e-12).
+- [x] [patch] Validation fixture 51: `hilbert_pure_cosine_envelope_is_unity_fixture`
+  (Hilbert envelope of cos(πn/2) N=4: [1,1,1,1]; Oppenheim-Schafer 2010 §12.1 eq.(12.8); Bedrosian 1963; exact integers; threshold 1e-12).
+- [x] [patch] Root `README.md` fixture count updated 49->51; two new entries appended.
+- [x] [patch] Both count assertions in `apollo-validation` updated: 49->51.
+- Final state: `cargo test -p apollo-validation` 3 passed, 0 FAILED, 0 ignored.
+
+## Closed in this sprint (Closure XXXIII phase)
+- [x] [patch] Validation fixture 48: `sdft_sliding_recurrence_unit_impulse_all_bins_fixture`
+  (SDFT N=4 zero_state, feed [1,0,0,0], all bins=[1+0i,1+0i,1+0i,1+0i]; Jacobsen-Lyons 2003 IEEE SPM 20(2) §2 eq.(2); exact; threshold 1e-12).
+- [x] [patch] Validation fixture 49: `frft_order4_identity_fixture`
+  (UnitaryFrFT N=4 order=4.0: DFrFT_4([1,2,3,4])=[1,2,3,4]; Candan et al. 2000 §II Corollary; exp(-2πki)=1; exact; threshold 1e-12).
+- [x] [patch] Root `README.md` fixture count updated 47->49; two new entries appended.
+- [x] [patch] Both count assertions in `apollo-validation` updated: 47->49.
+- Final state: `cargo test -p apollo-validation` 3 passed, 0 FAILED, 0 ignored.
+
+## Closed in this sprint (Closure XXXII phase)
+- [x] [patch] Validation fixture 46: `nufft_type1_type2_adjoint_inner_product_fixture`
+  (NUFFT N=2 adjoint identity Re(〈Ac,f〉)=Re(〈c,A*f〉)=5; Dutt-Rokhlin 1993; all exp∈{1,-1}; exact; threshold 1e-12).
+- [x] [patch] Validation fixture 47: `radon_fourier_slice_theorem_theta0_fixture`
+  (Radon θ=0 FST: DFT_1(R_{0}[[1,2],[3,4]])=[10,-2]; Natterer 1986 Thm 1.1; exact; threshold 1e-12).
+- [x] [patch] Root `README.md` fixture count updated 45->47; two new entries appended.
+- [x] [patch] Both count assertions in `apollo-validation` updated: 45->47.
+- Final state: `cargo test -p apollo-validation` 3 passed, 0 FAILED, 0 ignored.
+
 ## Closed in this sprint (Closure XXXI phase)
 - [x] [patch] Validation fixture 44: `dct1_inverse_roundtrip_three_point_fixture`
   (DCT-I N=3: IDCT-I(DCT-I([1,2,3]))=[1,2,3]; Makhoul 1980 C1²=2(N−1)·I; FFTW REDFT00; threshold 1e-14).

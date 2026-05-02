@@ -11,6 +11,139 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.12.17] — Closure XXXVII
+
+### Closure XXXVII — DCT-III and DST-III Published-Reference Fixtures [patch]
+
+#### Added
+- Validation fixture 56 in `apollo-validation`: `dct3_dc_input_flat_output_fixture` —
+  DCT-III, N=4, DC input [1,0,0,0]: y[k]=x[0]/2=1/2 for all k; flat output [½,½,½,½].
+  Single-term kernel evaluation (x[n]=0 for n≥1 eliminates all cosine terms);
+  Makhoul (1980) IEEE Trans. ASSP 28(1) Table I; FFTW REDFT01; threshold 1×10⁻¹⁵.
+- Validation fixture 57 in `apollo-validation`: `dst3_nyquist_input_alternating_output_fixture` —
+  DST-III, N=4, Nyquist input [0,0,0,1]: y[k]=(−1)^k/2; alternating [½,−½,½,−½].
+  Single-term kernel evaluation (x[n]=0 for n≤2 eliminates all sine terms);
+  Makhoul (1980) IEEE Trans. ASSP 28(1) Table II; FFTW RODFT01; threshold 1×10⁻¹⁵.
+- Root `README.md` fixture count updated 55 → 57; two new entries appended.
+
+#### Final state
+- Both count assertions in `apollo-validation/suite.rs` updated 55 → 57.
+- `cargo test -p apollo-validation`: 3 passed, 0 FAILED, 0 ignored.
+
+---
+
+## [0.12.16] — Closure XXXVI
+
+### Closure XXXVI — CWT Ricker Impulse Peak and Scale-Normalization Fixtures [patch]
+
+#### Added
+- Validation fixture 54 in `apollo-validation`: `cwt_ricker_impulse_peak_value_fixture` —
+  CWT Ricker, N=7, impulse at n₀=3, a=1: W(1,2)=0, W(1,3)=ψ(0)=2/(√3·π^¼), W(1,4)=0.
+  W(1,3) is single-tap (no summation error); W(1,2) and W(1,4) are exact zeros
+  because (1−(±1)²)=0; Daubechies (1992) §2.1 eq.(2.1.4); threshold 1×10⁻¹⁴.
+- Validation fixture 55 in `apollo-validation`: `cwt_ricker_scale_normalization_fixture` —
+  CWT Ricker, N=7, impulse at n₀=3, a=2: W(2,3)=ψ(0)/√2=√2/(√3·π^¼).
+  Tests the 1/√a L² normalization convention directly;
+  Daubechies (1992) §2.1; Grossmann & Morlet (1984) eq.(1.3); threshold 1×10⁻¹³.
+- Root `README.md` fixture count updated 53 → 55; two new entries appended.
+
+#### Final state
+- Both count assertions in `apollo-validation/suite.rs` updated 53 → 55.
+- `cargo test -p apollo-validation`: 3 passed, 0 FAILED, 0 ignored.
+
+---
+
+## [0.12.15] — Closure XXXV
+
+### Closure XXXV — Daubechies-4 DWT Coefficient and Reconstruction Fixtures [patch]
+
+#### Added
+- Validation fixture 52 in `apollo-validation`: `wavelet_daubechies4_one_level_known_coefficients_fixture` —
+  DWT db4, N=4, level=1, x=[1,0,0,0]: [a0,a1,d0,d1]=[h0,h2,h3,h1] with
+  Daubechies taps h=[0.4829629131, 0.8365163037, 0.2241438680, -0.1294095226].
+  Basis-impulse input makes each coefficient a single tap (no summation error);
+  threshold 1×10⁻¹⁵.
+- Validation fixture 53 in `apollo-validation`: `wavelet_daubechies4_inverse_perfect_reconstruction_fixture` —
+  DWT db4, N=4, level=1: IDWT(DWT([1,-2,0.5,4]))=[1,-2,0.5,4].
+  Orthogonal two-channel PR theorem (Mallat 1989, Theorem 2);
+  threshold 1×10⁻¹².
+- Root `README.md` fixture count updated 51 → 53; two new entries appended.
+
+#### Final state
+- Both count assertions in `apollo-validation/suite.rs` updated 51 → 53.
+- `cargo test -p apollo-validation`: 3 passed, 0 FAILED, 0 ignored.
+
+---
+
+## [0.12.14] — Closure XXXIV
+
+### Closure XXXIV — CZT Off-Unit-Circle and Hilbert Envelope Fixtures [patch]
+
+#### Added
+- Validation fixture 50 in `apollo-validation`: `czt_off_unit_circle_z_transform_fixture` —
+  CZT N=2, M=2, A=2, W=exp(−πi): X=[1.5+0i, 0.5+0i].
+  Evaluates Z-transform off the unit circle at z={2,−2} (|z|=2);
+  A=2 factors are dyadic rationals, exact in f64; accumulated FP error=0;
+  Rabiner, Schafer & Rader (1969) IEEE TAE 17(2) §II; threshold 1×10⁻¹².
+- Validation fixture 51 in `apollo-validation`: `hilbert_pure_cosine_envelope_is_unity_fixture` —
+  Hilbert envelope of x=[1,0,−1,0]=cos(πn/2), N=4: envelope=[1,1,1,1].
+  DFT mask {0,1,2}×{1,i,−1,−i}; analytic signal=[1,i,−1,−i]; |z[n]|=1 exact;
+  Oppenheim & Schafer (2010) DTSP 3rd ed. §12.1 eq.(12.8); Bedrosian (1963);
+  threshold 1×10⁻¹².
+- Root `README.md` fixture count updated 49 → 51; two new entries appended.
+
+#### Final state
+- Both count assertions in `apollo-validation/suite.rs` updated 49 → 51.
+- `cargo test -p apollo-validation`: 3 passed, 0 FAILED, 0 ignored.
+
+---
+
+## [0.12.13] — Closure XXXIII
+
+### Closure XXXIII — SDFT Sliding Recurrence and FrFT Order-4 Identity Fixtures [patch]
+
+#### Added
+- Validation fixture 48 in `apollo-validation`: `sdft_sliding_recurrence_unit_impulse_all_bins_fixture` —
+  SDFT N=4, zero_state, 4 updates fed [1,0,0,0]: all 4 bins = 1+0i.
+  Tests the sliding-update recurrence path (not direct_bins); factors ∈{1,i,−1,−i};
+  exact integer result; Jacobsen & Lyons (2003) IEEE SPM 20(2) §2 eq.(2);
+  threshold 1×10⁻¹².
+- Validation fixture 49 in `apollo-validation`: `frft_order4_identity_fixture` —
+  UnitaryFrFT N=4, order α=4.0: DFrFT_4([1,2,3,4])=[1,2,3,4].
+  exp(−4kπi/2)=exp(−2πki)=1; V·I·V^T=I; exact regardless of eigenvector ordering;
+  Candan, Kutay & Ozaktas (2000) IEEE TSP 48(5) §II Corollary;
+  threshold 1×10⁻¹².
+- Root `README.md` fixture count updated 47 → 49; two new entries appended.
+
+#### Final state
+- Both count assertions in `apollo-validation/suite.rs` updated 47 → 49.
+- `cargo test -p apollo-validation`: 3 passed, 0 FAILED, 0 ignored.
+
+---
+
+## [0.12.12] — Closure XXXII
+
+### Closure XXXII — NUFFT Adjoint Identity and Radon Fourier Slice Theorem Fixtures [patch]
+
+#### Added
+- Validation fixture 46 in `apollo-validation`: `nufft_type1_type2_adjoint_inner_product_fixture` —
+  NUFFT N=2, pos=[0,0.5], c=[1,2], f=[3,4]: Re(〈A·c,f〉)=Re(〈c,A*·f〉)=5.
+  All exp factors ∈{1,−1}; computation exact in f64; accumulated FP error=0;
+  Dutt & Rokhlin (1993) SIAM J. Sci. Comput. 14(6): adjoint identity (1.8);
+  Greengard & Lee (2004) §2; threshold 1×10⁻¹².
+- Validation fixture 47 in `apollo-validation`: `radon_fourier_slice_theorem_theta0_fixture` —
+  Radon θ=0 Fourier Slice Theorem on 2×2 image [[1,2],[3,4]]:
+  DFT_1(R_{θ=0}f)=[10+0i,−2+0i] equals horizontal slice of 2D DFT;
+  all DFT factors ∈{1,−1}; exact in f64; Natterer (1986) §I.2 Thm 1.1;
+  Radon (1917); threshold 1×10⁻¹².
+- Root `README.md` fixture count updated 45 → 47; two new entries appended.
+
+#### Final state
+- Both count assertions in `apollo-validation/suite.rs` updated 45 → 47.
+- `cargo test -p apollo-validation`: 3 passed, 0 FAILED, 0 ignored.
+
+---
+
 ## [0.12.11] — Closure XXXI
 
 ### Closure XXXI — DCT-I and DST-I Self-Inverse Published-Reference Fixtures [patch]
