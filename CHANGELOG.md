@@ -11,6 +11,37 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.5] — Closure XLIV
+
+### Closure XLIV — apollo-fft: precomputed twiddle tables + preallocated scratch in 2D/3D plans [patch]
+
+#### Changed
+- `apollo-fft` / `dimension_2d.rs`: `FftPlan2D` now embeds eight per-axis per-direction twiddle
+  table fields (`twiddle_row_fwd_64`, `twiddle_row_inv_64`, `twiddle_col_fwd_64`,
+  `twiddle_col_inv_64`, and f32 variants). Row (axis-1) and column (axis-0) butterfly passes use
+  `forward_inplace_64_with_twiddles` / `inverse_inplace_64_with_twiddles` when the axis length is
+  a power of two, eliminating the per-lane `build_forward_twiddle_table_64` allocation that
+  previously occurred on every axis pass. Fallback to `fft_forward_64` for non-power-of-two axes.
+- `apollo-fft` / `dimension_2d.rs`: column-pass scratch buffer preallocated at plan construction
+  time (`scratch_col_64`, `scratch_col_32`; each `nx * ny` entries) and reused via `Mutex`,
+  eliminating the per-call `Vec::new(nx * ny)` allocation in `axis0_pass_complex`.
+- `apollo-fft` / `dimension_3d.rs`: `FftPlan3D` receives the same treatment — twelve per-axis
+  twiddle table fields + four preallocated scratch buffers (`scratch_y_64`, `scratch_x_64`,
+  `scratch_y_32`, `scratch_x_32`; each `nx * ny * nz` entries).  All z/y/x butterfly passes use
+  precomputed tables for power-of-two axis lengths.
+
+#### Performance
+| Transform | Before | After | Delta |
+|---|---|---|---|
+| 2D 256×256 (vs numpy) | 1.00× | **1.33×** | +33% |
+| 2D 512×512 (vs numpy) | 1.12× | **1.35×** | +20% |
+| 2D 1024×1024 (vs numpy) | 1.17× | **1.45×** | +24% |
+| 3D 32³ (vs numpy) | 0.40× | **1.26×** | +216% |
+| 3D 64³ (vs numpy) | 0.87× | **1.14×** | +31% |
+| 3D 128³ (vs numpy) | 1.04× | **1.20×** | +15% |
+
+---
+
 ## [0.13.4] — Closure XLIII
 
 ### Closure XLIII — apollo-fft: contiguous per-stage twiddle tables; eliminate per-call allocation [patch]
