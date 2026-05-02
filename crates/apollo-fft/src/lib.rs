@@ -77,6 +77,8 @@ pub use types::{
     BackendKind, ComputePrecision, HalfSpectrum3D, Normalization, PrecisionMode, PrecisionProfile,
     Shape1D, Shape2D, Shape3D, StoragePrecision,
 };
+pub use application::utilities::freq::{fftfreq, rfftfreq};
+pub use application::utilities::shift::{fftshift, ifftshift};
 
 use ndarray::{Array1, Array2, Array3, Zip};
 

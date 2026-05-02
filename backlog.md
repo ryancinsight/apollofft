@@ -1,5 +1,20 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure XLI phase)
+- [x] [minor] Add separable CPU 2D DHT: `DhtPlan::forward_2d`, `inverse_2d` (N×N, involutory scaling 1/N²).
+- [x] [minor] Add separable CPU 3D DHT: `DhtPlan::forward_3d`, `inverse_3d` (N×N×N, involutory scaling 1/N³).
+- [x] [minor] Add `DhtError::ShapeMismatch2d` and `DhtError::ShapeMismatch3d` variants.
+- [x] [minor] Add `ndarray = "0.16"` dependency to `apollo-dht`; re-export `Array2`, `Array3`.
+- [x] [minor] Add `FwhtPlan2D` in `dimension_2d.rs` (separable N×N FWHT, real + complex).
+- [x] [minor] Add `FwhtPlan3D` in `dimension_3d.rs` (separable N×N×N FWHT, real + complex).
+- [x] [minor] Re-export `FwhtPlan2D`, `FwhtPlan3D` from `apollo-fwht` crate root.
+- [x] [minor] Add `fftfreq(n, d)` and `rfftfreq(n, d)` numpy-compatible frequency utilities in `apollo-fft`.
+- [x] [minor] Add `fftshift` and `ifftshift` generic shift utilities in `apollo-fft`.
+- [x] [minor] Re-export all four utilities from `apollo-fft` crate root.
+- Final state: `cargo test -p apollo-dht` 19 passed; `cargo test -p apollo-fwht` 24 passed;
+  `cargo test -p apollo-fft` 63 passed; `cargo test -p apollo-validation -- --include-ignored` 3 passed;
+  all 0 failed.
+
 ## Closed in this sprint (Closure XL phase)
 - [x] [minor] Add GPU separable 2D DCT/DST APIs to `apollo-dctdst-wgpu` `DctDstWgpuBackend`:
   `execute_forward_2d`, `execute_inverse_2d`.

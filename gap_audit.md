@@ -4,13 +4,61 @@
 
 - `GpuFft3dF16Native` Bluestein path on production hardware with non-power-of-two sizes: current test passes on dev hardware; production validation on adapters that expose `wgpu::Features::SHADER_F16` is pending.
 - Criterion buffer-reuse bench results on representative GPU hardware: allocation-vs-reuse speedup ratios for FFT/NUFFT/STFT/Radon WGPU benchmark suites are not yet recorded as numbers. Closure XXII added the manual self-hosted GPU workflow and runner script; the residual gap is the first benchmark execution on real labeled hardware and publication of the measured ratios.
+- **NUFFT 2D CPU**: `apollo-nufft` has 1D and 3D; 2D separable NUFFT not yet implemented.
+- **DWT 2D CPU**: `apollo-wavelet` has 1D DWT; 2D separable DWT not yet implemented.
+- **GPU FFT 1D/2D**: `apollo-fft-wgpu` exposes 3D GPU FFT; 1D and 2D GPU FFT paths are absent.
+- **FrFT 2D/3D**: `apollo-frft` has 1D only; 2D/3D separable fractional Fourier transform absent.
+- **Hilbert inverse**: `apollo-hilbert` has 1D forward only; inverse (env. recovery) absent.
+- **NTT 2D/3D**: `apollo-ntt` has 1D only; 2D/3D separable NTT absent.
+- **STFT 2D**: `apollo-stft` / `apollo-stft-wgpu` are 1D only; 2D short-time FFT absent.
+- **Mellin 2D/3D**: `apollo-mellin` has 1D only; 2D/3D separable Mellin transform absent.
+- **SDFT inverse**: `apollo-sdft` and `apollo-sdft-wgpu` have forward only; inverse SDFT absent.
+- **SFT 2D/3D**: `apollo-sft` has 1D only; 2D/3D SFT absent.
+- **GFT 2D/3D**: `apollo-gft` has 1D only; 2D/3D GFT absent.
+- **QFT 2D/3D**: `apollo-qft` has 1D only; 2D/3D QFT absent.
+- **CZT 2D/3D**: `apollo-czt` has 1D only; 2D/3D CZT absent.
+- **SHT 3D / Radon 3D**: `apollo-sht` has 2D only; `apollo-radon` has 2D only.
 
 Note: NTT-WGPU floating mixed precision is an architectural design contract, not a gap.
 Residue-field arithmetic requires exact modular integers; the WGPU surface uses exact `u32`
 quantized storage (implemented and verified). Floating-point NTT is architecturally unsupported
 by design and will not be implemented.
 
+## Comparative Gap Audit: Apollo vs rustfft vs numpy/scipy (Closure XLI baseline)
+
+| Capability | rustfft | numpy/scipy | Apollo | Status |
+|---|---|---|---|---|
+| 1D complex FFT | ✓ | ✓ | ✓ | Closed |
+| 2D complex FFT | ✗ | ✓ | ✓ | Closed |
+| 3D complex FFT | ✗ | ✓ | ✓ | Closed |
+| fftshift/ifftshift | ✗ | ✓ | ✓ | **Closed XLI** |
+| fftfreq/rfftfreq | ✗ | ✓ | ✓ | **Closed XLI** |
+| DCT/DST all types 1D/2D/3D | ✗ | via scipy | ✓ | Closed |
+| DHT 1D | ✗ | ✗ | ✓ | Closed |
+| DHT 2D/3D | ✗ | ✗ | ✓ | **Closed XLI** |
+| FWHT 1D | ✗ | ✗ | ✓ | Closed |
+| FWHT 2D/3D | ✗ | ✗ | ✓ | **Closed XLI** |
+| NUFFT 1D/3D | ✗ | via finufft | ✓ | Closed |
+| NUFFT 2D | ✗ | via finufft | ✗ | Open |
+| DWT 2D | ✗ | via pywt | ✗ | Open |
+| GPU FFT 1D/2D | ✗ | ✗ | ✗ | Open |
+
 ## Closed Gaps
+### Closure XLI — DHT CPU 2D/3D; FWHT CPU 2D/3D; FFT fftfreq/rfftfreq/fftshift/ifftshift [minor]
+- **Gap**: DHT 2D/3D absent; FWHT 2D/3D absent; numpy-compatible fftfreq/rfftfreq/fftshift/ifftshift absent.
+- **Closed by**:
+  - `apollo-dht`: added separable `forward_2d`, `inverse_2d`, `forward_3d`, `inverse_3d` with N×N and N×N×N constraints; `DhtError::ShapeMismatch2d/3d`.
+  - `apollo-fwht`: added `FwhtPlan2D` and `FwhtPlan3D` in deep hierarchy `dimension_2d.rs` / `dimension_3d.rs`; both support real and complex forward/inverse; `FwhtError::LengthMismatch` enforced on non-square/non-cubic input.
+  - `apollo-fft`: new `application/utilities/freq.rs` (`fftfreq`, `rfftfreq`) and `application/utilities/shift.rs` (`fftshift`, `ifftshift`); all four re-exported from crate root.
+- **Verification**:
+  - DHT involution property: `DHT_2D(DHT_2D(X)) = N²·X` — verified at N=3.
+  - DHT 2D/3D inverse roundtrip: max absolute error < 1e-10.
+  - FWHT involution: `WHT_2D(WHT_2D(X)) = N²·X` — verified at N=4.
+  - FWHT separability: outer product x⊗y → W_{2D}(x⊗y) = WHT(x)⊗WHT(y).
+  - fftfreq(8, 1.0) == numpy reference [0, 0.125, 0.25, 0.375, -0.5, -0.375, -0.25, -0.125].
+  - ifftshift(fftshift(x)) = x for even and odd n.
+  - `cargo test -p apollo-dht`: 19 passed. `cargo test -p apollo-fwht`: 24 passed. `cargo test -p apollo-fft`: 63 passed.
+
 ### Closure XL — GPU DCT/DST 2D and 3D Separable Execution [minor]
 - **Gap**: `apollo-dctdst-wgpu` exposed only 1D forward/inverse execution while CPU had full 2D/3D
   parity after Closure XXXIX.

@@ -24,3 +24,4 @@ pub use domain::contracts::error::{DhtError, DhtResult};
 pub use domain::metadata::length::HartleyLength;
 pub use domain::spectrum::coefficients::HartleySpectrum;
 pub use infrastructure::kernel::direct::{hartley_cas, transform_real};
+pub use ndarray::{Array2, Array3};

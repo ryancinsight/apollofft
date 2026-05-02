@@ -1,4 +1,28 @@
 # Apollo Checklist
+## Closure XLI — DHT CPU 2D/3D; FWHT CPU 2D/3D; FFT fftfreq/rfftfreq/fftshift/ifftshift [minor]
+Sprint target version: 0.13.2
+
+- [x] Add `ndarray = "0.16"` to `apollo-dht/Cargo.toml`.
+- [x] Add `DhtError::ShapeMismatch2d` and `DhtError::ShapeMismatch3d` variants.
+- [x] Implement `DhtPlan::forward_2d/2d_into/inverse_2d/2d_into` (row+col separable passes).
+- [x] Implement `DhtPlan::forward_3d/3d_into/inverse_3d/3d_into` (axis-0/1/2 separable passes).
+- [x] Re-export `Array2`, `Array3` from `apollo-dht` crate root.
+- [x] Add 5 value-semantic DHT 2D/3D tests (involution, roundtrip, separability, shape rejection).
+- [x] Create `crates/apollo-fwht/src/application/execution/plan/fwht/dimension_2d.rs` with `FwhtPlan2D`.
+- [x] Create `crates/apollo-fwht/src/application/execution/plan/fwht/dimension_3d.rs` with `FwhtPlan3D`.
+- [x] Add `dimension_2d` and `dimension_3d` modules to `plan/fwht/mod.rs`.
+- [x] Re-export `FwhtPlan2D` and `FwhtPlan3D` from `apollo-fwht` crate root.
+- [x] Create `crates/apollo-fft/src/application/utilities/freq.rs` (`fftfreq`, `rfftfreq`).
+- [x] Create `crates/apollo-fft/src/application/utilities/shift.rs` (`fftshift`, `ifftshift`).
+- [x] Create `crates/apollo-fft/src/application/utilities/mod.rs` and register in `application/mod.rs`.
+- [x] Re-export all four FFT utilities from `apollo-fft` crate root.
+- [x] `cargo test -p apollo-dht`: 19 passed, 0 failed.
+- [x] `cargo test -p apollo-fwht`: 24 passed, 0 failed.
+- [x] `cargo test -p apollo-fft`: 63 passed, 0 failed.
+- [x] `cargo test -p apollo-validation -- --include-ignored`: 3 passed, 0 failed.
+- [x] Sync PM artifacts: CHANGELOG.md, backlog.md, checklist.md, gap_audit.md.
+- [x] Commit and push.
+
 ## Closure XL — GPU DCT/DST 2D and 3D Separable Execution [minor]
 Sprint target version: 0.13.1
 

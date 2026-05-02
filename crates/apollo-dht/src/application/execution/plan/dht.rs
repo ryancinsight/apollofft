@@ -6,6 +6,7 @@ use crate::domain::spectrum::coefficients::HartleySpectrum;
 use crate::infrastructure::kernel::direct::transform_real;
 use crate::infrastructure::kernel::fast::dht_fast;
 use apollo_fft::{f16, PrecisionProfile};
+use ndarray::{Array2, Array3};
 
 const FAST_KERNEL_THRESHOLD: usize = 512;
 
@@ -84,6 +85,149 @@ impl DhtPlan {
         let mut output = vec![0.0; self.len()];
         self.forward_into(input, &mut output)?;
         Ok(output)
+    }
+
+    /// Execute the unnormalized separable 2D forward DHT on an N×N array.
+    ///
+    /// The 2D DHT is separable: apply the 1D DHT to every row, then to every
+    /// column. The mathematical identity is
+    /// `H_{2D}[m,n] = Σ_j Σ_k x[j,k] cas(2πjm/N) cas(2πkn/N)`,
+    /// which equals the row-DHT applied column-wise (order-invariant).
+    /// Requires a square `N×N` input where `N == self.len()`.
+    pub fn forward_2d(&self, input: &Array2<f64>) -> DhtResult<Array2<f64>> {
+        let n = self.len();
+        let (rows, cols) = input.dim();
+        if rows != n || cols != n {
+            return Err(DhtError::ShapeMismatch2d {
+                expected: n,
+                rows,
+                cols,
+            });
+        }
+        // Row pass.
+        let mut tmp = Array2::<f64>::zeros((n, n));
+        let mut buf = vec![0.0_f64; n];
+        for r in 0..n {
+            let row: Vec<f64> = input.row(r).iter().copied().collect();
+            self.forward_into(&row, &mut buf)?;
+            for c in 0..n {
+                tmp[[r, c]] = buf[c];
+            }
+        }
+        // Column pass.
+        let mut result = Array2::<f64>::zeros((n, n));
+        for c in 0..n {
+            let col: Vec<f64> = tmp.column(c).iter().copied().collect();
+            self.forward_into(&col, &mut buf)?;
+            for r in 0..n {
+                result[[r, c]] = buf[r];
+            }
+        }
+        Ok(result)
+    }
+
+    /// Execute the unnormalized separable 2D forward DHT into a caller-owned buffer.
+    pub fn forward_2d_into(&self, input: &Array2<f64>, output: &mut Array2<f64>) -> DhtResult<()> {
+        let result = self.forward_2d(input)?;
+        output.assign(&result);
+        Ok(())
+    }
+
+    /// Execute the normalized separable 2D inverse DHT on an N×N spectrum.
+    ///
+    /// Since DHT is involutory (DHT∘DHT = N·I), the 2D inverse is
+    /// `(1/N²) · forward_2d`. This is mathematically exact with no
+    /// additional kernel required.
+    pub fn inverse_2d(&self, input: &Array2<f64>) -> DhtResult<Array2<f64>> {
+        let n = self.len();
+        let mut result = self.forward_2d(input)?;
+        let scale = 1.0 / (n * n) as f64;
+        result.mapv_inplace(|v| v * scale);
+        Ok(result)
+    }
+
+    /// Execute the normalized separable 2D inverse DHT into a caller-owned buffer.
+    pub fn inverse_2d_into(&self, input: &Array2<f64>, output: &mut Array2<f64>) -> DhtResult<()> {
+        let result = self.inverse_2d(input)?;
+        output.assign(&result);
+        Ok(())
+    }
+
+    /// Execute the unnormalized separable 3D forward DHT on an N×N×N array.
+    ///
+    /// Applies the 1D DHT along axis 0, then axis 1, then axis 2.
+    /// Requires a cubic `N×N×N` input where `N == self.len()`.
+    pub fn forward_3d(&self, input: &Array3<f64>) -> DhtResult<Array3<f64>> {
+        let n = self.len();
+        let (d0, d1, d2) = input.dim();
+        if d0 != n || d1 != n || d2 != n {
+            return Err(DhtError::ShapeMismatch3d {
+                expected: n,
+                d0,
+                d1,
+                d2,
+            });
+        }
+        let mut buf = vec![0.0_f64; n];
+        // Axis-0 pass.
+        let mut tmp0 = Array3::<f64>::zeros((n, n, n));
+        for j in 0..n {
+            for k in 0..n {
+                let fiber: Vec<f64> = (0..n).map(|i| input[[i, j, k]]).collect();
+                self.forward_into(&fiber, &mut buf)?;
+                for i in 0..n {
+                    tmp0[[i, j, k]] = buf[i];
+                }
+            }
+        }
+        // Axis-1 pass.
+        let mut tmp1 = Array3::<f64>::zeros((n, n, n));
+        for i in 0..n {
+            for k in 0..n {
+                let fiber: Vec<f64> = (0..n).map(|j| tmp0[[i, j, k]]).collect();
+                self.forward_into(&fiber, &mut buf)?;
+                for j in 0..n {
+                    tmp1[[i, j, k]] = buf[j];
+                }
+            }
+        }
+        // Axis-2 pass.
+        let mut result = Array3::<f64>::zeros((n, n, n));
+        for i in 0..n {
+            for j in 0..n {
+                let fiber: Vec<f64> = (0..n).map(|k| tmp1[[i, j, k]]).collect();
+                self.forward_into(&fiber, &mut buf)?;
+                for k in 0..n {
+                    result[[i, j, k]] = buf[k];
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    /// Execute the unnormalized separable 3D forward DHT into a caller-owned buffer.
+    pub fn forward_3d_into(&self, input: &Array3<f64>, output: &mut Array3<f64>) -> DhtResult<()> {
+        let result = self.forward_3d(input)?;
+        output.assign(&result);
+        Ok(())
+    }
+
+    /// Execute the normalized separable 3D inverse DHT on an N×N×N spectrum.
+    ///
+    /// `inverse_3d = (1/N³) · forward_3d` by DHT involutory property.
+    pub fn inverse_3d(&self, input: &Array3<f64>) -> DhtResult<Array3<f64>> {
+        let n = self.len();
+        let mut result = self.forward_3d(input)?;
+        let scale = 1.0 / (n * n * n) as f64;
+        result.mapv_inplace(|v| v * scale);
+        Ok(result)
+    }
+
+    /// Execute the normalized separable 3D inverse DHT into a caller-owned buffer.
+    pub fn inverse_3d_into(&self, input: &Array3<f64>, output: &mut Array3<f64>) -> DhtResult<()> {
+        let result = self.inverse_3d(input)?;
+        output.assign(&result);
+        Ok(())
     }
 
     /// Execute the unnormalized DHT for `f64`, `f32`, or mixed `f16` storage.

@@ -17,3 +17,6 @@ pub mod plan {
 pub mod cache {
     pub use crate::application::orchestration::cache::plans::*;
 }
+
+/// FFT utility functions (fftfreq, rfftfreq, fftshift, ifftshift).
+pub mod utilities;

@@ -11,6 +11,34 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.2] — Closure XLI
+
+### Closure XLI — DHT CPU 2D/3D; FWHT CPU 2D/3D; FFT fftfreq/rfftfreq/fftshift/ifftshift [minor]
+
+#### Added
+- `apollo-dht`: `DhtPlan::forward_2d`, `forward_2d_into`, `inverse_2d`, `inverse_2d_into`,
+  `forward_3d`, `forward_3d_into`, `inverse_3d`, `inverse_3d_into` — separable N×N and N×N×N CPU DHT.
+- `apollo-dht`: `DhtError::ShapeMismatch2d { expected, rows, cols }` and
+  `DhtError::ShapeMismatch3d { expected, d0, d1, d2 }` for non-square/non-cubic rejection.
+- `apollo-dht`: re-exports `ndarray::Array2` and `ndarray::Array3` from crate root.
+- `apollo-fwht`: `FwhtPlan2D` — separable N×N FWHT plan with `forward`, `forward_into`,
+  `forward_inplace`, `inverse`, `inverse_into`, `inverse_inplace`, `forward_complex`, `inverse_complex`.
+- `apollo-fwht`: `FwhtPlan3D` — separable N×N×N FWHT plan with matching API surface.
+- `apollo-fwht`: `FwhtPlan2D` and `FwhtPlan3D` re-exported from crate root.
+- `apollo-fft`: `fftfreq(n, d) -> Vec<f64>` — numpy-compatible DFT frequency bin centers.
+- `apollo-fft`: `rfftfreq(n, d) -> Vec<f64>` — non-negative bins for real-input FFT, length n/2+1.
+- `apollo-fft`: `fftshift<T: Copy>(input: &[T]) -> Vec<T>` — zero-frequency centering.
+- `apollo-fft`: `ifftshift<T: Copy>(input: &[T]) -> Vec<T>` — inverse of `fftshift`.
+- All four FFT utilities re-exported from `apollo-fft` crate root.
+
+#### Verification
+- `cargo test -p apollo-dht`: 19 passed, 0 failed.
+- `cargo test -p apollo-fwht`: 24 passed, 0 failed.
+- `cargo test -p apollo-fft`: 63 passed, 0 failed.
+- `cargo test -p apollo-validation -- --include-ignored`: 3 passed, 0 failed.
+
+---
+
 ## [0.13.1] — Closure XL
 
 ### Closure XL — GPU DCT/DST 2D and 3D Separable Execution [minor]
