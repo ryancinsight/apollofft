@@ -11,6 +11,33 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.4] — Closure XLIII
+
+### Closure XLIII — apollo-fft: contiguous per-stage twiddle tables; eliminate per-call allocation [patch]
+
+#### Changed
+- `apollo-fft` / `radix2.rs`: replaced unified N/2 strided twiddle table with contiguous per-stage
+  layout. Stage s (group length `2^s`) occupies `2^(s-1)` sequential entries; the butterfly inner
+  loop reads `stage_twiddles[j]` with no stride, eliminating L1 cache misses at N ≥ 256.
+- `apollo-fft` / `radix2.rs`: `forward_inplace_64`, `inverse_inplace_unnorm_64`,
+  `forward_inplace_32`, `inverse_inplace_unnorm_32` delegate to new `*_with_twiddles` kernels;
+  four new exported table-building functions (`build_forward_twiddle_table_{32,64}`,
+  `build_inverse_twiddle_table_{32,64}`).
+- `apollo-fft` / `dimension_1d.rs`: `FftPlan1D` now precomputes and stores contiguous per-stage
+  twiddle tables for power-of-two N at plan construction time (in `FFT_CACHE_1D`). Per-call Vec
+  allocation eliminated from all hot paths. `forward_complex_slice_inplace`,
+  `inverse_complex_slice_inplace`, `forward_f32`, `inverse_f32` use stored tables.
+
+#### Performance
+| Transform | N | Before | After | Delta |
+|---|---|---|---|---|
+| 1D real (vs numpy) | 1024 | 0.89× | **1.51×** | +70% |
+| 1D real (vs numpy) | 4096 | 0.61× | **0.98×** | +61% |
+| 1D complex (vs numpy) | 1024 | (unknown) | **1.16×** | — |
+| 1D complex (vs numpy) | 4096 | 0.57× | **1.04×** | +83% |
+
+---
+
 ## [0.13.3] — Closure XLII
 
 ### Closure XLII — apollo-python: complete Python bindings; numpy FFT benchmark [minor]

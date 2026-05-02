@@ -1,5 +1,11 @@
 //! 1D FFT plan.
 
+use crate::application::execution::kernel::radix2::{
+    build_forward_twiddle_table_32, build_forward_twiddle_table_64,
+    build_inverse_twiddle_table_32, build_inverse_twiddle_table_64,
+    forward_inplace_32_with_twiddles, forward_inplace_64_with_twiddles,
+    inverse_inplace_32_with_twiddles, inverse_inplace_64_with_twiddles,
+};
 use crate::application::execution::kernel::{fft_forward_32, fft_inverse_32};
 use crate::application::execution::plan::fft::real_storage::RealFftData;
 use crate::domain::metadata::precision::PrecisionProfile;
@@ -37,11 +43,26 @@ use std::sync::Mutex;
 ///
 /// # Complexity
 ///
-/// Power-of-two lengths use `O(N log N)` time and `O(1)` additional plan state.
-/// Non-power-of-two lengths use Bluestein convolution with `O(M log M)` time
-/// and `O(M)` plan state, where `M` is the next convolution length selected by
-/// the Bluestein plan. The direct DFT kernel remains a validation/reference
-/// surface, not the production plan path.
+/// Power-of-two lengths use `O(N log N)` time and `O(N)` additional plan state
+/// (for the precomputed twiddle table). Non-power-of-two lengths use Bluestein
+/// convolution with `O(M log M)` time and `O(M)` plan state, where `M` is the
+/// next convolution length selected by the Bluestein plan.
+///
+/// # Precomputed twiddle tables (power-of-two optimization)
+///
+/// For power-of-two `N`, the plan precomputes a contiguous per-stage forward and
+/// inverse twiddle table of total size `N-1` entries each. Stage s (group length
+/// `len = 2^s`) occupies `len/2` contiguous entries in the table; the butterfly
+/// loop reads them sequentially with no stride. This eliminates both:
+/// 1. The per-call `Vec<Complex64>` allocation (N/2 entries) that the naïve path
+///    allocates on every `forward_inplace_64` call.
+/// 2. The strided twiddle access `T[j * stride]` with `stride = N/len`, which at
+///    early stages (len=2, stride=N/2) reads elements separated by N/2 entries,
+///    causing L1-cache misses for N ≥ 256.
+///
+/// The contiguous layout stores stage twiddles sequentially, so the butterfly
+/// inner loop reads `cache_line_size / sizeof(Complex64)` twiddles per cache line
+/// regardless of N. This is the same principle used by FFTW's split-radix planner.
 ///
 /// # Bluestein scratch reuse
 ///
@@ -62,6 +83,16 @@ pub struct FftPlan1D {
     bluestein_plan: Option<crate::application::execution::kernel::bluestein::BluesteinPlan64>,
     /// Scratch buffer for Bluestein convolution, reused across calls via Mutex.
     bluestein_scratch: Option<Mutex<Vec<Complex64>>>,
+    /// Precomputed contiguous per-stage forward twiddle table for power-of-two N.
+    /// Layout: stage s occupies entries [base..base+half] where half = 2^(s-1).
+    /// Total length = N-1. `None` for non-power-of-two (Bluestein handles those).
+    twiddle_fwd_64: Option<Vec<Complex64>>,
+    /// Precomputed contiguous per-stage inverse twiddle table for power-of-two N.
+    twiddle_inv_64: Option<Vec<Complex64>>,
+    /// Precomputed f32 forward twiddle table (used in LOW_PRECISION_F32 mode).
+    twiddle_fwd_32: Option<Vec<Complex32>>,
+    /// Precomputed f32 inverse twiddle table (used in LOW_PRECISION_F32 mode).
+    twiddle_inv_32: Option<Vec<Complex32>>,
 }
 
 impl std::fmt::Debug for FftPlan1D {
@@ -93,11 +124,38 @@ impl FftPlan1D {
         let bluestein_scratch = bluestein_plan
             .as_ref()
             .map(|bp| Mutex::new(vec![Complex64::new(0.0, 0.0); bp.m()]));
+        // Precompute contiguous per-stage twiddle tables for power-of-two sizes.
+        // For non-power-of-two (Bluestein), these are None; Bluestein has its own tables.
+        let is_pow2 = shape.n.is_power_of_two() && shape.n > 1;
+        let twiddle_fwd_64 = if is_pow2 {
+            Some(build_forward_twiddle_table_64(shape.n))
+        } else {
+            None
+        };
+        let twiddle_inv_64 = if is_pow2 {
+            Some(build_inverse_twiddle_table_64(shape.n))
+        } else {
+            None
+        };
+        let twiddle_fwd_32 = if is_pow2 {
+            Some(build_forward_twiddle_table_32(shape.n))
+        } else {
+            None
+        };
+        let twiddle_inv_32 = if is_pow2 {
+            Some(build_inverse_twiddle_table_32(shape.n))
+        } else {
+            None
+        };
         Self {
             n: shape.n,
             precision,
             bluestein_plan,
             bluestein_scratch,
+            twiddle_fwd_64,
+            twiddle_inv_64,
+            twiddle_fwd_32,
+            twiddle_inv_32,
         }
     }
 
@@ -226,6 +284,8 @@ impl FftPlan1D {
         if let (Some(plan), Some(scratch_mu)) = (&self.bluestein_plan, &self.bluestein_scratch) {
             let mut scratch = scratch_mu.lock().expect("bluestein scratch mutex poisoned");
             plan.forward_with_scratch(data, &mut scratch);
+        } else if let Some(twiddles) = &self.twiddle_fwd_64 {
+            forward_inplace_64_with_twiddles(data, twiddles);
         } else {
             crate::application::execution::kernel::radix2::forward_inplace_64(data);
         }
@@ -241,6 +301,8 @@ impl FftPlan1D {
             for x in data.iter_mut() {
                 *x *= scale;
             }
+        } else if let Some(twiddles) = &self.twiddle_inv_64 {
+            inverse_inplace_64_with_twiddles(data, twiddles);
         } else {
             crate::application::execution::kernel::radix2::inverse_inplace_64(data);
         }
@@ -286,12 +348,14 @@ impl FftPlan1D {
     #[must_use]
     pub(crate) fn forward_f32(&self, input: &Array1<f32>) -> Array1<Complex32> {
         if self.precision == PrecisionProfile::LOW_PRECISION_F32 {
-            let complex_input = input.mapv(|value| Complex32::new(value, 0.0));
-            {
-                let mut output = complex_input;
-                fft_forward_32(output.as_slice_mut().expect("Array must be contiguous"));
-                output
+            let mut output = input.mapv(|value| Complex32::new(value, 0.0));
+            let slice = output.as_slice_mut().expect("Array must be contiguous");
+            if let Some(twiddles) = &self.twiddle_fwd_32 {
+                forward_inplace_32_with_twiddles(slice, twiddles);
+            } else {
+                fft_forward_32(slice);
             }
+            output
         } else {
             let promoted = input.mapv(f64::from);
             self.forward_real_to_complex(&promoted)
@@ -304,7 +368,12 @@ impl FftPlan1D {
     pub(crate) fn inverse_f32(&self, input: &Array1<Complex32>) -> Array1<f32> {
         if self.precision == PrecisionProfile::LOW_PRECISION_F32 {
             let mut output = input.clone();
-            fft_inverse_32(output.as_slice_mut().expect("Array must be contiguous"));
+            let slice = output.as_slice_mut().expect("Array must be contiguous");
+            if let Some(twiddles) = &self.twiddle_inv_32 {
+                inverse_inplace_32_with_twiddles(slice, twiddles);
+            } else {
+                fft_inverse_32(slice);
+            }
             output.mapv(|value| value.re)
         } else {
             let promoted =
