@@ -2,6 +2,9 @@
 
 ## Open Gaps
 
+- `apollo-dctdst-wgpu` dimensional parity gap: GPU DCT/DST currently exposes 1D forward/inverse execution only.
+  Separable 2D (`N x N`) and 3D (`N x N x N`) forward/inverse execution APIs are not yet implemented on WGPU,
+  while CPU parity is now present in `apollo-dctdst`.
 - `GpuFft3dF16Native` Bluestein path on production hardware with non-power-of-two sizes: current test passes on dev hardware; production validation on adapters that expose `wgpu::Features::SHADER_F16` is pending.
 - Criterion buffer-reuse bench results on representative GPU hardware: allocation-vs-reuse speedup ratios for FFT/NUFFT/STFT/Radon WGPU benchmark suites are not yet recorded as numbers. Closure XXII added the manual self-hosted GPU workflow and runner script; the residual gap is the first benchmark execution on real labeled hardware and publication of the measured ratios.
 
@@ -11,6 +14,19 @@ quantized storage (implemented and verified). Floating-point NTT is architectura
 by design and will not be implemented.
 
 ## Closed Gaps
+### Closure XXXIX — CPU DCT/DST 2D and 3D Separable Plans [minor]
+- **Gap**: `apollo-dctdst` exposed only 1D `forward`/`inverse` APIs. Under the 1D/2D/3D objective,
+  DCT/DST lacked CPU plan-level multidimensional execution paths.
+- **Closed by**: Added separable CPU APIs on `DctDstPlan`:
+  - 2D: `forward_2d`, `forward_2d_into`, `inverse_2d`, `inverse_2d_into`
+  - 3D: `forward_3d`, `forward_3d_into`, `inverse_3d`, `inverse_3d_into`
+  with explicit shape contracts (`N x N` for 2D, `N x N x N` for 3D).
+- **Verification**:
+  - 2D output parity with manual row/column separable application.
+  - 2D and 3D roundtrip recovery.
+  - Non-square/non-cubic mismatch rejection returning `DctDstError::LengthMismatch`.
+- **Evidence**: `cargo test -p apollo-dctdst` — 42 passed, 0 FAILED, 0 ignored.
+
 ### Closure XXXVIII — DCT-I and DST-I Forward Known-Value Fixtures [patch]
 - **Gap**: `apollo-validation` had 57 published-reference fixtures. DCT-I (`RealTransformKind::DctI`)
   and DST-I (`RealTransformKind::DstI`) each had only inverse-roundtrip coverage (fixtures 44–45);

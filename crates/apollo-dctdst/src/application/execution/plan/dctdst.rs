@@ -7,6 +7,7 @@ use crate::infrastructure::kernel::fast::{
     dct2_fast, dct3_fast, dst2_fast, dst3_fast, FAST_THRESHOLD,
 };
 use apollo_fft::{f16, PrecisionProfile};
+use ndarray::{Array2, Array3};
 
 /// Reusable DCT/DST plan.
 ///
@@ -101,6 +102,129 @@ impl DctDstPlan {
         Ok(output)
     }
 
+    /// Execute a separable 2D forward transform over a square `N x N` field.
+    ///
+    /// The plan length `N` is applied to both axes; each row is transformed
+    /// first, then each column.
+    ///
+    /// Returns `LengthMismatch` unless `input.dim() == (N, N)`.
+    pub fn forward_2d(&self, input: &Array2<f64>) -> DctDstResult<Array2<f64>> {
+        let (rows, cols) = input.dim();
+        if rows != self.len() || cols != self.len() {
+            return Err(DctDstError::LengthMismatch);
+        }
+        let mut output = Array2::<f64>::zeros((rows, cols));
+        self.forward_2d_into(input, &mut output)?;
+        Ok(output)
+    }
+
+    /// Execute a separable 2D forward transform into caller-owned output.
+    ///
+    /// Returns `LengthMismatch` unless both `input` and `output` are square
+    /// `N x N` arrays matching the plan length `N`.
+    pub fn forward_2d_into(&self, input: &Array2<f64>, output: &mut Array2<f64>) -> DctDstResult<()> {
+        let n = self.len();
+        if input.dim() != (n, n) || output.dim() != (n, n) {
+            return Err(DctDstError::LengthMismatch);
+        }
+
+        let mut stage = Array2::<f64>::zeros((n, n));
+        let mut line_in = vec![0.0_f64; n];
+        let mut line_out = vec![0.0_f64; n];
+
+        for i in 0..n {
+            for j in 0..n {
+                line_in[j] = input[(i, j)];
+            }
+            self.forward_into(&line_in, &mut line_out)?;
+            for j in 0..n {
+                stage[(i, j)] = line_out[j];
+            }
+        }
+
+        for j in 0..n {
+            for i in 0..n {
+                line_in[i] = stage[(i, j)];
+            }
+            self.forward_into(&line_in, &mut line_out)?;
+            for i in 0..n {
+                output[(i, j)] = line_out[i];
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Execute a separable 3D forward transform over a cubic `N x N x N` field.
+    ///
+    /// The plan length `N` is applied to all three axes in z, then y, then x
+    /// order.
+    ///
+    /// Returns `LengthMismatch` unless `input.dim() == (N, N, N)`.
+    pub fn forward_3d(&self, input: &Array3<f64>) -> DctDstResult<Array3<f64>> {
+        let dims = input.dim();
+        if dims.0 != self.len() || dims.1 != self.len() || dims.2 != self.len() {
+            return Err(DctDstError::LengthMismatch);
+        }
+        let mut output = Array3::<f64>::zeros(dims);
+        self.forward_3d_into(input, &mut output)?;
+        Ok(output)
+    }
+
+    /// Execute a separable 3D forward transform into caller-owned output.
+    ///
+    /// Returns `LengthMismatch` unless both `input` and `output` are cubic
+    /// `N x N x N` arrays matching the plan length `N`.
+    pub fn forward_3d_into(&self, input: &Array3<f64>, output: &mut Array3<f64>) -> DctDstResult<()> {
+        let n = self.len();
+        if input.dim() != (n, n, n) || output.dim() != (n, n, n) {
+            return Err(DctDstError::LengthMismatch);
+        }
+
+        let mut stage1 = Array3::<f64>::zeros((n, n, n));
+        let mut stage2 = Array3::<f64>::zeros((n, n, n));
+        let mut line_in = vec![0.0_f64; n];
+        let mut line_out = vec![0.0_f64; n];
+
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    line_in[k] = input[(i, j, k)];
+                }
+                self.forward_into(&line_in, &mut line_out)?;
+                for k in 0..n {
+                    stage1[(i, j, k)] = line_out[k];
+                }
+            }
+        }
+
+        for i in 0..n {
+            for k in 0..n {
+                for j in 0..n {
+                    line_in[j] = stage1[(i, j, k)];
+                }
+                self.forward_into(&line_in, &mut line_out)?;
+                for j in 0..n {
+                    stage2[(i, j, k)] = line_out[j];
+                }
+            }
+        }
+
+        for j in 0..n {
+            for k in 0..n {
+                for i in 0..n {
+                    line_in[i] = stage2[(i, j, k)];
+                }
+                self.forward_into(&line_in, &mut line_out)?;
+                for i in 0..n {
+                    output[(i, j, k)] = line_out[i];
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Execute the forward transform into a caller-supplied buffer.
     ///
     /// Returns `LengthMismatch` when either slice length differs from the plan
@@ -166,6 +290,123 @@ impl DctDstPlan {
         let mut output = vec![0.0_f64; self.len()];
         self.inverse_into(signal, &mut output)?;
         Ok(output)
+    }
+
+    /// Execute a separable 2D inverse transform over a square `N x N` field.
+    ///
+    /// Returns `LengthMismatch` unless `input.dim() == (N, N)`.
+    pub fn inverse_2d(&self, input: &Array2<f64>) -> DctDstResult<Array2<f64>> {
+        let (rows, cols) = input.dim();
+        if rows != self.len() || cols != self.len() {
+            return Err(DctDstError::LengthMismatch);
+        }
+        let mut output = Array2::<f64>::zeros((rows, cols));
+        self.inverse_2d_into(input, &mut output)?;
+        Ok(output)
+    }
+
+    /// Execute a separable 2D inverse transform into caller-owned output.
+    ///
+    /// Returns `LengthMismatch` unless both `input` and `output` are square
+    /// `N x N` arrays matching the plan length `N`.
+    pub fn inverse_2d_into(&self, input: &Array2<f64>, output: &mut Array2<f64>) -> DctDstResult<()> {
+        let n = self.len();
+        if input.dim() != (n, n) || output.dim() != (n, n) {
+            return Err(DctDstError::LengthMismatch);
+        }
+
+        let mut stage = Array2::<f64>::zeros((n, n));
+        let mut line_in = vec![0.0_f64; n];
+        let mut line_out = vec![0.0_f64; n];
+
+        for i in 0..n {
+            for j in 0..n {
+                line_in[j] = input[(i, j)];
+            }
+            self.inverse_into(&line_in, &mut line_out)?;
+            for j in 0..n {
+                stage[(i, j)] = line_out[j];
+            }
+        }
+
+        for j in 0..n {
+            for i in 0..n {
+                line_in[i] = stage[(i, j)];
+            }
+            self.inverse_into(&line_in, &mut line_out)?;
+            for i in 0..n {
+                output[(i, j)] = line_out[i];
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Execute a separable 3D inverse transform over a cubic `N x N x N` field.
+    ///
+    /// Returns `LengthMismatch` unless `input.dim() == (N, N, N)`.
+    pub fn inverse_3d(&self, input: &Array3<f64>) -> DctDstResult<Array3<f64>> {
+        let dims = input.dim();
+        if dims.0 != self.len() || dims.1 != self.len() || dims.2 != self.len() {
+            return Err(DctDstError::LengthMismatch);
+        }
+        let mut output = Array3::<f64>::zeros(dims);
+        self.inverse_3d_into(input, &mut output)?;
+        Ok(output)
+    }
+
+    /// Execute a separable 3D inverse transform into caller-owned output.
+    ///
+    /// Returns `LengthMismatch` unless both `input` and `output` are cubic
+    /// `N x N x N` arrays matching the plan length `N`.
+    pub fn inverse_3d_into(&self, input: &Array3<f64>, output: &mut Array3<f64>) -> DctDstResult<()> {
+        let n = self.len();
+        if input.dim() != (n, n, n) || output.dim() != (n, n, n) {
+            return Err(DctDstError::LengthMismatch);
+        }
+
+        let mut stage1 = Array3::<f64>::zeros((n, n, n));
+        let mut stage2 = Array3::<f64>::zeros((n, n, n));
+        let mut line_in = vec![0.0_f64; n];
+        let mut line_out = vec![0.0_f64; n];
+
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    line_in[k] = input[(i, j, k)];
+                }
+                self.inverse_into(&line_in, &mut line_out)?;
+                for k in 0..n {
+                    stage1[(i, j, k)] = line_out[k];
+                }
+            }
+        }
+
+        for i in 0..n {
+            for k in 0..n {
+                for j in 0..n {
+                    line_in[j] = stage1[(i, j, k)];
+                }
+                self.inverse_into(&line_in, &mut line_out)?;
+                for j in 0..n {
+                    stage2[(i, j, k)] = line_out[j];
+                }
+            }
+        }
+
+        for j in 0..n {
+            for k in 0..n {
+                for i in 0..n {
+                    line_in[i] = stage2[(i, j, k)];
+                }
+                self.inverse_into(&line_in, &mut line_out)?;
+                for i in 0..n {
+                    output[(i, j, k)] = line_out[i];
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Compute the inverse of the configured transform into caller-owned output.

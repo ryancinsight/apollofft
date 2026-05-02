@@ -1,5 +1,17 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure XXXIX phase)
+- [x] [minor] Add CPU separable 2D DCT/DST APIs to `apollo-dctdst` `DctDstPlan`:
+  `forward_2d`, `forward_2d_into`, `inverse_2d`, `inverse_2d_into`.
+- [x] [minor] Add CPU separable 3D DCT/DST APIs to `apollo-dctdst` `DctDstPlan`:
+  `forward_3d`, `forward_3d_into`, `inverse_3d`, `inverse_3d_into`.
+- [x] [minor] Enforce dimensional shape contracts (2D square, 3D cubic) with
+  `DctDstError::LengthMismatch` on mismatches.
+- [x] [minor] Add verification tests for 2D separable parity, 2D/3D roundtrip,
+  and non-square/non-cubic rejection.
+- [x] [minor] Update `crates/apollo-dctdst/README.md` execution and verification sections.
+- Final state: `cargo test -p apollo-dctdst` 42 passed, 0 FAILED, 0 ignored.
+
 ## Closed in this sprint (Closure XXXVIII phase)
 - [x] [patch] Validation fixture 58: `dct1_three_point_forward_known_values_fixture`
   (DCT-I N=3 x=[1,2,3]: y=[8,−2,0]; y[k]=x[0]+(−1)^k·x[N−1]+2·Σx[n]cos(πnk/(N−1)); y[2]=0 exact;

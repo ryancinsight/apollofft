@@ -1,4 +1,17 @@
 # Apollo Checklist
+## Closure XXXIX — CPU DCT/DST 2D and 3D Separable Plans [minor]
+Sprint target version: 0.13.0
+
+- [x] Triage: identify next dimensional transform gap aligned with 1D/2D/3D objective.
+- [x] Add `DctDstPlan` 2D CPU APIs: `forward_2d`, `forward_2d_into`, `inverse_2d`, `inverse_2d_into`.
+- [x] Add `DctDstPlan` 3D CPU APIs: `forward_3d`, `forward_3d_into`, `inverse_3d`, `inverse_3d_into`.
+- [x] Add shape validation for 2D square (`N x N`) and 3D cubic (`N x N x N`) inputs and outputs.
+- [x] Add value-semantic verification tests:
+  2D separable parity, 2D inverse roundtrip, 3D inverse roundtrip, and mismatch rejection.
+- [x] Update `crates/apollo-dctdst/README.md` execution surfaces and verification section.
+- [x] Update sprint PM artifacts: CHANGELOG.md, backlog.md, checklist.md, gap_audit.md.
+- [x] `cargo test -p apollo-dctdst`: 42 passed, 0 FAILED, 0 ignored.
+
 ## Closure XXXVIII — DCT-I and DST-I Forward Known-Value Fixtures [patch]
 Sprint target version: 0.12.18
 

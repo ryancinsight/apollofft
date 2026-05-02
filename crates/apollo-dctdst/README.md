@@ -38,6 +38,10 @@ The direct kernels evaluate the analytical finite cosine and sine projections.
 
 - `forward` and `inverse` allocate returned vectors.
 - `forward_into` and `inverse_into` write into caller-owned buffers.
+- `forward_2d` and `inverse_2d` execute separable square `N x N` transforms.
+- `forward_2d_into` and `inverse_2d_into` write separable 2D output into caller-owned arrays.
+- `forward_3d` and `inverse_3d` execute separable cubic `N x N x N` transforms.
+- `forward_3d_into` and `inverse_3d_into` write separable 3D output into caller-owned arrays.
 - `forward_typed_into` and `inverse_typed_into` write `f64`, `f32`, or mixed
   `f16` storage into caller-owned buffers.
 - Production execution selects the proven direct or FFT-derived fast kernel
@@ -48,5 +52,7 @@ The direct kernels evaluate the analytical finite cosine and sine projections.
 The crate verifies analytical two-point projections, DCT/DST inverse-pair
 scaling, caller-owned inverse parity, length mismatch errors, one-point DCT-II,
 dispatch parity against direct kernels, and property-based inverse-pair
-roundtrips. Typed tests cover `f64`, `f32`, mixed `f16`, and precision/profile
-mismatch rejection.
+roundtrips. It also verifies 2D separable parity, 2D/3D roundtrip recovery,
+and 2D/3D shape mismatch rejection for caller-owned and allocating paths.
+Typed tests cover `f64`, `f32`, mixed `f16`, and precision/profile mismatch
+rejection.

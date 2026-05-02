@@ -11,6 +11,32 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.0] — Closure XXXIX
+
+### Closure XXXIX — CPU DCT/DST 2D and 3D Separable Plans [minor]
+
+#### Added
+- `apollo-dctdst` `DctDstPlan` now exposes separable multidimensional CPU APIs:
+  `forward_2d`, `forward_2d_into`, `inverse_2d`, `inverse_2d_into`,
+  `forward_3d`, `forward_3d_into`, `inverse_3d`, and `inverse_3d_into`.
+- 2D execution applies the configured real transform kind along rows then columns.
+  3D execution applies the configured real transform kind along z, then y, then x.
+- Shape contracts are explicit and value-checked:
+  - 2D methods require square `N x N` arrays for plan length `N`.
+  - 3D methods require cubic `N x N x N` arrays for plan length `N`.
+  Mismatches return `DctDstError::LengthMismatch`.
+- Verification coverage added in `apollo-dctdst`:
+  - 2D separable parity against manual row/column application.
+  - 2D inverse roundtrip recovery.
+  - 3D inverse roundtrip recovery.
+  - Non-square/non-cubic shape rejection.
+
+#### Final state
+- `cargo test -p apollo-dctdst`: 42 passed, 0 FAILED, 0 ignored.
+- `apollo-dctdst` README updated with 2D/3D execution surfaces and verification scope.
+
+---
+
 ## [0.12.18] — Closure XXXVIII
 
 ### Closure XXXVIII — DCT-I and DST-I Forward Known-Value Fixtures [patch]
