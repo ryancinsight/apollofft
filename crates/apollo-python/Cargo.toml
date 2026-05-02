@@ -15,6 +15,9 @@ crate-type = ["cdylib"]
 apollo-fft = { path = "../apollo-fft" }
 apollo-nufft = { path = "../apollo-nufft" }
 apollo-fft-wgpu = { path = "../apollo-fft-wgpu" }
+apollo-dht = { path = "../apollo-dht" }
+apollo-fwht = { path = "../apollo-fwht" }
+apollo-dctdst = { path = "../apollo-dctdst" }
 ndarray = { version = "0.16", features = ["rayon"] }
 num-complex = "0.4"
 numpy = "0.23"

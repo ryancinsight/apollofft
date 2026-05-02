@@ -11,6 +11,44 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.3] — Closure XLII
+
+### Closure XLII — apollo-python: complete Python bindings; numpy FFT benchmark [minor]
+
+#### Added
+- `apollo-python`: `fft_complex1`, `ifft_complex1` — complex128→complex128 1D FFT, numpy-compatible.
+- `apollo-python`: `fft_complex2`, `ifft_complex2` — complex128 2D FFT.
+- `apollo-python`: `fft_complex3`, `ifft_complex3` — complex128 3D FFT.
+- `apollo-python`: `fftfreq(n, d=1.0)` — numpy-compatible DFT frequency bin centers.
+- `apollo-python`: `rfftfreq(n, d=1.0)` — non-negative bins for real-input FFT.
+- `apollo-python`: `fftshift(x)` — shift zero-frequency to center.
+- `apollo-python`: `ifftshift(x)` — inverse of fftshift.
+- `apollo-python`: `dht1`, `idht1` — 1D Discrete Hartley Transform (forward / scaled inverse).
+- `apollo-python`: `dht2`, `idht2` — 2D DHT on square N×N arrays.
+- `apollo-python`: `dht3`, `idht3` — 3D DHT on cubic N×N×N arrays.
+- `apollo-python`: `fwht1`, `ifwht1` — 1D Fast Walsh-Hadamard Transform (N power of two).
+- `apollo-python`: `fwht2`, `ifwht2` — 2D FWHT on square N×N arrays.
+- `apollo-python`: `fwht3`, `ifwht3` — 3D FWHT on cubic N×N×N arrays.
+- `apollo-python`: `dct2_1d`, `idct2_1d` — unnormalized DCT-II and its inverse (DCT-III × 2/N).
+- `apollo-python`: `dst2_1d`, `idst2_1d` — unnormalized DST-II and its inverse.
+- `apollo-python`: `FftPlan1D.fft_complex` / `FftPlan1D.ifft_complex` — plan-based complex 1D FFT.
+- `apollo-python`: `FftPlan2D.fft_complex` / `FftPlan2D.ifft_complex` — plan-based complex 2D FFT.
+- `crates/apollo-python/Cargo.toml`: added `apollo-dht`, `apollo-fwht`, `apollo-dctdst` dependencies.
+- `tests/benchmark_vs_numpy.py`: empirical 1D/2D/3D Apollo vs numpy.fft performance comparison.
+- 19 new smoke tests covering all new Python bindings (34 total, all passing).
+
+#### Performance highlights (CPU, release build, median of 20 trials, Windows x64)
+| Transform | Apollo fastest | numpy fastest | Notes |
+|-----------|---------------|---------------|-------|
+| 1D FFT (real, N=64) | **3.3× faster** | — | PyO3 call overhead advantage at small N |
+| 1D FFT (real, N=16384) | **2.2× faster** | — | Large-N Cooley-Tukey wins |
+| 1D FFT (complex, N=64) | **3.9× faster** | — | |
+| 2D FFT (N=1024×1024) | **1.31× faster** | — | Parallel separable row/col FFT |
+| 3D FFT (N=128³) | **1.04× faster** | — | Near-parity; CPU overhead dominates |
+| 1D FFT (real, N=4096) | — | **1.63× faster** | numpy FFTPACK cache-hot midrange |
+
+---
+
 ## [0.13.2] — Closure XLI
 
 ### Closure XLI — DHT CPU 2D/3D; FWHT CPU 2D/3D; FFT fftfreq/rfftfreq/fftshift/ifftshift [minor]

@@ -5,10 +5,15 @@ pub mod application;
 pub mod domain;
 pub mod infrastructure;
 
+use apollo_dctdst::{dct2, dct3, dst2, dst3};
+use apollo_dht::{DhtPlan, HartleySpectrum};
 use apollo_fft::{
-    f16, Complex32, Complex64, CpuBackend, FftBackend, FftPlan1D, FftPlan2D, FftPlan3D,
-    PrecisionMode, PrecisionProfile, Shape1D, Shape2D, Shape3D, StoragePrecision,
+    f16, fft_1d_complex, fft_2d_complex, fft_3d_complex, fftfreq, fftshift, ifft_1d_complex,
+    ifft_2d_complex, ifft_3d_complex, ifftshift, rfftfreq, Complex32, Complex64, CpuBackend,
+    FftBackend, FftPlan1D, FftPlan2D, FftPlan3D, PrecisionMode, PrecisionProfile, Shape1D,
+    Shape2D, Shape3D, StoragePrecision,
 };
+use apollo_fwht::{FwhtPlan, FwhtPlan2D, FwhtPlan3D};
 use apollo_nufft::{
     nufft_type1_1d, nufft_type1_1d_fast, nufft_type1_3d, nufft_type1_3d_fast, nufft_type2_1d,
     nufft_type2_1d_fast, UniformDomain1D, UniformGrid3D, DEFAULT_NUFFT_KERNEL_WIDTH,
@@ -185,6 +190,32 @@ impl PyFftPlan1D {
             }
         }
     }
+
+    /// Complex-to-complex forward FFT using the plan's cached twiddle factors.
+    fn fft_complex<'py>(
+        &self,
+        py: Python<'py>,
+        input: PyReadonlyArray1<'_, Complex64>,
+    ) -> PyResult<Bound<'py, PyArray1<Complex64>>> {
+        require_contiguous_1d(&input, "fft_complex input")?;
+        Ok(PyArray1::from_owned_array(
+            py,
+            fft_1d_complex(&input.as_array().to_owned()),
+        ))
+    }
+
+    /// Complex-to-complex inverse FFT using the plan's cached twiddle factors.
+    fn ifft_complex<'py>(
+        &self,
+        py: Python<'py>,
+        input: PyReadonlyArray1<'_, Complex64>,
+    ) -> PyResult<Bound<'py, PyArray1<Complex64>>> {
+        require_contiguous_1d(&input, "ifft_complex input")?;
+        Ok(PyArray1::from_owned_array(
+            py,
+            ifft_1d_complex(&input.as_array().to_owned()),
+        ))
+    }
 }
 
 /// Python wrapper for a reusable 2D FFT plan.
@@ -276,6 +307,32 @@ impl PyFftPlan2D {
                 }
             }
         }
+    }
+
+    /// Complex-to-complex forward 2D FFT.
+    fn fft_complex<'py>(
+        &self,
+        py: Python<'py>,
+        input: PyReadonlyArray2<'_, Complex64>,
+    ) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
+        require_contiguous_2d(&input, "fft_complex input")?;
+        Ok(PyArray2::from_owned_array(
+            py,
+            fft_2d_complex(&input.as_array().to_owned()),
+        ))
+    }
+
+    /// Complex-to-complex inverse 2D FFT.
+    fn ifft_complex<'py>(
+        &self,
+        py: Python<'py>,
+        input: PyReadonlyArray2<'_, Complex64>,
+    ) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
+        require_contiguous_2d(&input, "ifft_complex input")?;
+        Ok(PyArray2::from_owned_array(
+            py,
+            ifft_2d_complex(&input.as_array().to_owned()),
+        ))
     }
 }
 
@@ -923,6 +980,408 @@ fn nufft_type1_3d_fast_py<'py>(
     ))
 }
 
+// ── FFT utility functions ─────────────────────────────────────────────────────
+
+/// Frequency bin centers for a length-`n` complex DFT with sample spacing `d`.
+///
+/// Numpy-compatible: `fftfreq(n, d)` returns bins `[0, 1/nd, …, −1/nd, …]`.
+/// For `n=0` returns an empty array.
+#[pyfunction]
+#[pyo3(signature = (n, d=1.0))]
+fn fftfreq_py<'py>(py: Python<'py>, n: usize, d: f64) -> Bound<'py, PyArray1<f64>> {
+    PyArray1::from_vec(py, fftfreq(n, d))
+}
+
+/// Frequency bin centers for a length-`n` real-input FFT with sample spacing `d`.
+///
+/// Returns `n/2 + 1` non-negative bins. Numpy-compatible `rfftfreq(n, d)`.
+#[pyfunction]
+#[pyo3(signature = (n, d=1.0))]
+fn rfftfreq_py<'py>(py: Python<'py>, n: usize, d: f64) -> Bound<'py, PyArray1<f64>> {
+    PyArray1::from_vec(py, rfftfreq(n, d))
+}
+
+/// Shift the zero-frequency component to the center of the spectrum.
+///
+/// Numpy-compatible `fftshift`. Accepts 1-D float64 arrays.
+#[pyfunction]
+fn fftshift_py<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray1<'_, f64>,
+) -> Bound<'py, PyArray1<f64>> {
+    let owned: Vec<f64> = input.as_array().iter().copied().collect();
+    PyArray1::from_vec(py, fftshift(&owned))
+}
+
+/// Inverse `fftshift`: move zero-frequency back to bin 0.
+///
+/// Numpy-compatible `ifftshift`. Accepts 1-D float64 arrays.
+#[pyfunction]
+fn ifftshift_py<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray1<'_, f64>,
+) -> Bound<'py, PyArray1<f64>> {
+    let owned: Vec<f64> = input.as_array().iter().copied().collect();
+    PyArray1::from_vec(py, ifftshift(&owned))
+}
+
+// ── Complex-to-complex FFT ────────────────────────────────────────────────────
+
+/// Complex-to-complex forward 1D FFT. Accepts complex128 input, returns complex128.
+#[pyfunction]
+fn fft_complex1<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray1<'_, Complex64>,
+) -> PyResult<Bound<'py, PyArray1<Complex64>>> {
+    require_contiguous_1d(&input, "fft_complex1 input")?;
+    Ok(PyArray1::from_owned_array(
+        py,
+        fft_1d_complex(&input.as_array().to_owned()),
+    ))
+}
+
+/// Complex-to-complex inverse 1D FFT. Accepts complex128, returns complex128.
+#[pyfunction]
+fn ifft_complex1<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray1<'_, Complex64>,
+) -> PyResult<Bound<'py, PyArray1<Complex64>>> {
+    require_contiguous_1d(&input, "ifft_complex1 input")?;
+    Ok(PyArray1::from_owned_array(
+        py,
+        ifft_1d_complex(&input.as_array().to_owned()),
+    ))
+}
+
+/// Complex-to-complex forward 2D FFT.
+#[pyfunction]
+fn fft_complex2<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray2<'_, Complex64>,
+) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
+    require_contiguous_2d(&input, "fft_complex2 input")?;
+    Ok(PyArray2::from_owned_array(
+        py,
+        fft_2d_complex(&input.as_array().to_owned()),
+    ))
+}
+
+/// Complex-to-complex inverse 2D FFT.
+#[pyfunction]
+fn ifft_complex2<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray2<'_, Complex64>,
+) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
+    require_contiguous_2d(&input, "ifft_complex2 input")?;
+    Ok(PyArray2::from_owned_array(
+        py,
+        ifft_2d_complex(&input.as_array().to_owned()),
+    ))
+}
+
+/// Complex-to-complex forward 3D FFT.
+#[pyfunction]
+fn fft_complex3<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray3<'_, Complex64>,
+) -> PyResult<Bound<'py, PyArray3<Complex64>>> {
+    require_contiguous_3d(&input, "fft_complex3 input")?;
+    Ok(PyArray3::from_owned_array(
+        py,
+        fft_3d_complex(&input.as_array().to_owned()),
+    ))
+}
+
+/// Complex-to-complex inverse 3D FFT.
+#[pyfunction]
+fn ifft_complex3<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray3<'_, Complex64>,
+) -> PyResult<Bound<'py, PyArray3<Complex64>>> {
+    require_contiguous_3d(&input, "ifft_complex3 input")?;
+    Ok(PyArray3::from_owned_array(
+        py,
+        ifft_3d_complex(&input.as_array().to_owned()),
+    ))
+}
+
+// ── Discrete Hartley Transform ────────────────────────────────────────────────
+
+/// Forward 1D Discrete Hartley Transform.
+///
+/// Returns the unnormalized DHT spectrum of length `n`. Inverse is `idht1`.
+#[pyfunction]
+fn dht1<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray1<'_, f64>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    require_contiguous_1d(&input, "dht1 input")?;
+    let arr = input.as_array();
+    let n = arr.len();
+    let plan = DhtPlan::new(n).map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let signal: Vec<f64> = arr.iter().copied().collect();
+    let spectrum = plan
+        .forward(&signal)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(PyArray1::from_vec(py, spectrum.values().to_vec()))
+}
+
+/// Inverse 1D Discrete Hartley Transform. Scales by `1/n`.
+#[pyfunction]
+fn idht1<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray1<'_, f64>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    require_contiguous_1d(&input, "idht1 input")?;
+    let arr = input.as_array();
+    let n = arr.len();
+    let plan = DhtPlan::new(n).map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let signal: Vec<f64> = arr.iter().copied().collect();
+    let spectrum = HartleySpectrum::new(signal);
+    let recovered = plan
+        .inverse(&spectrum)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(PyArray1::from_vec(py, recovered))
+}
+
+/// Forward 2D Discrete Hartley Transform. Input must be square (N×N).
+#[pyfunction]
+fn dht2<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray2<'_, f64>,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    require_contiguous_2d(&input, "dht2 input")?;
+    let arr = input.as_array().to_owned();
+    let n = arr.nrows();
+    let plan = DhtPlan::new(n).map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let result = plan
+        .forward_2d(&arr)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(PyArray2::from_owned_array(py, result))
+}
+
+/// Inverse 2D Discrete Hartley Transform. Input must be square (N×N). Scales by `1/N²`.
+#[pyfunction]
+fn idht2<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray2<'_, f64>,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    require_contiguous_2d(&input, "idht2 input")?;
+    let arr = input.as_array().to_owned();
+    let n = arr.nrows();
+    let plan = DhtPlan::new(n).map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let result = plan
+        .inverse_2d(&arr)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(PyArray2::from_owned_array(py, result))
+}
+
+/// Forward 3D Discrete Hartley Transform. Input must be cubic (N×N×N).
+#[pyfunction]
+fn dht3<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray3<'_, f64>,
+) -> PyResult<Bound<'py, PyArray3<f64>>> {
+    require_contiguous_3d(&input, "dht3 input")?;
+    let arr = input.as_array().to_owned();
+    let n = arr.shape()[0];
+    let plan = DhtPlan::new(n).map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let result = plan
+        .forward_3d(&arr)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(PyArray3::from_owned_array(py, result))
+}
+
+/// Inverse 3D Discrete Hartley Transform. Input must be cubic (N×N×N). Scales by `1/N³`.
+#[pyfunction]
+fn idht3<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray3<'_, f64>,
+) -> PyResult<Bound<'py, PyArray3<f64>>> {
+    require_contiguous_3d(&input, "idht3 input")?;
+    let arr = input.as_array().to_owned();
+    let n = arr.shape()[0];
+    let plan = DhtPlan::new(n).map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let result = plan
+        .inverse_3d(&arr)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(PyArray3::from_owned_array(py, result))
+}
+
+// ── Fast Walsh-Hadamard Transform ─────────────────────────────────────────────
+
+/// Forward 1D Fast Walsh-Hadamard Transform. Length must be a power of two.
+#[pyfunction]
+fn fwht1<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray1<'_, f64>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    require_contiguous_1d(&input, "fwht1 input")?;
+    let arr = input.as_array().to_owned();
+    let n = arr.len();
+    let plan = FwhtPlan::new(n).map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let result = plan
+        .forward(&arr)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(PyArray1::from_owned_array(py, result))
+}
+
+/// Inverse 1D Fast Walsh-Hadamard Transform. Scales by `1/n`.
+#[pyfunction]
+fn ifwht1<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray1<'_, f64>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    require_contiguous_1d(&input, "ifwht1 input")?;
+    let arr = input.as_array().to_owned();
+    let n = arr.len();
+    let plan = FwhtPlan::new(n).map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let result = plan
+        .inverse(&arr)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(PyArray1::from_owned_array(py, result))
+}
+
+/// Forward 2D Fast Walsh-Hadamard Transform. Input must be square (N×N), N a power of two.
+#[pyfunction]
+fn fwht2<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray2<'_, f64>,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    require_contiguous_2d(&input, "fwht2 input")?;
+    let arr = input.as_array().to_owned();
+    let n = arr.nrows();
+    let plan = FwhtPlan2D::new(n).map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let result = plan
+        .forward(&arr)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(PyArray2::from_owned_array(py, result))
+}
+
+/// Inverse 2D Fast Walsh-Hadamard Transform. Scales by `1/N²`.
+#[pyfunction]
+fn ifwht2<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray2<'_, f64>,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    require_contiguous_2d(&input, "ifwht2 input")?;
+    let arr = input.as_array().to_owned();
+    let n = arr.nrows();
+    let plan = FwhtPlan2D::new(n).map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let result = plan
+        .inverse(&arr)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(PyArray2::from_owned_array(py, result))
+}
+
+/// Forward 3D Fast Walsh-Hadamard Transform. Input must be cubic (N×N×N), N a power of two.
+#[pyfunction]
+fn fwht3<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray3<'_, f64>,
+) -> PyResult<Bound<'py, PyArray3<f64>>> {
+    require_contiguous_3d(&input, "fwht3 input")?;
+    let arr = input.as_array().to_owned();
+    let n = arr.shape()[0];
+    let plan = FwhtPlan3D::new(n).map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let result = plan
+        .forward(&arr)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(PyArray3::from_owned_array(py, result))
+}
+
+/// Inverse 3D Fast Walsh-Hadamard Transform. Scales by `1/N³`.
+#[pyfunction]
+fn ifwht3<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray3<'_, f64>,
+) -> PyResult<Bound<'py, PyArray3<f64>>> {
+    require_contiguous_3d(&input, "ifwht3 input")?;
+    let arr = input.as_array().to_owned();
+    let n = arr.shape()[0];
+    let plan = FwhtPlan3D::new(n).map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let result = plan
+        .inverse(&arr)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(PyArray3::from_owned_array(py, result))
+}
+
+// ── Discrete Cosine / Sine Transform ─────────────────────────────────────────
+
+/// Forward 1D DCT-II (the "the DCT" as used by numpy/scipy).
+///
+/// Equivalent to `scipy.fft.dct(x, type=2, norm=None)` (unnormalized).
+/// Inverse via `idct2_1d`.
+#[pyfunction]
+fn dct2_1d<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray1<'_, f64>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    require_contiguous_1d(&input, "dct2_1d input")?;
+    let arr = input.as_array();
+    let n = arr.len();
+    let signal: Vec<f64> = arr.iter().copied().collect();
+    let mut output = vec![0.0_f64; n];
+    dct2(&signal, &mut output);
+    Ok(PyArray1::from_vec(py, output))
+}
+
+/// Inverse 1D DCT-II (= DCT-III / N).
+///
+/// Equivalent to `scipy.fft.idct(x, type=2, norm=None)`.
+#[pyfunction]
+fn idct2_1d<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray1<'_, f64>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    require_contiguous_1d(&input, "idct2_1d input")?;
+    let arr = input.as_array();
+    let n = arr.len();
+    let signal: Vec<f64> = arr.iter().copied().collect();
+    let mut output = vec![0.0_f64; n];
+    // DCT-III is the inverse of DCT-II up to N/2 scaling: DCT-III(DCT-II(x)) = (N/2) * x.
+    // Therefore: x = DCT-III(X) * (2 / N).
+    dct3(&signal, &mut output);
+    let scale = 2.0 / n as f64;
+    output.iter_mut().for_each(|v| *v *= scale);
+    Ok(PyArray1::from_vec(py, output))
+}
+
+/// Forward 1D DST-II.
+///
+/// Equivalent to `scipy.fft.dst(x, type=2, norm=None)` (unnormalized).
+#[pyfunction]
+fn dst2_1d<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray1<'_, f64>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    require_contiguous_1d(&input, "dst2_1d input")?;
+    let arr = input.as_array();
+    let n = arr.len();
+    let signal: Vec<f64> = arr.iter().copied().collect();
+    let mut output = vec![0.0_f64; n];
+    dst2(&signal, &mut output);
+    Ok(PyArray1::from_vec(py, output))
+}
+
+/// Inverse 1D DST-II (= DST-III / N).
+#[pyfunction]
+fn idst2_1d<'py>(
+    py: Python<'py>,
+    input: PyReadonlyArray1<'_, f64>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    require_contiguous_1d(&input, "idst2_1d input")?;
+    let arr = input.as_array();
+    let n = arr.len();
+    let signal: Vec<f64> = arr.iter().copied().collect();
+    let mut output = vec![0.0_f64; n];
+    // DST-III(DST-II(x)) = (N/2) * x; inverse: x = DST-III(X) * (2 / N).
+    dst3(&signal, &mut output);
+    let scale = 2.0 / n as f64;
+    output.iter_mut().for_each(|v| *v *= scale);
+    Ok(PyArray1::from_vec(py, output))
+}
+
 /// Return the backend names that are genuinely usable from Python on this host.
 #[pyfunction]
 fn available_backends() -> Vec<String> {
@@ -1007,6 +1466,7 @@ fn _pyapollofft(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyFftPlan1D>()?;
     m.add_class::<PyFftPlan2D>()?;
     m.add_class::<PyFftPlan3D>()?;
+    // Real-to-complex FFT
     m.add_function(wrap_pyfunction!(fft1, m)?)?;
     m.add_function(wrap_pyfunction!(ifft1, m)?)?;
     m.add_function(wrap_pyfunction!(fft2, m)?)?;
@@ -1015,12 +1475,45 @@ fn _pyapollofft(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ifft3, m)?)?;
     m.add_function(wrap_pyfunction!(rfft3, m)?)?;
     m.add_function(wrap_pyfunction!(irfft3, m)?)?;
+    // Complex-to-complex FFT
+    m.add_function(wrap_pyfunction!(fft_complex1, m)?)?;
+    m.add_function(wrap_pyfunction!(ifft_complex1, m)?)?;
+    m.add_function(wrap_pyfunction!(fft_complex2, m)?)?;
+    m.add_function(wrap_pyfunction!(ifft_complex2, m)?)?;
+    m.add_function(wrap_pyfunction!(fft_complex3, m)?)?;
+    m.add_function(wrap_pyfunction!(ifft_complex3, m)?)?;
+    // FFT frequency and shift utilities
+    m.add_function(wrap_pyfunction!(fftfreq_py, m)?)?;
+    m.add_function(wrap_pyfunction!(rfftfreq_py, m)?)?;
+    m.add_function(wrap_pyfunction!(fftshift_py, m)?)?;
+    m.add_function(wrap_pyfunction!(ifftshift_py, m)?)?;
+    // NUFFT
     m.add_function(wrap_pyfunction!(nufft_type1_1d_py, m)?)?;
     m.add_function(wrap_pyfunction!(nufft_type2_1d_py, m)?)?;
     m.add_function(wrap_pyfunction!(nufft_type1_3d_py, m)?)?;
     m.add_function(wrap_pyfunction!(nufft_type1_1d_fast_py, m)?)?;
     m.add_function(wrap_pyfunction!(nufft_type2_1d_fast_py, m)?)?;
     m.add_function(wrap_pyfunction!(nufft_type1_3d_fast_py, m)?)?;
+    // Discrete Hartley Transform
+    m.add_function(wrap_pyfunction!(dht1, m)?)?;
+    m.add_function(wrap_pyfunction!(idht1, m)?)?;
+    m.add_function(wrap_pyfunction!(dht2, m)?)?;
+    m.add_function(wrap_pyfunction!(idht2, m)?)?;
+    m.add_function(wrap_pyfunction!(dht3, m)?)?;
+    m.add_function(wrap_pyfunction!(idht3, m)?)?;
+    // Fast Walsh-Hadamard Transform
+    m.add_function(wrap_pyfunction!(fwht1, m)?)?;
+    m.add_function(wrap_pyfunction!(ifwht1, m)?)?;
+    m.add_function(wrap_pyfunction!(fwht2, m)?)?;
+    m.add_function(wrap_pyfunction!(ifwht2, m)?)?;
+    m.add_function(wrap_pyfunction!(fwht3, m)?)?;
+    m.add_function(wrap_pyfunction!(ifwht3, m)?)?;
+    // DCT/DST
+    m.add_function(wrap_pyfunction!(dct2_1d, m)?)?;
+    m.add_function(wrap_pyfunction!(idct2_1d, m)?)?;
+    m.add_function(wrap_pyfunction!(dst2_1d, m)?)?;
+    m.add_function(wrap_pyfunction!(idst2_1d, m)?)?;
+    // Backend introspection
     m.add_function(wrap_pyfunction!(available_backends, m)?)?;
     m.add_function(wrap_pyfunction!(backend_capabilities, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

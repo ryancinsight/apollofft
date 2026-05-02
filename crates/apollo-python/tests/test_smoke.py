@@ -127,3 +127,158 @@ def test_backend_capabilities_report_precision_profiles():
     assert capabilities["cpu"]["default_precision_profile"] == "high_accuracy"
     assert "low_precision" in capabilities["cpu"]["supported_precision_profiles"]
     assert "mixed_precision" in capabilities["cpu"]["supported_precision_profiles"]
+
+
+# ── FFT utility functions ──────────────────────────────────────────────────────
+
+def test_fftfreq_matches_numpy():
+    n = 8
+    expected = np.fft.fftfreq(n)
+    got = afft.fftfreq(n)
+    assert np.allclose(got, expected, atol=1e-15), f"expected={expected}, got={got}"
+
+
+def test_fftfreq_with_sample_spacing():
+    n, d = 10, 0.5
+    expected = np.fft.fftfreq(n, d)
+    got = afft.fftfreq(n, d)
+    assert np.allclose(got, expected, atol=1e-15)
+
+
+def test_rfftfreq_matches_numpy():
+    n = 8
+    expected = np.fft.rfftfreq(n)
+    got = afft.rfftfreq(n)
+    assert len(got) == n // 2 + 1
+    assert np.allclose(got, expected, atol=1e-15)
+
+
+def test_fftshift_ifftshift_roundtrip():
+    x = np.fft.fftfreq(16)
+    shifted = afft.fftshift(x)
+    recovered = afft.ifftshift(shifted)
+    assert np.allclose(recovered, x, atol=1e-15)
+
+
+def test_fftshift_matches_numpy():
+    x = np.fft.fftfreq(16)
+    expected = np.fft.fftshift(x)
+    got = afft.fftshift(x)
+    assert np.allclose(got, expected, atol=1e-15)
+
+
+# ── Complex-to-complex FFT ────────────────────────────────────────────────────
+
+def test_fft_complex1_matches_numpy():
+    rng = np.random.default_rng(42)
+    z = rng.standard_normal(64) + 1j * rng.standard_normal(64)
+    z = np.asarray(z, dtype=np.complex128)
+    expected = np.fft.fft(z)
+    got = afft.fft_complex1(z)
+    assert np.allclose(got, expected, atol=1e-10), f"max_err={np.max(np.abs(got - expected))}"
+
+
+def test_ifft_complex1_roundtrip():
+    rng = np.random.default_rng(7)
+    z = np.asarray(rng.standard_normal(32) + 1j * rng.standard_normal(32), dtype=np.complex128)
+    recovered = afft.ifft_complex1(afft.fft_complex1(z))
+    assert np.allclose(recovered, z, atol=1e-11)
+
+
+def test_fft_complex2_matches_numpy():
+    rng = np.random.default_rng(13)
+    z = np.asarray(
+        rng.standard_normal((8, 8)) + 1j * rng.standard_normal((8, 8)), dtype=np.complex128
+    )
+    expected = np.fft.fft2(z)
+    got = afft.fft_complex2(z)
+    assert np.allclose(got, expected, atol=1e-10)
+
+
+def test_fft_complex3_roundtrip():
+    rng = np.random.default_rng(99)
+    z = np.asarray(
+        rng.standard_normal((4, 4, 4)) + 1j * rng.standard_normal((4, 4, 4)),
+        dtype=np.complex128,
+    )
+    recovered = afft.ifft_complex3(afft.fft_complex3(z))
+    assert np.allclose(recovered, z, atol=1e-11)
+
+
+# ── Discrete Hartley Transform ────────────────────────────────────────────────
+
+def test_dht1_involution():
+    # DHT is its own inverse up to a factor of n: DHT(DHT(x)) = n * x
+    rng = np.random.default_rng(55)
+    x = rng.standard_normal(16).astype(np.float64)
+    result = afft.dht1(np.ascontiguousarray(afft.dht1(np.ascontiguousarray(x))))
+    assert np.allclose(result, len(x) * x, atol=1e-10), f"max_err={np.max(np.abs(result - len(x)*x))}"
+
+
+def test_dht1_roundtrip():
+    rng = np.random.default_rng(3)
+    x = rng.standard_normal(32).astype(np.float64)
+    recovered = afft.idht1(np.ascontiguousarray(afft.dht1(np.ascontiguousarray(x))))
+    assert np.allclose(recovered, x, atol=1e-11)
+
+
+def test_dht2_roundtrip():
+    rng = np.random.default_rng(21)
+    x = np.ascontiguousarray(rng.standard_normal((8, 8)).astype(np.float64))
+    recovered = afft.idht2(np.ascontiguousarray(afft.dht2(x)))
+    assert np.allclose(recovered, x, atol=1e-10)
+
+
+def test_dht3_roundtrip():
+    rng = np.random.default_rng(77)
+    x = np.ascontiguousarray(rng.standard_normal((4, 4, 4)).astype(np.float64))
+    recovered = afft.idht3(np.ascontiguousarray(afft.dht3(x)))
+    assert np.allclose(recovered, x, atol=1e-10)
+
+
+# ── Fast Walsh-Hadamard Transform ─────────────────────────────────────────────
+
+def test_fwht1_involution():
+    # FWHT is its own inverse up to factor of n: FWHT(FWHT(x)) = n * x
+    x = np.array([1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0], dtype=np.float64)
+    result = afft.fwht1(np.ascontiguousarray(afft.fwht1(np.ascontiguousarray(x))))
+    assert np.allclose(result, len(x) * x, atol=1e-12)
+
+
+def test_fwht1_roundtrip():
+    rng = np.random.default_rng(11)
+    x = np.ascontiguousarray(rng.standard_normal(16).astype(np.float64))
+    recovered = afft.ifwht1(np.ascontiguousarray(afft.fwht1(x)))
+    assert np.allclose(recovered, x, atol=1e-12)
+
+
+def test_fwht2_roundtrip():
+    rng = np.random.default_rng(22)
+    x = np.ascontiguousarray(rng.standard_normal((8, 8)).astype(np.float64))
+    recovered = afft.ifwht2(np.ascontiguousarray(afft.fwht2(x)))
+    assert np.allclose(recovered, x, atol=1e-11)
+
+
+def test_fwht3_roundtrip():
+    rng = np.random.default_rng(33)
+    x = np.ascontiguousarray(rng.standard_normal((8, 8, 8)).astype(np.float64))
+    recovered = afft.ifwht3(np.ascontiguousarray(afft.fwht3(x)))
+    assert np.allclose(recovered, x, atol=1e-11)
+
+
+# ── DCT / DST ─────────────────────────────────────────────────────────────────
+
+def test_dct2_1d_roundtrip():
+    rng = np.random.default_rng(44)
+    x = np.ascontiguousarray(rng.standard_normal(32).astype(np.float64))
+    x_hat = afft.dct2_1d(x)
+    recovered = afft.idct2_1d(np.ascontiguousarray(x_hat))
+    assert np.allclose(recovered, x, atol=1e-10), f"max_err={np.max(np.abs(recovered - x))}"
+
+
+def test_dst2_1d_roundtrip():
+    rng = np.random.default_rng(66)
+    x = np.ascontiguousarray(rng.standard_normal(32).astype(np.float64))
+    x_hat = afft.dst2_1d(x)
+    recovered = afft.idst2_1d(np.ascontiguousarray(x_hat))
+    assert np.allclose(recovered, x, atol=1e-10), f"max_err={np.max(np.abs(recovered - x))}"
