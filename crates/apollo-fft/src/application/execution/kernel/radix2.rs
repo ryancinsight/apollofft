@@ -394,32 +394,46 @@ pub fn build_inverse_twiddle_table_32(n: usize) -> Vec<Complex32> {
 
 // ── private helpers ───────────────────────────────────────────────────────────────────────────
 
-/// Reverse the lower `bits` bits of `x`.
-fn bit_reverse(mut x: usize, bits: usize) -> usize {
-    let mut result = 0usize;
-    for _ in 0..bits {
-        result = (result << 1) | (x & 1);
-        x >>= 1;
-    }
-    result
-}
-
+/// O(N) bit-reversal permutation for Complex64 data.
+///
+/// Uses the iterative XOR / binary-counter-in-reverse technique: maintains the
+/// variable `j` such that after iteration `i`, `j = bit_reverse(i, log_n)`.
+/// Each bit of `j` is flipped by inspecting the carry from incrementing the
+/// reversed index from MSB toward LSB. Amortized cost ≈ 2 operations per
+/// element (geometric series), replacing the prior O(N log N) path.
 fn bit_reverse_permutation_64(data: &mut [Complex64]) {
     let n = data.len();
-    let log_n = n.trailing_zeros() as usize;
-    for i in 0..n {
-        let j = bit_reverse(i, log_n);
+    if n <= 1 {
+        return;
+    }
+    let mut j = 0usize;
+    for i in 1..n {
+        let mut bit = n >> 1;
+        while j & bit != 0 {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j ^= bit;
         if i < j {
             data.swap(i, j);
         }
     }
 }
 
+/// O(N) bit-reversal permutation for Complex32 data.
 fn bit_reverse_permutation_32(data: &mut [Complex32]) {
     let n = data.len();
-    let log_n = n.trailing_zeros() as usize;
-    for i in 0..n {
-        let j = bit_reverse(i, log_n);
+    if n <= 1 {
+        return;
+    }
+    let mut j = 0usize;
+    for i in 1..n {
+        let mut bit = n >> 1;
+        while j & bit != 0 {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j ^= bit;
         if i < j {
             data.swap(i, j);
         }
@@ -471,17 +485,30 @@ pub fn forward_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
     }
     debug_assert!(n.is_power_of_two(), "radix-2 requires power-of-2 length");
     bit_reverse_permutation_64(data);
-    let mut len = 2usize;
-    let mut base = 0usize; // offset into `twiddles` for the current stage
+    // Stage 1 (len=2): W_2^0 = 1+0i for every butterfly — multiply is a
+    // no-op. Skip the twiddle access entirely; butterfly reduces to pure
+    // add/sub, eliminating N/2 complex multiplications.
+    for chunk in data.chunks_exact_mut(2) {
+        let u = chunk[0];
+        let v = chunk[1];
+        chunk[0] = u + v;
+        chunk[1] = u - v;
+    }
+    // General stages: len = 4, 8, …, n.
+    // split_at_mut exposes non-aliasing of lo/hi to LLVM, enabling
+    // autovectorization of the j-loop across butterfly pairs.
+    let mut len = 4usize;
+    let mut base = 1usize; // twiddles[0] belongs to stage 1 (already handled)
     while len <= n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
         for chunk in data.chunks_exact_mut(len) {
+            let (lo, hi) = chunk.split_at_mut(half);
             for j in 0..half {
-                let u = chunk[j];
-                let t = stage_twiddles[j] * chunk[j + half];
-                chunk[j] = u + t;
-                chunk[j + half] = u - t;
+                let u = lo[j];
+                let t = stage_twiddles[j] * hi[j];
+                lo[j] = u + t;
+                hi[j] = u - t;
             }
         }
         base += half;
@@ -501,17 +528,25 @@ pub fn inverse_inplace_unnorm_64_with_twiddles(data: &mut [Complex64], twiddles:
     }
     debug_assert!(n.is_power_of_two(), "radix-2 requires power-of-2 length");
     bit_reverse_permutation_64(data);
-    let mut len = 2usize;
-    let mut base = 0usize;
+    // Stage 1 (len=2): W_2^0 = 1+0i — no multiply.
+    for chunk in data.chunks_exact_mut(2) {
+        let u = chunk[0];
+        let v = chunk[1];
+        chunk[0] = u + v;
+        chunk[1] = u - v;
+    }
+    let mut len = 4usize;
+    let mut base = 1usize;
     while len <= n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
         for chunk in data.chunks_exact_mut(len) {
+            let (lo, hi) = chunk.split_at_mut(half);
             for j in 0..half {
-                let u = chunk[j];
-                let t = stage_twiddles[j] * chunk[j + half];
-                chunk[j] = u + t;
-                chunk[j + half] = u - t;
+                let u = lo[j];
+                let t = stage_twiddles[j] * hi[j];
+                lo[j] = u + t;
+                hi[j] = u - t;
             }
         }
         base += half;
@@ -524,10 +559,58 @@ pub fn inverse_inplace_unnorm_64_with_twiddles(data: &mut [Complex64], twiddles:
 /// `twiddles` must be the output of `build_inverse_twiddle_table_64(n)`.
 #[inline]
 pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Complex64]) {
-    inverse_inplace_unnorm_64_with_twiddles(data, twiddles);
-    let scale = 1.0 / data.len() as f64;
-    for x in data.iter_mut() {
-        *x *= scale;
+    // Inlined butterfly loop with scale fused into the final stage.
+    // Eliminates a separate O(N) normalization pass (one full read+write saved).
+    let n = data.len();
+    if n <= 1 {
+        return;
+    }
+    debug_assert!(n.is_power_of_two(), "radix-2 requires power-of-2 length");
+    bit_reverse_permutation_64(data);
+    let scale = 1.0 / n as f64;
+    if n == 2 {
+        // Single stage: fuse scale directly (no twiddle multiply; W_2^0 = 1).
+        let u = data[0];
+        let v = data[1];
+        data[0] = (u + v) * scale;
+        data[1] = (u - v) * scale;
+        return;
+    }
+    // Stage 1 (len=2): W_2^0 = 1+0i — no multiply, purely additive.
+    for chunk in data.chunks_exact_mut(2) {
+        let u = chunk[0];
+        let v = chunk[1];
+        chunk[0] = u + v;
+        chunk[1] = u - v;
+    }
+    // Intermediate stages: len=4, 8, …, n/2 (unnormalized).
+    let mut len = 4usize;
+    let mut base = 1usize;
+    while len < n {
+        let half = len >> 1;
+        let stage_twiddles = &twiddles[base..base + half];
+        for chunk in data.chunks_exact_mut(len) {
+            let (lo, hi) = chunk.split_at_mut(half);
+            for j in 0..half {
+                let u = lo[j];
+                let t = stage_twiddles[j] * hi[j];
+                lo[j] = u + t;
+                hi[j] = u - t;
+            }
+        }
+        base += half;
+        len <<= 1;
+    }
+    // Final stage (len=n): one chunk = whole array. Fuse 1/N scale here to
+    // avoid a separate O(N) pass. Proof: (unnorm_out[k]) * (1/N) = norm_out[k].
+    let half = n >> 1;
+    let stage_twiddles = &twiddles[base..base + half];
+    let (lo, hi) = data.split_at_mut(half);
+    for j in 0..half {
+        let u = lo[j];
+        let t = stage_twiddles[j] * hi[j];
+        lo[j] = (u + t) * scale;
+        hi[j] = (u - t) * scale;
     }
 }
 
@@ -542,17 +625,25 @@ pub fn forward_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
     }
     debug_assert!(n.is_power_of_two(), "radix-2 requires power-of-2 length");
     bit_reverse_permutation_32(data);
-    let mut len = 2usize;
-    let mut base = 0usize;
+    // Stage 1 (len=2): W_2^0 = 1+0i — no multiply.
+    for chunk in data.chunks_exact_mut(2) {
+        let u = chunk[0];
+        let v = chunk[1];
+        chunk[0] = u + v;
+        chunk[1] = u - v;
+    }
+    let mut len = 4usize;
+    let mut base = 1usize;
     while len <= n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
         for chunk in data.chunks_exact_mut(len) {
+            let (lo, hi) = chunk.split_at_mut(half);
             for j in 0..half {
-                let u = chunk[j];
-                let t = stage_twiddles[j] * chunk[j + half];
-                chunk[j] = u + t;
-                chunk[j + half] = u - t;
+                let u = lo[j];
+                let t = stage_twiddles[j] * hi[j];
+                lo[j] = u + t;
+                hi[j] = u - t;
             }
         }
         base += half;
@@ -571,17 +662,25 @@ pub fn inverse_inplace_unnorm_32_with_twiddles(data: &mut [Complex32], twiddles:
     }
     debug_assert!(n.is_power_of_two(), "radix-2 requires power-of-2 length");
     bit_reverse_permutation_32(data);
-    let mut len = 2usize;
-    let mut base = 0usize;
+    // Stage 1 (len=2): W_2^0 = 1+0i — no multiply.
+    for chunk in data.chunks_exact_mut(2) {
+        let u = chunk[0];
+        let v = chunk[1];
+        chunk[0] = u + v;
+        chunk[1] = u - v;
+    }
+    let mut len = 4usize;
+    let mut base = 1usize;
     while len <= n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
         for chunk in data.chunks_exact_mut(len) {
+            let (lo, hi) = chunk.split_at_mut(half);
             for j in 0..half {
-                let u = chunk[j];
-                let t = stage_twiddles[j] * chunk[j + half];
-                chunk[j] = u + t;
-                chunk[j + half] = u - t;
+                let u = lo[j];
+                let t = stage_twiddles[j] * hi[j];
+                lo[j] = u + t;
+                hi[j] = u - t;
             }
         }
         base += half;
@@ -594,10 +693,52 @@ pub fn inverse_inplace_unnorm_32_with_twiddles(data: &mut [Complex32], twiddles:
 /// `twiddles` must be the output of `build_inverse_twiddle_table_32(n)`.
 #[inline]
 pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Complex32]) {
-    inverse_inplace_unnorm_32_with_twiddles(data, twiddles);
-    let scale = 1.0f32 / data.len() as f32;
-    for x in data.iter_mut() {
-        *x *= scale;
+    // Inlined butterfly with fused final-stage normalization.
+    let n = data.len();
+    if n <= 1 {
+        return;
+    }
+    debug_assert!(n.is_power_of_two(), "radix-2 requires power-of-2 length");
+    bit_reverse_permutation_32(data);
+    let scale = 1.0f32 / n as f32;
+    if n == 2 {
+        let u = data[0];
+        let v = data[1];
+        data[0] = (u + v) * scale;
+        data[1] = (u - v) * scale;
+        return;
+    }
+    for chunk in data.chunks_exact_mut(2) {
+        let u = chunk[0];
+        let v = chunk[1];
+        chunk[0] = u + v;
+        chunk[1] = u - v;
+    }
+    let mut len = 4usize;
+    let mut base = 1usize;
+    while len < n {
+        let half = len >> 1;
+        let stage_twiddles = &twiddles[base..base + half];
+        for chunk in data.chunks_exact_mut(len) {
+            let (lo, hi) = chunk.split_at_mut(half);
+            for j in 0..half {
+                let u = lo[j];
+                let t = stage_twiddles[j] * hi[j];
+                lo[j] = u + t;
+                hi[j] = u - t;
+            }
+        }
+        base += half;
+        len <<= 1;
+    }
+    let half = n >> 1;
+    let stage_twiddles = &twiddles[base..base + half];
+    let (lo, hi) = data.split_at_mut(half);
+    for j in 0..half {
+        let u = lo[j];
+        let t = stage_twiddles[j] * hi[j];
+        lo[j] = (u + t) * scale;
+        hi[j] = (u - t) * scale;
     }
 }
 

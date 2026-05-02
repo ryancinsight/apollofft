@@ -11,6 +11,42 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.8] — Closure XLVII
+
+### Closure XLVII — apollo-fft: O(N) bit-reversal, stage-1 no-mul, split_at_mut butterfly, fused IFFT scale [patch]
+
+#### Changed
+- `apollo-fft` / `radix2.rs`: replaced O(N log N) `bit_reverse()` per-element lookup with the
+  O(N) iterative XOR/binary-counter-in-reverse technique for both `bit_reverse_permutation_64`
+  and `bit_reverse_permutation_32`. The algorithm maintains `j = bit_reverse(i, log_n)` via
+  amortized bit-flip operations (≈2 per element average), replacing the prior N·log₂N inner loop.
+- `apollo-fft` / `radix2.rs`: stage-1 (len=2) butterfly is now a special case that omits the
+  twiddle multiplication. W_2^0 = 1+0i for all N; `(u + 1·v, u - 1·v) = (u+v, u-v)` eliminates
+  N/2 complex multiplications per forward or inverse transform call.
+- `apollo-fft` / `radix2.rs`: all butterfly inner loops use `chunk.split_at_mut(half)` to split
+  each chunk into non-overlapping `lo` and `hi` halves. Exposes non-aliasing to LLVM, enabling
+  autovectorization of the `j`-loop across butterfly pairs.
+- `apollo-fft` / `radix2.rs`: `inverse_inplace_64_with_twiddles` and
+  `inverse_inplace_32_with_twiddles` are now inlined butterfly loops. The `1/N` scale is fused
+  into the final butterfly stage, eliminating a separate O(N) normalization pass (one full array
+  read+write removed per IFFT call). Proof: `(u + t) * scale = unnorm_out[k] / N = norm_out[k]`.
+
+#### Performance (Closure XLVII vs numpy baseline)
+| Case               | After XLVI | After XLVII | Change   |
+|---|---|---|---|
+| 1D real N=64       | 5.80×      | **6.40×**   | +10%     |
+| 1D real N=1024     | 2.42×      | **2.69×**   | +11%     |
+| 1D real N=4096     | 1.62×      | **2.03×**   | +25%     |
+| 1D cpx N=64        | 4.67×      | **6.40×**   | +37%     |
+| 1D cpx N=4096      | 0.93×      | **1.06×**   | fixed!   |
+| 1D cpx N=65536     | 0.91×      | **1.16×**   | fixed!   |
+| 2D 32×32           | 2.01×      | **2.54×**   | +26%     |
+| 2D 64×64           | 1.19×      | **1.37×**   | +15%     |
+| 3D 8³              | 3.16×      | **6.57×**   | +108%    |
+| 3D 128³            | 1.08×      | **1.23×**   | +14%     |
+
+---
+
 ## [0.13.7] — Closure XLVI
 
 ### Closure XLVI — apollo-fft: iRFFT half-spectrum inverse, cache-blocked 3D gather/scatter [patch]
