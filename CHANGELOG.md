@@ -11,6 +11,34 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.11] — Closure L
+
+### Closure L — apollo-fft: stage-2 (len=4) butterfly specialization, multiply-free W_4^1=±i rotation [patch]
+
+#### Changed
+- `apollo-fft` / `radix2.rs`: peeled the len=4 butterfly stage out of the general twiddle loop
+  in all six precomputed-twiddle functions (f64/f32 forward, unnormalized inverse, normalized
+  inverse). The stage-2 twiddle `W_4^1 = exp(∓2πi/4) = ∓i` reduces to a 90° register swap
+  with sign flip — zero complex multiplications. Together with the stage-1 bypass (Closure XLVII)
+  and the j=0 bypass (Closure XLVIII), stages 1 and 2 are now entirely multiplication-free,
+  saving N/2 multiply-pairs per forward transform and N/2 per inverse.
+- `apollo-fft` / `radix2.rs`: added `n == 4` early-return path to normalized inverse
+  (`inverse_inplace_64_with_twiddles`, `inverse_inplace_32_with_twiddles`) that fuses the final
+  stage scale into the stage-2 rotate+bypass without touching the twiddle table.
+- General twiddle loop now starts at `len=8, base=3` in all six functions; the twiddle table
+  layout is unchanged — `base=3` correctly skips the 1 stage-1 entry and 2 stage-2 entries.
+
+#### Benchmark (v0.13.11 vs v0.13.10, median over 20 trials)
+| Size | Real speedup vs numpy | Complex speedup vs numpy |
+|---|---|---|
+| 1D N=64 | 8.00× (+38%) | 7.00× (+17%) |
+| 1D N=256 | 4.44× (−7%) | 4.00× (+23%) |
+| 1D N=1024 | 3.00× (=) | 2.00× (+3%) |
+| 1D N=4096 | 2.30× (+6%) | 1.31× (+3%) |
+| 2D 128×128 | 1.11× (+1%) | — |
+
+---
+
 ## [0.13.10] — Closure XLIX
 
 ### Closure XLIX — apollo-fft/apollo-python: scalar butterfly hot loop + single-copy complex Python wrappers [patch]

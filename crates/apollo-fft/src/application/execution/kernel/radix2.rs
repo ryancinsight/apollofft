@@ -494,11 +494,22 @@ pub fn forward_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
         chunk[0] = u + v;
         chunk[1] = u - v;
     }
-    // General stages: len = 4, 8, …, n.
+    // Stage 2 (len=4): W_4^1 = exp(-2πi/4) = (0,-1) = -i.
+    // Proof: -i·(a+ib) = b-ia → tr=v.im, ti=-v.re. Zero complex multiplications.
+    if n >= 4 {
+        for chunk in data.chunks_exact_mut(4) {
+            let (lo, hi) = chunk.split_at_mut(2);
+            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+            let u = lo[1]; let v = hi[1];
+            lo[1] = Complex64::new(u.re + v.im, u.im - v.re);
+            hi[1] = Complex64::new(u.re - v.im, u.im + v.re);
+        }
+    }
+    // General stages: len = 8, 16, …, n. base=3 (stage-1: 1 entry; stage-2: 2 entries consumed).
     // split_at_mut exposes non-aliasing of lo/hi to LLVM, enabling
     // autovectorization of the j-loop across butterfly pairs.
-    let mut len = 4usize;
-    let mut base = 1usize; // twiddles[0] belongs to stage 1 (already handled)
+    let mut len = 8usize;
+    let mut base = 3usize;
     while len <= n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
@@ -540,8 +551,19 @@ pub fn inverse_inplace_unnorm_64_with_twiddles(data: &mut [Complex64], twiddles:
         chunk[0] = u + v;
         chunk[1] = u - v;
     }
-    let mut len = 4usize;
-    let mut base = 1usize;
+    // Stage 2 (len=4): W_4^1 = exp(+2πi/4) = (0,+1) = +i.
+    // Proof: +i·(a+ib) = -b+ia → tr=-v.im, ti=v.re. Zero complex multiplications.
+    if n >= 4 {
+        for chunk in data.chunks_exact_mut(4) {
+            let (lo, hi) = chunk.split_at_mut(2);
+            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+            let u = lo[1]; let v = hi[1];
+            lo[1] = Complex64::new(u.re - v.im, u.im + v.re);
+            hi[1] = Complex64::new(u.re + v.im, u.im - v.re);
+        }
+    }
+    let mut len = 8usize;
+    let mut base = 3usize;
     while len <= n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
@@ -592,10 +614,27 @@ pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
         chunk[0] = u + v;
         chunk[1] = u - v;
     }
-    // Intermediate stages: len=4, 8, …, n/2 (unnormalized).
-    // j=0: W_L^0 = 1+0i — no multiply.
-    let mut len = 4usize;
-    let mut base = 1usize;
+    if n == 4 {
+        // Stage 2 is the final stage. W_4^1 = +i → tr=-v.im, ti=v.re. Fuse scale.
+        // Proof: (0,+1)·(a+ib) = -b+ia. Zero complex multiplications.
+        let (lo, hi) = data.split_at_mut(2);
+        { let u = lo[0]; let v = hi[0]; lo[0] = (u + v) * scale; hi[0] = (u - v) * scale; }
+        let u = lo[1]; let v = hi[1];
+        lo[1] = Complex64::new((u.re - v.im) * scale, (u.im + v.re) * scale);
+        hi[1] = Complex64::new((u.re + v.im) * scale, (u.im - v.re) * scale);
+        return;
+    }
+    // Stage 2 (len=4) as intermediate stage: W_4^1 = +i → no multiply.
+    for chunk in data.chunks_exact_mut(4) {
+        let (lo, hi) = chunk.split_at_mut(2);
+        { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+        let u = lo[1]; let v = hi[1];
+        lo[1] = Complex64::new(u.re - v.im, u.im + v.re);
+        hi[1] = Complex64::new(u.re + v.im, u.im - v.re);
+    }
+    // General intermediate stages: len=8, 16, …, n/2. base=3 (stage-1: 1; stage-2: 2 entries).
+    let mut len = 8usize;
+    let mut base = 3usize;
     while len < n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
@@ -649,8 +688,19 @@ pub fn forward_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
         chunk[0] = u + v;
         chunk[1] = u - v;
     }
-    let mut len = 4usize;
-    let mut base = 1usize;
+    // Stage 2 (len=4): W_4^1 = exp(-2πi/4) = (0,-1) = -i.
+    // Proof: -i·(a+ib) = b-ia → tr=v.im, ti=-v.re. Zero complex multiplications.
+    if n >= 4 {
+        for chunk in data.chunks_exact_mut(4) {
+            let (lo, hi) = chunk.split_at_mut(2);
+            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+            let u = lo[1]; let v = hi[1];
+            lo[1] = Complex32::new(u.re + v.im, u.im - v.re);
+            hi[1] = Complex32::new(u.re - v.im, u.im + v.re);
+        }
+    }
+    let mut len = 8usize;
+    let mut base = 3usize;
     while len <= n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
@@ -690,8 +740,19 @@ pub fn inverse_inplace_unnorm_32_with_twiddles(data: &mut [Complex32], twiddles:
         chunk[0] = u + v;
         chunk[1] = u - v;
     }
-    let mut len = 4usize;
-    let mut base = 1usize;
+    // Stage 2 (len=4): W_4^1 = exp(+2πi/4) = (0,+1) = +i.
+    // Proof: +i·(a+ib) = -b+ia → tr=-v.im, ti=v.re. Zero complex multiplications.
+    if n >= 4 {
+        for chunk in data.chunks_exact_mut(4) {
+            let (lo, hi) = chunk.split_at_mut(2);
+            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+            let u = lo[1]; let v = hi[1];
+            lo[1] = Complex32::new(u.re - v.im, u.im + v.re);
+            hi[1] = Complex32::new(u.re + v.im, u.im - v.re);
+        }
+    }
+    let mut len = 8usize;
+    let mut base = 3usize;
     while len <= n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
@@ -739,8 +800,27 @@ pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
         chunk[0] = u + v;
         chunk[1] = u - v;
     }
-    let mut len = 4usize;
-    let mut base = 1usize;
+    if n == 4 {
+        // Stage 2 is the final stage. W_4^1 = +i → tr=-v.im, ti=v.re. Fuse scale.
+        // Proof: (0,+1)·(a+ib) = -b+ia. Zero complex multiplications.
+        let (lo, hi) = data.split_at_mut(2);
+        { let u = lo[0]; let v = hi[0]; lo[0] = (u + v) * scale; hi[0] = (u - v) * scale; }
+        let u = lo[1]; let v = hi[1];
+        lo[1] = Complex32::new((u.re - v.im) * scale, (u.im + v.re) * scale);
+        hi[1] = Complex32::new((u.re + v.im) * scale, (u.im - v.re) * scale);
+        return;
+    }
+    // Stage 2 (len=4) as intermediate stage: W_4^1 = +i → no multiply.
+    for chunk in data.chunks_exact_mut(4) {
+        let (lo, hi) = chunk.split_at_mut(2);
+        { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+        let u = lo[1]; let v = hi[1];
+        lo[1] = Complex32::new(u.re - v.im, u.im + v.re);
+        hi[1] = Complex32::new(u.re + v.im, u.im - v.re);
+    }
+    // General intermediate stages: len=8, 16, …, n/2. base=3 (stage-1: 1; stage-2: 2 entries).
+    let mut len = 8usize;
+    let mut base = 3usize;
     while len < n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
