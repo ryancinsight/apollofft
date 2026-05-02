@@ -350,8 +350,11 @@ dependencies = [
 name = "apollo-python"
 version = "0.1.0"
 dependencies = [
+ "apollo-dctdst",
+ "apollo-dht",
  "apollo-fft",
  "apollo-fft-wgpu",
+ "apollo-fwht",
  "apollo-nufft",
  "ndarray",
  "num-complex",
