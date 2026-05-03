@@ -11,6 +11,41 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.15] — Closure LIV
+
+### Closure LIV — apollo-fft: remove extra inverse normalization pass; extend benchmark output comparisons to inverse paths [patch]
+
+#### Changed
+- `apollo-fft` / `radix2.rs` — `inverse_inplace_64` now dispatches directly to
+  `inverse_inplace_64_with_twiddles` (fused-final-stage normalization) instead of
+  calling `inverse_inplace_unnorm_64` followed by a separate O(N) scale loop.
+  This removes one full memory read/write pass over the output buffer.
+- `apollo-fft` / `radix2.rs` — `inverse_inplace_32` now dispatches directly to
+  `inverse_inplace_32_with_twiddles` (fused-final-stage normalization) instead of
+  `inverse_inplace_unnorm_32` + extra O(N) scale pass.
+- `benchmark_vs_numpy.py` — output validation section now covers inverse APIs in
+  addition to forward APIs:
+  - `ifft1` vs `numpy.fft.ifft(...).real`
+  - `ifft2` vs `numpy.fft.ifft2(...).real`
+  - `ifft3` vs `numpy.fft.ifftn(...).real`
+  - `ifft_complex1` vs `numpy.fft.ifft(...)`
+  This raises correctness gating from 23 checks to 46 checks before timing output.
+
+#### Memory and performance impact
+- Eliminates one post-kernel normalization sweep in public inverse wrappers
+  (`inverse_inplace_64`, `inverse_inplace_32`), reducing memory bandwidth demand
+  and cache pressure for all inverse callers using those APIs.
+- Benchmark run after change shows no forward regressions and restores
+  `fft_complex1` N=16384 to >1× in the observed run (1.04×), indicating the prior
+  sub-1× observation was run-to-run variance rather than a kernel-path regression.
+
+#### Verification
+- 63/63 `cargo test -p apollo-fft` unit tests pass.
+- 34/34 Python smoke tests pass.
+- Output validation: 46/46 checks pass (forward + inverse, real + complex, 1D/2D/3D).
+
+---
+
 ## [0.13.14] — Closure LIII
 
 ### Closure LIII — apollo-fft: halve post-twiddle reads in real FFT pack/unpack; benchmark output validation [patch]

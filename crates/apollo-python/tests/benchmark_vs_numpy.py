@@ -80,6 +80,35 @@ for n in SIZES_3D:
     x = np.ascontiguousarray(rng.standard_normal((n, n, n)))
     _check(f"fft3  N={n:>3}^3", afft.fft3(x), np.fft.fftn(x))
 
+# 1D real inverse FFT (Hermitian spectrum from real input)
+for n in SIZES_1D:
+    rng = np.random.default_rng(4)
+    x = np.ascontiguousarray(rng.standard_normal(n))
+    spec = np.fft.fft(x)
+    _check(f"ifft1 N={n:>6}", afft.ifft1(spec), np.fft.ifft(spec).real)
+
+# 2D real inverse FFT (Hermitian spectrum from real input)
+for n in SIZES_2D:
+    rng = np.random.default_rng(5)
+    x = np.ascontiguousarray(rng.standard_normal((n, n)))
+    spec = np.fft.fft2(x)
+    _check(f"ifft2 N={n:>4}x{n:<4}", afft.ifft2(spec), np.fft.ifft2(spec).real)
+
+# 3D real inverse FFT (Hermitian spectrum from real input)
+for n in SIZES_3D:
+    rng = np.random.default_rng(6)
+    x = np.ascontiguousarray(rng.standard_normal((n, n, n)))
+    spec = np.fft.fftn(x)
+    _check(f"ifft3 N={n:>3}^3", afft.ifft3(spec), np.fft.ifftn(spec).real)
+
+# 1D complex inverse FFT
+for n in SIZES_1D:
+    rng = np.random.default_rng(7)
+    z = np.ascontiguousarray(
+        rng.standard_normal(n) + 1j * rng.standard_normal(n), dtype=np.complex128
+    )
+    _check(f"icpx1 N={n:>6}", afft.ifft_complex1(z), np.fft.ifft(z))
+
 # Print validation table
 print(f"  {'Transform':<18}  {'Max |err|':>12}  {'Status':>6}")
 print("-" * 46)

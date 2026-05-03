@@ -1049,11 +1049,14 @@ pub fn inverse_inplace_unnorm_64(data: &mut [Complex64]) {
 ///
 /// `N` must be a power of 2.
 pub fn inverse_inplace_64(data: &mut [Complex64]) {
-    inverse_inplace_unnorm_64(data);
-    let scale = 1.0 / data.len() as f64;
-    for x in data.iter_mut() {
-        *x *= scale;
+    let n = data.len();
+    if n <= 1 {
+        return;
     }
+    debug_assert!(n.is_power_of_two(), "radix-2 requires power-of-2 length");
+    let table = build_inverse_twiddle_table_64(n);
+    // Use fused-final-stage normalization to avoid a separate O(N) scale pass.
+    inverse_inplace_64_with_twiddles(data, &table);
 }
 
 /// Iterative radix-2 DIT forward FFT (unnormalized, f32).
@@ -1088,11 +1091,14 @@ pub fn inverse_inplace_unnorm_32(data: &mut [Complex32]) {
 ///
 /// `N` must be a power of 2.
 pub fn inverse_inplace_32(data: &mut [Complex32]) {
-    inverse_inplace_unnorm_32(data);
-    let scale = 1.0f32 / data.len() as f32;
-    for x in data.iter_mut() {
-        *x *= scale;
+    let n = data.len();
+    if n <= 1 {
+        return;
     }
+    debug_assert!(n.is_power_of_two(), "radix-2 requires power-of-2 length");
+    let table = build_inverse_twiddle_table_32(n);
+    // Use fused-final-stage normalization to avoid a separate O(N) scale pass.
+    inverse_inplace_32_with_twiddles(data, &table);
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────────────────────
