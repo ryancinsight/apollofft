@@ -17,6 +17,13 @@ const FAST_KERNEL_THRESHOLD: usize = 512;
 pub struct DhtPlan {
     length: HartleyLength,
     fast_scratch: Option<Mutex<Vec<Complex64>>>,
+    typed_scratch: Mutex<TypedScratch>,
+}
+
+#[derive(Debug)]
+struct TypedScratch {
+    input: Vec<f64>,
+    output: Vec<f64>,
 }
 
 impl DhtPlan {
@@ -139,6 +146,10 @@ impl DhtPlan {
         Ok(Self {
             length,
             fast_scratch,
+            typed_scratch: Mutex::new(TypedScratch {
+                input: vec![0.0; length.get()],
+                output: vec![0.0; length.get()],
+            }),
         })
     }
 
@@ -331,11 +342,20 @@ pub trait HartleyStorage: Copy + Send + Sync + 'static {
         if signal.len() != plan.len() || output.len() != plan.len() {
             return Err(DhtError::LengthMismatch);
         }
-        let input64: Vec<f64> = signal.iter().map(|value| value.to_f64()).collect();
-        let mut output64 = vec![0.0_f64; plan.len()];
-        plan.forward_into(&input64, &mut output64)?;
-        for (slot, value) in output.iter_mut().zip(output64.into_iter()) {
-            *slot = Self::from_f64(value);
+        let mut scratch = plan
+            .typed_scratch
+            .lock()
+            .expect("typed_scratch mutex poisoned");
+        for (slot, value) in scratch.input.iter_mut().zip(signal.iter()) {
+            *slot = value.to_f64();
+        }
+        let TypedScratch {
+            input: input64,
+            output: output64,
+        } = &mut *scratch;
+        plan.forward_into(input64, output64)?;
+        for (slot, value) in output.iter_mut().zip(output64.iter()) {
+            *slot = Self::from_f64(*value);
         }
         Ok(())
     }
@@ -351,11 +371,20 @@ pub trait HartleyStorage: Copy + Send + Sync + 'static {
         if spectrum.len() != plan.len() || output.len() != plan.len() {
             return Err(DhtError::LengthMismatch);
         }
-        let input64: Vec<f64> = spectrum.iter().map(|value| value.to_f64()).collect();
-        let mut output64 = vec![0.0_f64; plan.len()];
-        plan.inverse_into(&input64, &mut output64)?;
-        for (slot, value) in output.iter_mut().zip(output64.into_iter()) {
-            *slot = Self::from_f64(value);
+        let mut scratch = plan
+            .typed_scratch
+            .lock()
+            .expect("typed_scratch mutex poisoned");
+        for (slot, value) in scratch.input.iter_mut().zip(spectrum.iter()) {
+            *slot = value.to_f64();
+        }
+        let TypedScratch {
+            input: input64,
+            output: output64,
+        } = &mut *scratch;
+        plan.inverse_into(input64, output64)?;
+        for (slot, value) in output.iter_mut().zip(output64.iter()) {
+            *slot = Self::from_f64(*value);
         }
         Ok(())
     }
@@ -435,6 +464,7 @@ mod tests {
         let plan = DhtPlan::new(8).expect("valid plan");
         let signal64 = [1.0_f64, -2.0, 0.5, 2.25, -4.0, 1.5, 0.0, -0.75];
         let expected = plan.forward(&signal64).expect("forward");
+        let expected_inverse = plan.inverse(&expected).expect("inverse");
 
         let mut out64 = [0.0_f64; 8];
         plan.forward_typed_into(&signal64, &mut out64, PrecisionProfile::HIGH_ACCURACY_F64)
@@ -448,6 +478,12 @@ mod tests {
         plan.forward_typed_into(&signal32, &mut out32, PrecisionProfile::LOW_PRECISION_F32)
             .expect("typed f32 forward");
         for (actual, expected) in out32.iter().zip(expected.values()) {
+            assert!((f64::from(*actual) - *expected).abs() < 1.0e-5);
+        }
+        let mut inv32 = [0.0_f32; 8];
+        plan.inverse_typed_into(&out32, &mut inv32, PrecisionProfile::LOW_PRECISION_F32)
+            .expect("typed f32 inverse");
+        for (actual, expected) in inv32.iter().zip(expected_inverse.iter()) {
             assert!((f64::from(*actual) - *expected).abs() < 1.0e-5);
         }
 

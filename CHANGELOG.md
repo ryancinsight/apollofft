@@ -11,6 +11,25 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.24] — Closure LXIII
+
+### Closure LXIII — apollo-dht: remove per-call typed conversion allocations [patch]
+
+#### Changed
+- `apollo-dht` / `application/execution/plan/dht.rs`: `DhtPlan` now owns reusable typed-conversion
+  scratch buffers (`input`/`output` f64 vectors) behind a mutex.
+- Typed `HartleyStorage` default paths (`f32` and mixed `f16`) now reuse plan-owned scratch buffers
+  instead of allocating fresh conversion vectors on each `forward_typed_into`/`inverse_typed_into` call.
+
+#### Verification
+- Extended typed-path value checks to include `f32` inverse output comparison against the `f64`
+  owner-path inverse reference.
+- `cargo test -p apollo-dht`: 23 passed, 0 failed.
+- Existing output comparison checks remain green for DHT-vs-DFT parity, fast-vs-direct Hartley parity,
+  and multidimensional `_into` API equivalence.
+
+---
+
 ## [0.13.23] — Closure LXII
 
 ### Closure LXII — apollo-dht: remove remaining 3D separable temporary cube [patch]
