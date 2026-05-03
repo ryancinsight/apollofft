@@ -11,6 +11,44 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.14] — Closure LIII
+
+### Closure LIII — apollo-fft: halve post-twiddle reads in real FFT pack/unpack; benchmark output validation [patch]
+
+#### Changed
+- `apollo-fft` / `radix2.rs` — `forward_real_inplace_64`: replaced two post-twiddle
+  reads per pair with one. Proof: `post_twiddles[m-l] = exp(-2πi·(N/2-l)/N) = -conj(post_twiddles[l])`.
+  The conjugate pair index twiddle is derived algebraically: `xml = a2 - wl.conj() * b2`.
+  The middle element at index `m/2` is simplified analytically: `post_twiddles[m/2] = -i`
+  reduces the unpack formula to `xmid = conj(zmid)` — no twiddle table access or complex
+  multiply. Cache pressure on the post-twiddle table is halved (N=65536: saves 256 KB of
+  reads in the forward unpack loop).
+- `apollo-fft` / `radix2.rs` — `inverse_real_inplace_64`: replaced the sequential k=1..m-1
+  preprocess loop with a pairwise k=1..m/2 loop processing (k, m-k) together from one twiddle
+  read. Derived: `i·conj(wmk) = (wk.im, -wk.re)` where `wmk = -conj(wk)`. The Nyquist bin
+  (k=m/2, self-paired) reduces to `scratch[m/2] = input[m/2].conj()` with no twiddle read.
+  Post-twiddle reads for the inverse preprocess are halved (N=65536: saves 256 KB).
+- `benchmark_vs_numpy.py`: added Section 1 (Output Validation) before the timing section.
+  Computes Apollo and NumPy outputs for all 23 tested configurations (1D/2D/3D real, 1D complex,
+  sizes 64–65536) and asserts max absolute error < 1e-9. The script aborts with exit code 1 if
+  any comparison fails, guaranteeing correctness before reporting speedup ratios. The maximum
+  observed errors follow the expected O(sqrt(N)·eps_machine) pattern (e.g. N=65536: 7.1e-13).
+
+#### Mathematical justification
+- `post_twiddles[m-l] = exp(-2πi·(m-l)/N)` with `m = N/2`:
+  `= exp(-πi)·exp(2πi·l/N) = -exp(2πi·l/N) = -(exp(-2πi·l/N))* = -conj(post_twiddles[l])`. QED.
+- For `k=m/2` (Nyquist): `post_twiddles[m/2] = exp(-πi/2) = -i`;
+  `i·conj(-i) = i·i = i² = -1`; `scratch = (xk + xk* + (-1)(xk - xk*))·0.5 = xk*`. QED.
+- For forward middle: same `-i` twiddle yields `xmid = zmid.re - i·zmid.im = conj(zmid)`. QED.
+
+#### Verification
+- 63/63 `cargo test -p apollo-fft` unit tests pass.
+- 34/34 Python smoke tests (`test_smoke.py`) pass.
+- Output validation: 23/23 configurations PASS with max absolute error < 1e-9 vs NumPy.
+  Worst case: fft3 N=128³, max_abs = 5.1e-12 (≪ 1e-9 threshold).
+
+---
+
 ## [0.13.13] — Closure LII
 
 ### Closure LII — apollo-fft: cache-sequential gather/scatter for 3D axis-1 and axis-0 passes [patch]

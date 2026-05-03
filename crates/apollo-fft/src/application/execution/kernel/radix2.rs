@@ -230,35 +230,38 @@ pub fn forward_real_inplace_64(
     // Process symmetric pairs l, m-l for l = 1..ceil(m/2).
     // For l < m/2: Z[l] is at output[l] and Z[m-l] is at output[m-l] (m-l > m/2,
     // so not yet written), avoiding read-after-write aliasing within the loop.
+    //
+    // Twiddle symmetry: post_twiddles[m-l] = exp(-2πi·(N/2-l)/N)
+    //   = exp(-πi)·exp(2πi·l/N) = -conj(post_twiddles[l]).
+    // One twiddle read per pair halves post-twiddle cache pressure for large N
+    // (N=65536 saves 256 KB of twiddle reads in this loop alone).
     let pair_end = (m + 1) / 2;
     for l in 1..pair_end {
         let ml = m - l;
-        let zl = output[l];  // Z[l] — still valid
-        let zml = output[ml]; // Z[m-l] — still valid (ml > m/2 ≥ l, not yet written)
-        // X[l]   = (zl + zml*)/2 - i·W_N^l·(zl - zml*)/2
-        let a = (zl + zml.conj()) * 0.5;
-        let b = (zl - zml.conj()) * Complex64::new(0.0, -0.5);
-        let xl = a + post_twiddles[l] * b;
-        // X[m-l] = (zml + zl*)/2 - i·W_N^(m-l)·(zml - zl*)/2
-        let a2 = (zml + zl.conj()) * 0.5;
-        let b2 = (zml - zl.conj()) * Complex64::new(0.0, -0.5);
-        let xml = a2 + post_twiddles[ml] * b2;
-        output[l] = xl;
-        output[ml] = xml;
-        output[n - l] = xl.conj();  // conjugate symmetry: X[N-l] = X[l]*
-        output[n - ml] = xml.conj(); // X[N-(m-l)] = X[m-l]*
+        let zl  = output[l];   // Z[l]   — not yet overwritten
+        let zml = output[ml];  // Z[m-l] — not yet overwritten (ml ≥ pair_end > l)
+        let a  = (zl  + zml.conj()) * 0.5;
+        let b  = (zl  - zml.conj()) * Complex64::new(0.0, -0.5);
+        let a2 = (zml + zl.conj())  * 0.5;
+        let b2 = (zml - zl.conj())  * Complex64::new(0.0, -0.5);
+        let wl  = post_twiddles[l]; // post_twiddles[ml] = -conj(wl) by symmetry above
+        let xl  = a  + wl        * b;  // X[l]
+        let xml = a2 - wl.conj() * b2; // X[m-l] = a2 + (-conj(wl))·b2
+        output[l]      = xl;
+        output[ml]     = xml;
+        output[n - l]  = xl.conj();   // conjugate symmetry: X[N-l] = X[l]*
+        output[n - ml] = xml.conj();  // X[N-(m-l)] = X[m-l]*
     }
 
-    // Handle middle element when m is even: l = m/2.
-    // output[m/2] was not modified in the loop above (pair_end = m/2 for even m).
+    // Middle element at l = m/2 (exists iff m is even; for all PoT N ≥ 4, m = N/2 is even).
+    // post_twiddles[m/2] = exp(-2πi·(N/4)/N) = exp(-πi/2) = -i.
+    // Analytically: a = zmid.re, b = zmid.im (both real); -i·zmid.im = -i·b.
+    // xmid = zmid.re + (-i·zmid.im) = zmid.re - i·zmid.im = conj(zmid). No multiply needed.
     if m % 2 == 0 {
-        let mid = m / 2;
+        let mid  = m / 2;
         let zmid = output[mid];
-        let a = (zmid + zmid.conj()) * 0.5;
-        let b = (zmid - zmid.conj()) * Complex64::new(0.0, -0.5);
-        let xmid = a + post_twiddles[mid] * b;
-        output[mid] = xmid;
-        output[n - mid] = xmid.conj();
+        output[mid]     = zmid.conj(); // X[m/2]  = conj(Z[m/2])
+        output[n - mid] = zmid;        // X[3m/2] = conj(X[m/2])* = Z[m/2]
     }
 
     // DC bin: X[0] = Z[0].re + Z[0].im  (W_N^0 = 1, A[0] = Z[0].re, B[0] = Z[0].im)
@@ -346,18 +349,35 @@ pub fn inverse_real_inplace_64(
         (input[0].re - input[m].re) * 0.5,
     );
 
-    // General k = 1..M-1: Z[k] = (X[k] + conj(X[M-k]))/2 + i*conj(W_k)*(X[k] - conj(X[M-k]))/2
-    // i*conj(W_k) = i*(W_k.re - i*W_k.im) = W_k.im + i*W_k.re
-    for k in 1..m {
-        let xk = input[k];
-        let xmk_conj = input[m - k].conj();
-        let sum = xk + xmk_conj;
-        let diff = xk - xmk_conj;
+    // Process pairs (k, m-k) for k = 1..m/2 with one twiddle read per pair.
+    // Twiddle symmetry: post_twiddles[m-k] = -conj(post_twiddles[k]).
+    // Let wk = post_twiddles[k]; wmk = -conj(wk).
+    //   i·conj(wk)  = (wk.im, +wk.re)  [since i·(wk.re - i·wk.im) = wk.im + i·wk.re]
+    //   i·conj(wmk) = i·(-wk)           = (wk.im, -wk.re)
+    // Both factors share wk.im and differ only in sign of wk.re.
+    // One twiddle read per pair halves post-twiddle bandwidth for large N.
+    let half_m = m / 2; // m = N/2 is always even for PoT N ≥ 4
+    for k in 1..half_m {
+        let mk = m - k;
+        let xk   = input[k];
+        let xmk  = input[mk];
+        let xmk_conj = xmk.conj();
+        let xk_conj  = xk.conj();
+        let sum_k    = xk  + xmk_conj;
+        let diff_k   = xk  - xmk_conj;
+        let sum_mk   = xmk + xk_conj;
+        let diff_mk  = xmk - xk_conj;
         let wk = post_twiddles[k];
-        // i·conj(W_k) as a complex multiplier: real part = W_k.im, imag part = W_k.re
-        let i_conj_wk = Complex64::new(wk.im, wk.re);
-        scratch[k] = (sum + i_conj_wk * diff) * 0.5;
+        let i_conj_wk  = Complex64::new(wk.im,  wk.re);
+        let i_conj_wmk = Complex64::new(wk.im, -wk.re);
+        scratch[k]  = (sum_k  + i_conj_wk  * diff_k ) * 0.5;
+        scratch[mk] = (sum_mk + i_conj_wmk * diff_mk) * 0.5;
     }
+    // k = half_m (Nyquist, self-paired: m - half_m = half_m).
+    // post_twiddles[half_m] = -i; i·conj(-i) = -1.
+    // Closed form: scratch[half_m] = (xk + xk.conj() + (-1)·(xk - xk.conj())) * 0.5
+    //   = (2·xk.conj()) * 0.5 = xk.conj(). No twiddle read or multiply.
+    scratch[half_m] = input[half_m].conj();
 
     // M-point normalized IFFT on scratch[0..M].
     // `inverse_inplace_64_with_twiddles` applies the 1/M scale, giving z[k] = x[2k]+i*x[2k+1].

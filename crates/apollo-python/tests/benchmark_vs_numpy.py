@@ -1,8 +1,13 @@
 """
-Performance benchmark: Apollo FFT vs numpy.fft
+Performance benchmark + output validation: Apollo FFT vs numpy.fft
 
-Measures median wall-clock time over N_TRIALS repetitions for 1D, 2D, and 3D FFTs
-at various sizes, then prints a formatted comparison table with speedup ratios.
+Section 1 (Output Validation): For every tested size and function, computes
+Apollo and NumPy outputs and asserts max absolute error < ATOL. Fails fast
+with a descriptive message on the first mismatch.
+
+Section 2 (Timing): Measures median wall-clock time over N_TRIALS repetitions
+for 1D, 2D, and 3D FFTs at various sizes, then prints a formatted comparison
+table with speedup ratios.
 
 Usage:
     python tests/benchmark_vs_numpy.py
@@ -10,6 +15,7 @@ Usage:
 Requirements: numpy, pyapollofft (built with `maturin develop --release`)
 """
 
+import sys
 import time
 
 import numpy as np
@@ -24,6 +30,68 @@ SIZES_3D = [8, 16, 32, 64, 128]
 
 N_WARMUP = 5
 N_TRIALS = 20
+
+# Maximum absolute error tolerated vs NumPy (double-precision FFT).
+# Worst-case accumulated error for N-point FFT ≈ O(sqrt(N) * 2.2e-16).
+# For N=65536: ~5.6e-14. Threshold 1e-9 provides >4 decades of margin.
+ATOL = 1e-9
+
+# ── Section 1: Output validation ──────────────────────────────────────────────
+
+print("=" * 64)
+print("  OUTPUT VALIDATION: Apollo vs NumPy (atol={:.0e})".format(ATOL))
+print("=" * 64)
+
+_validation_failed = False
+_val_rows = []
+
+def _check(label, apollo_out, numpy_out):
+    global _validation_failed
+    diff = np.abs(np.asarray(apollo_out) - np.asarray(numpy_out))
+    max_abs = float(np.max(diff))
+    status = "PASS" if max_abs < ATOL else "FAIL"
+    if status == "FAIL":
+        _validation_failed = True
+    _val_rows.append((label, max_abs, status))
+
+# 1D real FFT
+for n in SIZES_1D:
+    rng = np.random.default_rng(0)
+    x = np.ascontiguousarray(rng.standard_normal(n))
+    _check(f"fft1  N={n:>6}", afft.fft1(x), np.fft.fft(x))
+
+# 1D complex FFT
+for n in SIZES_1D:
+    rng = np.random.default_rng(3)
+    z = np.ascontiguousarray(
+        rng.standard_normal(n) + 1j * rng.standard_normal(n), dtype=np.complex128
+    )
+    _check(f"cpx1  N={n:>6}", afft.fft_complex1(z), np.fft.fft(z))
+
+# 2D real FFT
+for n in SIZES_2D:
+    rng = np.random.default_rng(1)
+    x = np.ascontiguousarray(rng.standard_normal((n, n)))
+    _check(f"fft2  N={n:>4}x{n:<4}", afft.fft2(x), np.fft.fft2(x))
+
+# 3D real FFT
+for n in SIZES_3D:
+    rng = np.random.default_rng(2)
+    x = np.ascontiguousarray(rng.standard_normal((n, n, n)))
+    _check(f"fft3  N={n:>3}^3", afft.fft3(x), np.fft.fftn(x))
+
+# Print validation table
+print(f"  {'Transform':<18}  {'Max |err|':>12}  {'Status':>6}")
+print("-" * 46)
+for label, max_abs, status in _val_rows:
+    print(f"  {label:<18}  {max_abs:>12.3e}  {status:>6}")
+print()
+
+if _validation_failed:
+    print("ERROR: one or more output comparisons FAILED. Aborting benchmark.")
+    sys.exit(1)
+
+print("  All output comparisons PASSED.\n")
 
 
 # ── Timing helper ─────────────────────────────────────────────────────────────
