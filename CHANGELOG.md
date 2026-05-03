@@ -11,6 +11,34 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.16] — Closure LV
+
+### Closure LV — apollo-fft: add explicit radix-4 and mixed radix-2/radix-4 kernels with validation coverage [minor]
+
+#### Added
+- New kernel module `application/execution/kernel/radix4.rs`:
+  - `forward_inplace_64`, `inverse_inplace_unnorm_64`, `inverse_inplace_64`
+  - `forward_inplace_32`, `inverse_inplace_unnorm_32`, `inverse_inplace_32`
+  - Recursive radix-4 decomposition for power-of-four lengths.
+- New kernel module `application/execution/kernel/mixed_radix.rs`:
+  - `forward_inplace_64`, `inverse_inplace_unnorm_64`, `inverse_inplace_64`
+  - `forward_inplace_32`, `inverse_inplace_unnorm_32`, `inverse_inplace_32`
+  - Mixed radix-2/radix-4 recursion for power-of-two lengths with Bluestein fallback
+    for non-power-of-two lengths.
+- `kernel/mod.rs` exports the new modules (`radix4`, `mixed_radix`).
+
+#### Verification
+- `cargo test -p apollo-fft`: 67 passed, 0 failed.
+- Added kernel tests:
+  - `radix4_forward_n16_matches_direct`
+  - `radix4_inverse_unnorm_n16_matches_direct`
+  - `mixed_forward_n32_matches_direct`
+  - `mixed_inverse_unnorm_n32_matches_direct`
+- Python output-comparison benchmark remains passing (46/46 output checks) with
+  no regression in published API output correctness.
+
+---
+
 ## [0.13.15] — Closure LIV
 
 ### Closure LIV — apollo-fft: remove extra inverse normalization pass; extend benchmark output comparisons to inverse paths [patch]

@@ -4,6 +4,8 @@
 //! - `direct`: O(N^2) reference DFT kept for testing and validation.
 //! - `radix2`: O(N log N) iterative Cooley-Tukey radix-2 DIT FFT for power-of-two lengths.
 //! - `bluestein`: O(N log N) chirp-Z FFT for arbitrary lengths using radix-2 internally.
+//! - `radix4`: O(N log N) recursive radix-4 variant for power-of-four lengths.
+//! - `mixed_radix`: mixed radix-2/radix-4 recursive kernel for power-of-two lengths.
 //!
 //! The functions below auto-select radix-2 for power-of-2 sizes and
 //! Bluestein otherwise, providing a single authoritative entry point for all
@@ -11,6 +13,8 @@
 
 pub mod bluestein;
 pub mod direct;
+pub mod mixed_radix;
+pub mod radix4;
 pub mod radix2;
 
 pub use direct::{
