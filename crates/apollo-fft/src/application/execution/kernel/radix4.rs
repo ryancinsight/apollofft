@@ -1,8 +1,10 @@
-//! Recursive radix-4 FFT kernels.
+//! True radix-4 Cooley-Tukey kernels.
 //!
-//! These kernels target power-of-four lengths and are kept as explicit
-//! algorithm variants for benchmarking and planner experimentation.
+//! This module implements in-place radix-4 DIT transforms for power-of-four
+//! lengths. The radix-4 modules for 16/32/64 can then build higher-radix
+//! behavior on top of this kernel family without routing through radix-2.
 
+use super::radix2;
 use num_complex::{Complex32, Complex64};
 
 #[inline]
@@ -10,299 +12,338 @@ fn is_power_of_four(n: usize) -> bool {
     n.is_power_of_two() && (n.trailing_zeros() % 2 == 0)
 }
 
+/// Forward FFT (unnormalized) for power-of-four lengths using caller-provided twiddles.
 #[inline]
-fn cmul64(a: Complex64, b: Complex64) -> Complex64 {
+pub fn forward_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Complex64]) {
+    if data.len() <= 1 {
+        return;
+    }
+    debug_assert!(is_power_of_four(data.len()));
+    radix4_inplace_64(data, twiddles, false);
+}
+
+/// Inverse FFT (unnormalized) for power-of-four lengths using caller-provided twiddles.
+#[inline]
+pub fn inverse_inplace_unnorm_64_with_twiddles(data: &mut [Complex64], twiddles: &[Complex64]) {
+    if data.len() <= 1 {
+        return;
+    }
+    debug_assert!(is_power_of_four(data.len()));
+    radix4_inplace_64(data, twiddles, true);
+}
+
+/// Inverse FFT normalized by 1/N for power-of-four lengths using caller-provided twiddles.
+#[inline]
+pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Complex64]) {
+    if data.len() <= 1 {
+        return;
+    }
+    debug_assert!(is_power_of_four(data.len()));
+    radix4_inplace_64(data, twiddles, true);
+    let inv_n = 1.0 / data.len() as f64;
+    for value in data.iter_mut() {
+        *value *= inv_n;
+    }
+}
+
+/// Forward FFT (unnormalized) for power-of-four lengths.
+pub fn forward_inplace_64(data: &mut [Complex64]) {
+    if data.len() <= 1 {
+        return;
+    }
+    debug_assert!(is_power_of_four(data.len()));
+    let twiddles = radix2::build_forward_twiddle_table_64(data.len());
+    radix4_inplace_64(data, &twiddles, false);
+}
+
+/// Inverse FFT (unnormalized) for power-of-four lengths.
+pub fn inverse_inplace_unnorm_64(data: &mut [Complex64]) {
+    if data.len() <= 1 {
+        return;
+    }
+    debug_assert!(is_power_of_four(data.len()));
+    let twiddles = radix2::build_inverse_twiddle_table_64(data.len());
+    radix4_inplace_64(data, &twiddles, true);
+}
+
+/// Inverse FFT normalized by 1/N for power-of-four lengths.
+pub fn inverse_inplace_64(data: &mut [Complex64]) {
+    if data.len() <= 1 {
+        return;
+    }
+    debug_assert!(is_power_of_four(data.len()));
+    let twiddles = radix2::build_inverse_twiddle_table_64(data.len());
+    radix4_inplace_64(data, &twiddles, true);
+    let inv_n = 1.0 / data.len() as f64;
+    for value in data.iter_mut() {
+        *value *= inv_n;
+    }
+}
+
+/// Forward FFT (unnormalized, f32) for power-of-four lengths using caller-provided twiddles.
+#[inline]
+pub fn forward_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Complex32]) {
+    if data.len() <= 1 {
+        return;
+    }
+    debug_assert!(is_power_of_four(data.len()));
+    radix4_inplace_32(data, twiddles, false);
+}
+
+/// Inverse FFT (unnormalized, f32) for power-of-four lengths using caller-provided twiddles.
+#[inline]
+pub fn inverse_inplace_unnorm_32_with_twiddles(data: &mut [Complex32], twiddles: &[Complex32]) {
+    if data.len() <= 1 {
+        return;
+    }
+    debug_assert!(is_power_of_four(data.len()));
+    radix4_inplace_32(data, twiddles, true);
+}
+
+/// Inverse FFT normalized by 1/N (f32) for power-of-four lengths using caller-provided twiddles.
+#[inline]
+pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Complex32]) {
+    if data.len() <= 1 {
+        return;
+    }
+    debug_assert!(is_power_of_four(data.len()));
+    radix4_inplace_32(data, twiddles, true);
+    let inv_n = 1.0f32 / data.len() as f32;
+    for value in data.iter_mut() {
+        *value *= inv_n;
+    }
+}
+
+/// Forward FFT (unnormalized, f32) for power-of-four lengths.
+pub fn forward_inplace_32(data: &mut [Complex32]) {
+    if data.len() <= 1 {
+        return;
+    }
+    debug_assert!(is_power_of_four(data.len()));
+    let twiddles = radix2::build_forward_twiddle_table_32(data.len());
+    radix4_inplace_32(data, &twiddles, false);
+}
+
+/// Inverse FFT (unnormalized, f32) for power-of-four lengths.
+pub fn inverse_inplace_unnorm_32(data: &mut [Complex32]) {
+    if data.len() <= 1 {
+        return;
+    }
+    debug_assert!(is_power_of_four(data.len()));
+    let twiddles = radix2::build_inverse_twiddle_table_32(data.len());
+    radix4_inplace_32(data, &twiddles, true);
+}
+
+/// Inverse FFT normalized by 1/N (f32) for power-of-four lengths.
+pub fn inverse_inplace_32(data: &mut [Complex32]) {
+    if data.len() <= 1 {
+        return;
+    }
+    debug_assert!(is_power_of_four(data.len()));
+    let twiddles = radix2::build_inverse_twiddle_table_32(data.len());
+    radix4_inplace_32(data, &twiddles, true);
+    let inv_n = 1.0f32 / data.len() as f32;
+    for value in data.iter_mut() {
+        *value *= inv_n;
+    }
+}
+
+#[inline]
+fn cmul_64(a: Complex64, b: Complex64) -> Complex64 {
     Complex64::new(a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re)
 }
 
 #[inline]
-fn cmul32(a: Complex32, b: Complex32) -> Complex32 {
+fn cmul_32(a: Complex32, b: Complex32) -> Complex32 {
     Complex32::new(a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re)
 }
 
-fn radix4_butterfly4_64(x: &[Complex64], inverse: bool) -> [Complex64; 4] {
-    let i_mul = |v: Complex64| {
-        if inverse {
-            Complex64::new(-v.im, v.re)
-        } else {
-            Complex64::new(v.im, -v.re)
-        }
-    };
-    let neg_i_mul = |v: Complex64| {
-        if inverse {
-            Complex64::new(v.im, -v.re)
-        } else {
-            Complex64::new(-v.im, v.re)
-        }
-    };
-
-    let x0 = x[0];
-    let x1 = x[1];
-    let x2 = x[2];
-    let x3 = x[3];
-
-    let t0 = x0 + x2;
-    let t1 = x0 - x2;
-    let t2 = x1 + x3;
-    let t3 = x1 - x3;
-
-    [t0 + t2, t1 + i_mul(t3), t0 - t2, t1 + neg_i_mul(t3)]
+fn reverse_base4(mut value: usize, digits: u32) -> usize {
+    let mut reversed = 0usize;
+    for _ in 0..digits {
+        reversed = (reversed << 2) | (value & 0b11);
+        value >>= 2;
+    }
+    reversed
 }
 
-fn radix4_butterfly4_32(x: &[Complex32], inverse: bool) -> [Complex32; 4] {
-    let i_mul = |v: Complex32| {
-        if inverse {
-            Complex32::new(-v.im, v.re)
-        } else {
-            Complex32::new(v.im, -v.re)
+fn digit_reverse_permute_64(data: &mut [Complex64]) {
+    let digits = data.len().trailing_zeros() / 2;
+    for index in 0..data.len() {
+        let reversed = reverse_base4(index, digits);
+        if reversed > index {
+            data.swap(index, reversed);
         }
-    };
-    let neg_i_mul = |v: Complex32| {
-        if inverse {
-            Complex32::new(v.im, -v.re)
-        } else {
-            Complex32::new(-v.im, v.re)
-        }
-    };
-
-    let x0 = x[0];
-    let x1 = x[1];
-    let x2 = x[2];
-    let x3 = x[3];
-
-    let t0 = x0 + x2;
-    let t1 = x0 - x2;
-    let t2 = x1 + x3;
-    let t3 = x1 - x3;
-
-    [t0 + t2, t1 + i_mul(t3), t0 - t2, t1 + neg_i_mul(t3)]
+    }
 }
 
-fn fft_radix4_recursive_64(input: &[Complex64], inverse: bool) -> Vec<Complex64> {
-    let n = input.len();
-    if n == 1 {
-        return vec![input[0]];
-    }
-    debug_assert!(is_power_of_four(n));
-
-    if n == 4 {
-        return radix4_butterfly4_64(input, inverse).to_vec();
-    }
-
-    let m = n / 4;
-    let mut x0 = Vec::with_capacity(m);
-    let mut x1 = Vec::with_capacity(m);
-    let mut x2 = Vec::with_capacity(m);
-    let mut x3 = Vec::with_capacity(m);
-    for t in 0..m {
-        x0.push(input[4 * t]);
-        x1.push(input[4 * t + 1]);
-        x2.push(input[4 * t + 2]);
-        x3.push(input[4 * t + 3]);
-    }
-
-    let y0 = fft_radix4_recursive_64(&x0, inverse);
-    let y1 = fft_radix4_recursive_64(&x1, inverse);
-    let y2 = fft_radix4_recursive_64(&x2, inverse);
-    let y3 = fft_radix4_recursive_64(&x3, inverse);
-
-    let mut out = vec![Complex64::new(0.0, 0.0); n];
-    let i_mul = |v: Complex64| {
-        if inverse {
-            Complex64::new(-v.im, v.re)
-        } else {
-            Complex64::new(v.im, -v.re)
+fn digit_reverse_permute_32(data: &mut [Complex32]) {
+    let digits = data.len().trailing_zeros() / 2;
+    for index in 0..data.len() {
+        let reversed = reverse_base4(index, digits);
+        if reversed > index {
+            data.swap(index, reversed);
         }
-    };
-    let neg_i_mul = |v: Complex64| {
-        if inverse {
-            Complex64::new(v.im, -v.re)
-        } else {
-            Complex64::new(-v.im, v.re)
-        }
-    };
-    let sign = if inverse { 1.0 } else { -1.0 };
-    let angle = sign * std::f64::consts::TAU / n as f64;
-    let step1 = Complex64::new(angle.cos(), angle.sin());
-    let step2 = cmul64(step1, step1);
-    let step3 = cmul64(step2, step1);
-    let mut w1 = Complex64::new(1.0, 0.0);
-    let mut w2 = Complex64::new(1.0, 0.0);
-    let mut w3 = Complex64::new(1.0, 0.0);
-
-    for k in 0..m {
-        let a0 = y0[k];
-        let a1 = cmul64(w1, y1[k]);
-        let a2 = cmul64(w2, y2[k]);
-        let a3 = cmul64(w3, y3[k]);
-
-        let t0 = a0 + a2;
-        let t1 = a0 - a2;
-        let t2 = a1 + a3;
-        let t3 = a1 - a3;
-
-        out[k] = t0 + t2;
-        out[k + m] = t1 + i_mul(t3);
-        out[k + 2 * m] = t0 - t2;
-        out[k + 3 * m] = t1 + neg_i_mul(t3);
-
-        w1 = cmul64(w1, step1);
-        w2 = cmul64(w2, step2);
-        w3 = cmul64(w3, step3);
     }
-
-    out
 }
 
-fn fft_radix4_recursive_32(input: &[Complex32], inverse: bool) -> Vec<Complex32> {
-    let n = input.len();
-    if n == 1 {
-        return vec![input[0]];
+#[inline]
+fn stage_twiddle_64(stage: &[Complex64], half: usize, exponent: usize) -> Complex64 {
+    if exponent < half {
+        stage[exponent]
+    } else {
+        -stage[exponent - half]
     }
-    debug_assert!(is_power_of_four(n));
-
-    if n == 4 {
-        return radix4_butterfly4_32(input, inverse).to_vec();
-    }
-
-    let m = n / 4;
-    let mut x0 = Vec::with_capacity(m);
-    let mut x1 = Vec::with_capacity(m);
-    let mut x2 = Vec::with_capacity(m);
-    let mut x3 = Vec::with_capacity(m);
-    for t in 0..m {
-        x0.push(input[4 * t]);
-        x1.push(input[4 * t + 1]);
-        x2.push(input[4 * t + 2]);
-        x3.push(input[4 * t + 3]);
-    }
-
-    let y0 = fft_radix4_recursive_32(&x0, inverse);
-    let y1 = fft_radix4_recursive_32(&x1, inverse);
-    let y2 = fft_radix4_recursive_32(&x2, inverse);
-    let y3 = fft_radix4_recursive_32(&x3, inverse);
-
-    let mut out = vec![Complex32::new(0.0, 0.0); n];
-    let i_mul = |v: Complex32| {
-        if inverse {
-            Complex32::new(-v.im, v.re)
-        } else {
-            Complex32::new(v.im, -v.re)
-        }
-    };
-    let neg_i_mul = |v: Complex32| {
-        if inverse {
-            Complex32::new(v.im, -v.re)
-        } else {
-            Complex32::new(-v.im, v.re)
-        }
-    };
-    let sign = if inverse { 1.0 } else { -1.0 };
-    let angle = sign * std::f64::consts::TAU / n as f64;
-    let step1 = Complex32::new(angle.cos() as f32, angle.sin() as f32);
-    let step2 = cmul32(step1, step1);
-    let step3 = cmul32(step2, step1);
-    let mut w1 = Complex32::new(1.0, 0.0);
-    let mut w2 = Complex32::new(1.0, 0.0);
-    let mut w3 = Complex32::new(1.0, 0.0);
-
-    for k in 0..m {
-        let a0 = y0[k];
-        let a1 = cmul32(w1, y1[k]);
-        let a2 = cmul32(w2, y2[k]);
-        let a3 = cmul32(w3, y3[k]);
-
-        let t0 = a0 + a2;
-        let t1 = a0 - a2;
-        let t2 = a1 + a3;
-        let t3 = a1 - a3;
-
-        out[k] = t0 + t2;
-        out[k + m] = t1 + i_mul(t3);
-        out[k + 2 * m] = t0 - t2;
-        out[k + 3 * m] = t1 + neg_i_mul(t3);
-
-        w1 = cmul32(w1, step1);
-        w2 = cmul32(w2, step2);
-        w3 = cmul32(w3, step3);
-    }
-
-    out
 }
 
-/// In-place forward FFT (unnormalized) for power-of-four lengths.
-pub fn forward_inplace_64(data: &mut [Complex64]) {
-    let n = data.len();
-    if n <= 1 {
+#[inline]
+fn stage_twiddle_32(stage: &[Complex32], half: usize, exponent: usize) -> Complex32 {
+    if exponent < half {
+        stage[exponent]
+    } else {
+        -stage[exponent - half]
+    }
+}
+
+fn radix4_inplace_64(data: &mut [Complex64], twiddles: &[Complex64], inverse: bool) {
+    debug_assert!(is_power_of_four(data.len()));
+    if data.len() <= 1 {
         return;
     }
-    debug_assert!(is_power_of_four(n));
-    let out = fft_radix4_recursive_64(data, false);
-    data.copy_from_slice(&out);
+
+    digit_reverse_permute_64(data);
+
+    let n = data.len();
+    let mut len = 4usize;
+    while len <= n {
+        let quarter = len >> 2;
+        let half = len >> 1;
+        let stage = if len > 4 {
+            Some(&twiddles[(half - 1)..(half - 1 + half)])
+        } else {
+            None
+        };
+
+        for chunk in data.chunks_exact_mut(len) {
+            for j in 0..quarter {
+                let i0 = j;
+                let i1 = i0 + quarter;
+                let i2 = i1 + quarter;
+                let i3 = i2 + quarter;
+
+                let a0 = chunk[i0];
+                let mut a1 = chunk[i1];
+                let mut a2 = chunk[i2];
+                let mut a3 = chunk[i3];
+
+                if let Some(stage_twiddles) = stage {
+                    let w1 = stage_twiddle_64(stage_twiddles, half, j);
+                    let w2 = stage_twiddle_64(stage_twiddles, half, 2 * j);
+                    let w3 = stage_twiddle_64(stage_twiddles, half, 3 * j);
+                    a1 = cmul_64(a1, w1);
+                    a2 = cmul_64(a2, w2);
+                    a3 = cmul_64(a3, w3);
+                }
+
+                let t0 = a0 + a2;
+                let t1 = a0 - a2;
+                let t2 = a1 + a3;
+                let t3 = a1 - a3;
+
+                let y0 = t0 + t2;
+                let y2 = t0 - t2;
+
+                let (y1, y3) = if inverse {
+                    (
+                        Complex64::new(t1.re - t3.im, t1.im + t3.re),
+                        Complex64::new(t1.re + t3.im, t1.im - t3.re),
+                    )
+                } else {
+                    (
+                        Complex64::new(t1.re + t3.im, t1.im - t3.re),
+                        Complex64::new(t1.re - t3.im, t1.im + t3.re),
+                    )
+                };
+
+                chunk[i0] = y0;
+                chunk[i1] = y1;
+                chunk[i2] = y2;
+                chunk[i3] = y3;
+            }
+        }
+
+        len <<= 2;
+    }
 }
 
-/// In-place inverse FFT (unnormalized) for power-of-four lengths.
-pub fn inverse_inplace_unnorm_64(data: &mut [Complex64]) {
-    let n = data.len();
-    if n <= 1 {
+fn radix4_inplace_32(data: &mut [Complex32], twiddles: &[Complex32], inverse: bool) {
+    debug_assert!(is_power_of_four(data.len()));
+    if data.len() <= 1 {
         return;
     }
-    debug_assert!(is_power_of_four(n));
-    // F^{-1}_unnorm(X) = conj(F(conj(X)))
-    let mut conj_in = data.to_vec();
-    for x in conj_in.iter_mut() {
-        *x = x.conj();
-    }
-    let out = fft_radix4_recursive_64(&conj_in, false);
-    for (dst, v) in data.iter_mut().zip(out.into_iter()) {
-        *dst = v.conj();
-    }
-}
 
-/// In-place inverse FFT normalized by 1/N for power-of-four lengths.
-pub fn inverse_inplace_64(data: &mut [Complex64]) {
-    inverse_inplace_unnorm_64(data);
-    let scale = 1.0 / data.len() as f64;
-    for x in data.iter_mut() {
-        *x *= scale;
-    }
-}
+    digit_reverse_permute_32(data);
 
-/// In-place forward FFT (unnormalized, f32) for power-of-four lengths.
-pub fn forward_inplace_32(data: &mut [Complex32]) {
     let n = data.len();
-    if n <= 1 {
-        return;
-    }
-    debug_assert!(is_power_of_four(n));
-    let out = fft_radix4_recursive_32(data, false);
-    data.copy_from_slice(&out);
-}
+    let mut len = 4usize;
+    while len <= n {
+        let quarter = len >> 2;
+        let half = len >> 1;
+        let stage = if len > 4 {
+            Some(&twiddles[(half - 1)..(half - 1 + half)])
+        } else {
+            None
+        };
 
-/// In-place inverse FFT (unnormalized, f32) for power-of-four lengths.
-pub fn inverse_inplace_unnorm_32(data: &mut [Complex32]) {
-    let n = data.len();
-    if n <= 1 {
-        return;
-    }
-    debug_assert!(is_power_of_four(n));
-    // F^{-1}_unnorm(X) = conj(F(conj(X)))
-    let mut conj_in = data.to_vec();
-    for x in conj_in.iter_mut() {
-        *x = x.conj();
-    }
-    let out = fft_radix4_recursive_32(&conj_in, false);
-    for (dst, v) in data.iter_mut().zip(out.into_iter()) {
-        *dst = v.conj();
-    }
-}
+        for chunk in data.chunks_exact_mut(len) {
+            for j in 0..quarter {
+                let i0 = j;
+                let i1 = i0 + quarter;
+                let i2 = i1 + quarter;
+                let i3 = i2 + quarter;
 
-/// In-place inverse FFT normalized by 1/N (f32) for power-of-four lengths.
-pub fn inverse_inplace_32(data: &mut [Complex32]) {
-    inverse_inplace_unnorm_32(data);
-    let scale = 1.0f32 / data.len() as f32;
-    for x in data.iter_mut() {
-        *x *= scale;
+                let a0 = chunk[i0];
+                let mut a1 = chunk[i1];
+                let mut a2 = chunk[i2];
+                let mut a3 = chunk[i3];
+
+                if let Some(stage_twiddles) = stage {
+                    let w1 = stage_twiddle_32(stage_twiddles, half, j);
+                    let w2 = stage_twiddle_32(stage_twiddles, half, 2 * j);
+                    let w3 = stage_twiddle_32(stage_twiddles, half, 3 * j);
+                    a1 = cmul_32(a1, w1);
+                    a2 = cmul_32(a2, w2);
+                    a3 = cmul_32(a3, w3);
+                }
+
+                let t0 = a0 + a2;
+                let t1 = a0 - a2;
+                let t2 = a1 + a3;
+                let t3 = a1 - a3;
+
+                let y0 = t0 + t2;
+                let y2 = t0 - t2;
+
+                let (y1, y3) = if inverse {
+                    (
+                        Complex32::new(t1.re - t3.im, t1.im + t3.re),
+                        Complex32::new(t1.re + t3.im, t1.im - t3.re),
+                    )
+                } else {
+                    (
+                        Complex32::new(t1.re + t3.im, t1.im - t3.re),
+                        Complex32::new(t1.re - t3.im, t1.im + t3.re),
+                    )
+                };
+
+                chunk[i0] = y0;
+                chunk[i1] = y1;
+                chunk[i2] = y2;
+                chunk[i3] = y3;
+            }
+        }
+
+        len <<= 2;
     }
 }
 

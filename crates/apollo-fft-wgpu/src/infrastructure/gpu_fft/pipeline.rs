@@ -30,7 +30,9 @@ pub struct GpuFft3d {
     pub(crate) strategy_y: AxisStrategy,
     pub(crate) strategy_z: AxisStrategy,
     pub(crate) bitrev_pipeline: wgpu::ComputePipeline,
+    pub(crate) bitrev_radix4_pipeline: wgpu::ComputePipeline,
     pub(crate) forward_pipeline: wgpu::ComputePipeline,
+    pub(crate) forward_radix4_pipeline: wgpu::ComputePipeline,
     pub(crate) scale_pipeline: wgpu::ComputePipeline,
     pub(crate) pack_pipeline: wgpu::ComputePipeline,
     pub(crate) unpack_pipeline: wgpu::ComputePipeline,
@@ -230,7 +232,9 @@ impl GpuFft3d {
         };
 
         let bitrev_pipeline = build_pipeline("fft_bitrev");
+        let bitrev_radix4_pipeline = build_pipeline("fft_bitrev_radix4");
         let forward_pipeline = build_pipeline("fft_forward");
+        let forward_radix4_pipeline = build_pipeline("fft_forward_radix4");
         let scale_pipeline = build_pipeline("fft_scale");
         let pack_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("apollo-fft-wgpu pack shader"),
@@ -448,37 +452,61 @@ impl GpuFft3d {
 
         let axis_fwd_x = match strategy_x {
             AxisStrategy::Radix2 => {
-                RadixStages::precompute(&device, &params_layout, nx as u32, batch_x, false)
+                if nx.is_power_of_two() && (nx.trailing_zeros() % 2 == 0) {
+                    RadixStages::precompute_radix4(&device, &params_layout, nx as u32, batch_x, false)
+                } else {
+                    RadixStages::precompute(&device, &params_layout, nx as u32, batch_x, false)
+                }
             }
             AxisStrategy::ChirpZ { .. } => RadixStages::empty(),
         };
         let axis_inv_x = match strategy_x {
             AxisStrategy::Radix2 => {
-                RadixStages::precompute(&device, &params_layout, nx as u32, batch_x, true)
+                if nx.is_power_of_two() && (nx.trailing_zeros() % 2 == 0) {
+                    RadixStages::precompute_radix4(&device, &params_layout, nx as u32, batch_x, true)
+                } else {
+                    RadixStages::precompute(&device, &params_layout, nx as u32, batch_x, true)
+                }
             }
             AxisStrategy::ChirpZ { .. } => RadixStages::empty(),
         };
         let axis_fwd_y = match strategy_y {
             AxisStrategy::Radix2 => {
-                RadixStages::precompute(&device, &params_layout, ny as u32, batch_y, false)
+                if ny.is_power_of_two() && (ny.trailing_zeros() % 2 == 0) {
+                    RadixStages::precompute_radix4(&device, &params_layout, ny as u32, batch_y, false)
+                } else {
+                    RadixStages::precompute(&device, &params_layout, ny as u32, batch_y, false)
+                }
             }
             AxisStrategy::ChirpZ { .. } => RadixStages::empty(),
         };
         let axis_inv_y = match strategy_y {
             AxisStrategy::Radix2 => {
-                RadixStages::precompute(&device, &params_layout, ny as u32, batch_y, true)
+                if ny.is_power_of_two() && (ny.trailing_zeros() % 2 == 0) {
+                    RadixStages::precompute_radix4(&device, &params_layout, ny as u32, batch_y, true)
+                } else {
+                    RadixStages::precompute(&device, &params_layout, ny as u32, batch_y, true)
+                }
             }
             AxisStrategy::ChirpZ { .. } => RadixStages::empty(),
         };
         let axis_fwd_z = match strategy_z {
             AxisStrategy::Radix2 => {
-                RadixStages::precompute(&device, &params_layout, nz as u32, batch_z, false)
+                if nz.is_power_of_two() && (nz.trailing_zeros() % 2 == 0) {
+                    RadixStages::precompute_radix4(&device, &params_layout, nz as u32, batch_z, false)
+                } else {
+                    RadixStages::precompute(&device, &params_layout, nz as u32, batch_z, false)
+                }
             }
             AxisStrategy::ChirpZ { .. } => RadixStages::empty(),
         };
         let axis_inv_z = match strategy_z {
             AxisStrategy::Radix2 => {
-                RadixStages::precompute(&device, &params_layout, nz as u32, batch_z, true)
+                if nz.is_power_of_two() && (nz.trailing_zeros() % 2 == 0) {
+                    RadixStages::precompute_radix4(&device, &params_layout, nz as u32, batch_z, true)
+                } else {
+                    RadixStages::precompute(&device, &params_layout, nz as u32, batch_z, true)
+                }
             }
             AxisStrategy::ChirpZ { .. } => RadixStages::empty(),
         };
@@ -493,7 +521,9 @@ impl GpuFft3d {
             strategy_y,
             strategy_z,
             bitrev_pipeline,
+            bitrev_radix4_pipeline,
             forward_pipeline,
+            forward_radix4_pipeline,
             scale_pipeline,
             pack_pipeline,
             unpack_pipeline,

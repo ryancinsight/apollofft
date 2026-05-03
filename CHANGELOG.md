@@ -11,6 +11,48 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.27] — Closure LXVI
+
+### Closure LXVI — apollo-fft: add f32 Stage-4 radix-2 kernel specialization [patch]
+
+#### Changed
+- `apollo-fft` / `application/execution/kernel/radix2.rs`:
+  - Added explicit Stage-4 (`len=16`) forward f32 constant-kernel specialization in
+    `forward_inplace_32_with_twiddles`.
+  - Added explicit Stage-4 (`len=16`) inverse f32 constant-kernel specialization in
+    `inverse_inplace_unnorm_32_with_twiddles`.
+  - Added explicit Stage-4 (`len=16`) inverse f32 constant-kernel specialization in
+    `inverse_inplace_32_with_twiddles` with the existing normalized final-stage fusion preserved.
+  - Shifted f32 general-stage loop start from `len=16, base=7` to `len=32, base=15` where
+    Stage-4 specialization applies.
+
+#### Verification
+- `cargo test --workspace --release`: all workspace unit tests and doc tests passed.
+- `D:/miniforge3/python.exe tests/benchmark_vs_numpy.py` (from `crates/apollo-python`):
+  all Apollo-vs-NumPy output comparisons passed.
+
+---
+
+## [0.13.26] — Closure LXV
+
+### Closure LXV — true radix kernels and initial GPU radix-4 execution path [minor]
+
+#### Changed
+- `apollo-fft`:
+  - Implemented true Cooley-Tukey radix kernels for `radix4`, `radix16`, `radix32`, and `radix64`.
+  - Kept higher-radix kernels available as explicit APIs while preserving production routing safety.
+- `apollo-fft-wgpu`:
+  - Added GPU radix-4 execution metadata, planner/pipeline integration, dispatch handling, and
+    WGSL radix-4 shader entry points.
+
+#### Verification
+- `cargo test -p apollo-fft --release`: passed.
+- `cargo test -p apollo-fft-wgpu --release`: passed.
+- `cargo bench -p apollo-fft --bench kernel_strategy`: post-change measurements collected.
+- Python Apollo-vs-NumPy parity benchmark: all output comparisons passed.
+
+---
+
 ## [0.13.25] — Closure LXIV
 
 ### Closure LXIV — apollo-dht: reuse multidimensional lane buffers per plan [patch]

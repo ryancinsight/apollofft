@@ -58,6 +58,8 @@ pub struct RadixStages {
     pub fft_m: u32,
     /// Number of batched transforms executed by this stage set.
     pub batch_count: u32,
+    /// Whether this stage set dispatches true radix-4 kernels.
+    pub radix4: bool,
 }
 
 impl RadixStages {
@@ -68,6 +70,7 @@ impl RadixStages {
             bgs: Vec::new(),
             fft_m: 0,
             batch_count: 0,
+            radix4: false,
         }
     }
 
@@ -117,6 +120,58 @@ impl RadixStages {
             bgs,
             fft_m,
             batch_count,
+            radix4: false,
+        }
+    }
+
+    /// Precompute all parameter buffers and bind groups for a radix-4 pass.
+    pub fn precompute_radix4(
+        device: &wgpu::Device,
+        params_layout: &wgpu::BindGroupLayout,
+        fft_m: u32,
+        batch_count: u32,
+        inverse: bool,
+    ) -> Self {
+        use wgpu::util::DeviceExt;
+        debug_assert!(fft_m.is_power_of_two() && (fft_m.trailing_zeros() % 2 == 0));
+        let inv_flag = u32::from(inverse);
+        let log4_m = (fft_m.trailing_zeros() / 2) as usize;
+        let stage_count = 1 + log4_m + usize::from(inverse);
+        let mut param_bufs = Vec::with_capacity(stage_count);
+        let mut bgs = Vec::with_capacity(stage_count);
+
+        let mut push_stage = |data: [u32; 4]| {
+            let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("apollo-fft-wgpu radix4 params"),
+                contents: bytemuck::cast_slice(&data),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("apollo-fft-wgpu radix4 params bg"),
+                layout: params_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buf.as_entire_binding(),
+                }],
+            });
+            param_bufs.push(buf);
+            bg
+        };
+
+        bgs.push(push_stage([fft_m, 0, inv_flag, batch_count]));
+        for stage in 0..log4_m as u32 {
+            bgs.push(push_stage([fft_m, stage, inv_flag, batch_count]));
+        }
+        if inverse {
+            bgs.push(push_stage([fft_m, 0, 1, batch_count]));
+        }
+
+        Self {
+            _param_bufs: param_bufs,
+            bgs,
+            fft_m,
+            batch_count,
+            radix4: true,
         }
     }
 }

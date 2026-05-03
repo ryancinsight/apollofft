@@ -574,11 +574,61 @@ pub fn forward_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
             }
         }
     }
-    // General stages: len = 16, 32, …, n. base=7 (stages 1-3: 1+2+4=7 twiddle entries consumed).
+    // Stage 4 (len=16): W_16^j for j=0..7. Compile-time constants from 16th roots of unity.
+    // Proof: W_16^j = exp(-2πi·j/16). Savings over general twiddle-table path:
+    //   j=0: 1+0i (no-op, already handled); j=4: (0,−1)=−i (0 real mults, swap+negate only);
+    //   j=2=(C,−C), j=6=(−C,−C) where C=1/√2 (2 real mults each vs 4 general);
+    //   j=1=(C8,−S8), j=3=(S8,−C8), j=5=(−S8,−C8), j=7=(−C8,−S8) (4 real mults each).
+    // Net: 8 real multiplications per chunk eliminated; for N=16384 (1024 chunks): 8192 mults.
+    if n >= 16 {
+        const C: f64 = std::f64::consts::FRAC_1_SQRT_2; // cos(π/4) = 1/√2
+        const C8: f64 = 0.9238795325112867_f64; // cos(π/8)
+        const S8: f64 = 0.3826834323650898_f64; // sin(π/8)
+        for chunk in data.chunks_exact_mut(16) {
+            let (lo, hi) = chunk.split_at_mut(8);
+            // j=0: W_16^0 = 1+0i
+            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+            // j=1: W_16^1 = (C8,−S8) → tr=C8·v.re+S8·v.im, ti=C8·v.im−S8·v.re
+            { let u = lo[1]; let v = hi[1];
+              let tr = C8 * v.re + S8 * v.im; let ti = C8 * v.im - S8 * v.re;
+              lo[1] = Complex64::new(u.re + tr, u.im + ti);
+              hi[1] = Complex64::new(u.re - tr, u.im - ti); }
+            // j=2: W_16^2 = (C,−C) → tr=C(v.re+v.im), ti=C(v.im−v.re)
+            { let u = lo[2]; let v = hi[2];
+              let tr = C * (v.re + v.im); let ti = C * (v.im - v.re);
+              lo[2] = Complex64::new(u.re + tr, u.im + ti);
+              hi[2] = Complex64::new(u.re - tr, u.im - ti); }
+            // j=3: W_16^3 = (S8,−C8) → tr=S8·v.re+C8·v.im, ti=S8·v.im−C8·v.re
+            { let u = lo[3]; let v = hi[3];
+              let tr = S8 * v.re + C8 * v.im; let ti = S8 * v.im - C8 * v.re;
+              lo[3] = Complex64::new(u.re + tr, u.im + ti);
+              hi[3] = Complex64::new(u.re - tr, u.im - ti); }
+            // j=4: W_16^4 = (0,−1) = −i → tr=v.im, ti=−v.re (zero multiplications)
+            { let u = lo[4]; let v = hi[4];
+              lo[4] = Complex64::new(u.re + v.im, u.im - v.re);
+              hi[4] = Complex64::new(u.re - v.im, u.im + v.re); }
+            // j=5: W_16^5 = (−S8,−C8) → tr=−S8·v.re+C8·v.im, ti=−S8·v.im−C8·v.re
+            { let u = lo[5]; let v = hi[5];
+              let tr = -S8 * v.re + C8 * v.im; let ti = -S8 * v.im - C8 * v.re;
+              lo[5] = Complex64::new(u.re + tr, u.im + ti);
+              hi[5] = Complex64::new(u.re - tr, u.im - ti); }
+            // j=6: W_16^6 = (−C,−C) → tr=C(v.im−v.re), ti=−C(v.re+v.im)
+            { let u = lo[6]; let v = hi[6];
+              let tr = C * (v.im - v.re); let ti = -C * (v.re + v.im);
+              lo[6] = Complex64::new(u.re + tr, u.im + ti);
+              hi[6] = Complex64::new(u.re - tr, u.im - ti); }
+            // j=7: W_16^7 = (−C8,−S8) → tr=−C8·v.re+S8·v.im, ti=−C8·v.im−S8·v.re
+            { let u = lo[7]; let v = hi[7];
+              let tr = -C8 * v.re + S8 * v.im; let ti = -C8 * v.im - S8 * v.re;
+              lo[7] = Complex64::new(u.re + tr, u.im + ti);
+              hi[7] = Complex64::new(u.re - tr, u.im - ti); }
+        }
+    }
+    // General stages: len = 32, 64, …, n. base=15 (stages 1-4: 1+2+4+8=15 entries consumed).
     // split_at_mut exposes non-aliasing of lo/hi to LLVM, enabling
     // autovectorization of the j-loop across butterfly pairs.
-    let mut len = 16usize;
-    let mut base = 7usize;
+    let mut len = 32usize;
+    let mut base = 15usize;
     while len <= n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
@@ -679,8 +729,56 @@ pub fn inverse_inplace_unnorm_64_with_twiddles(data: &mut [Complex64], twiddles:
             }
         }
     }
-    let mut len = 16usize;
-    let mut base = 7usize;
+    // Stage 4 (len=16): inverse W_16^j = exp(+2πi·j/16) constants.
+    // Savings: j=4=(0,+1)=+i (0 mults); j=2=(C,+C), j=6=(−C,+C) (2 mults each);
+    // j=1=(C8,+S8), j=3=(S8,+C8), j=5=(−S8,+C8), j=7=(−C8,+S8) (4 mults each).
+    // Net: 8 real multiplications per chunk eliminated.
+    if n >= 16 {
+        const C: f64 = std::f64::consts::FRAC_1_SQRT_2;
+        const C8: f64 = 0.9238795325112867_f64; // cos(π/8)
+        const S8: f64 = 0.3826834323650898_f64; // sin(π/8)
+        for chunk in data.chunks_exact_mut(16) {
+            let (lo, hi) = chunk.split_at_mut(8);
+            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+            // j=1: (C8,+S8) → tr=C8·v.re−S8·v.im, ti=C8·v.im+S8·v.re
+            { let u = lo[1]; let v = hi[1];
+              let tr = C8 * v.re - S8 * v.im; let ti = C8 * v.im + S8 * v.re;
+              lo[1] = Complex64::new(u.re + tr, u.im + ti);
+              hi[1] = Complex64::new(u.re - tr, u.im - ti); }
+            // j=2: (C,+C) → tr=C(v.re−v.im), ti=C(v.re+v.im)
+            { let u = lo[2]; let v = hi[2];
+              let tr = C * (v.re - v.im); let ti = C * (v.re + v.im);
+              lo[2] = Complex64::new(u.re + tr, u.im + ti);
+              hi[2] = Complex64::new(u.re - tr, u.im - ti); }
+            // j=3: (S8,+C8) → tr=S8·v.re−C8·v.im, ti=S8·v.im+C8·v.re
+            { let u = lo[3]; let v = hi[3];
+              let tr = S8 * v.re - C8 * v.im; let ti = S8 * v.im + C8 * v.re;
+              lo[3] = Complex64::new(u.re + tr, u.im + ti);
+              hi[3] = Complex64::new(u.re - tr, u.im - ti); }
+            // j=4: (0,+1)=+i → tr=−v.im, ti=v.re (zero multiplications)
+            { let u = lo[4]; let v = hi[4];
+              lo[4] = Complex64::new(u.re - v.im, u.im + v.re);
+              hi[4] = Complex64::new(u.re + v.im, u.im - v.re); }
+            // j=5: (−S8,+C8) → tr=−S8·v.re−C8·v.im, ti=C8·v.re−S8·v.im
+            { let u = lo[5]; let v = hi[5];
+              let tr = -S8 * v.re - C8 * v.im; let ti = C8 * v.re - S8 * v.im;
+              lo[5] = Complex64::new(u.re + tr, u.im + ti);
+              hi[5] = Complex64::new(u.re - tr, u.im - ti); }
+            // j=6: (−C,+C) → tr=−C(v.re+v.im), ti=C(v.re−v.im)
+            { let u = lo[6]; let v = hi[6];
+              let tr = -C * (v.re + v.im); let ti = C * (v.re - v.im);
+              lo[6] = Complex64::new(u.re + tr, u.im + ti);
+              hi[6] = Complex64::new(u.re - tr, u.im - ti); }
+            // j=7: (−C8,+S8) → tr=−C8·v.re−S8·v.im, ti=S8·v.re−C8·v.im
+            { let u = lo[7]; let v = hi[7];
+              let tr = -C8 * v.re - S8 * v.im; let ti = S8 * v.re - C8 * v.im;
+              lo[7] = Complex64::new(u.re + tr, u.im + ti);
+              hi[7] = Complex64::new(u.re - tr, u.im - ti); }
+        }
+    }
+    // General stages: len = 32, 64, …, n. base=15 (stages 1-4: 1+2+4+8=15 entries consumed).
+    let mut len = 32usize;
+    let mut base = 15usize;
     while len <= n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
@@ -836,9 +934,48 @@ pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
             }
         }
     }
-    // General intermediate stages: len=16, 32, …, n/2. base=7 (stages 1-3: 1+2+4=7 entries).
-    let mut len = 16usize;
-    let mut base = 7usize;
+    // Stage 4 (len=16): inverse W_16^j constants (positive exponent), same as unnorm inverse.
+    // Guard: only when n >= 32; for n=16 stage 4 is handled by the scale-fused final stage.
+    if n >= 32 {
+        const C: f64 = std::f64::consts::FRAC_1_SQRT_2;
+        const C8: f64 = 0.9238795325112867_f64; // cos(π/8)
+        const S8: f64 = 0.3826834323650898_f64; // sin(π/8)
+        for chunk in data.chunks_exact_mut(16) {
+            let (lo, hi) = chunk.split_at_mut(8);
+            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+            { let u = lo[1]; let v = hi[1];
+              let tr = C8 * v.re - S8 * v.im; let ti = C8 * v.im + S8 * v.re;
+              lo[1] = Complex64::new(u.re + tr, u.im + ti);
+              hi[1] = Complex64::new(u.re - tr, u.im - ti); }
+            { let u = lo[2]; let v = hi[2];
+              let tr = C * (v.re - v.im); let ti = C * (v.re + v.im);
+              lo[2] = Complex64::new(u.re + tr, u.im + ti);
+              hi[2] = Complex64::new(u.re - tr, u.im - ti); }
+            { let u = lo[3]; let v = hi[3];
+              let tr = S8 * v.re - C8 * v.im; let ti = S8 * v.im + C8 * v.re;
+              lo[3] = Complex64::new(u.re + tr, u.im + ti);
+              hi[3] = Complex64::new(u.re - tr, u.im - ti); }
+            { let u = lo[4]; let v = hi[4];
+              lo[4] = Complex64::new(u.re - v.im, u.im + v.re);
+              hi[4] = Complex64::new(u.re + v.im, u.im - v.re); }
+            { let u = lo[5]; let v = hi[5];
+              let tr = -S8 * v.re - C8 * v.im; let ti = C8 * v.re - S8 * v.im;
+              lo[5] = Complex64::new(u.re + tr, u.im + ti);
+              hi[5] = Complex64::new(u.re - tr, u.im - ti); }
+            { let u = lo[6]; let v = hi[6];
+              let tr = -C * (v.re + v.im); let ti = C * (v.re - v.im);
+              lo[6] = Complex64::new(u.re + tr, u.im + ti);
+              hi[6] = Complex64::new(u.re - tr, u.im - ti); }
+            { let u = lo[7]; let v = hi[7];
+              let tr = -C8 * v.re - S8 * v.im; let ti = S8 * v.re - C8 * v.im;
+              lo[7] = Complex64::new(u.re + tr, u.im + ti);
+              hi[7] = Complex64::new(u.re - tr, u.im - ti); }
+        }
+    }
+    // General intermediate stages. base/len start past stage 4 if specialized;
+    // for n=16 (stage 4 = final stage with scale fusion), use base=7/len=16.
+    let mut len = if n >= 32 { 32usize } else { 16usize };
+    let mut base = if n >= 32 { 15usize } else { 7usize };
     while len < n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
@@ -954,8 +1091,46 @@ pub fn forward_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
             }
         }
     }
-    let mut len = 16usize;
-    let mut base = 7usize;
+        // Stage 4 (len=16) f32: W_16^j for j=0..7. Compile-time constants.
+        // Same structure as the f64 stage-4 specialization, adapted to f32.
+        if n >= 16 {
+                const C: f32 = std::f32::consts::FRAC_1_SQRT_2; // cos(π/4)
+                const C8: f32 = 0.9238795_f32; // cos(π/8)
+                const S8: f32 = 0.38268343_f32; // sin(π/8)
+                for chunk in data.chunks_exact_mut(16) {
+                        let (lo, hi) = chunk.split_at_mut(8);
+                        { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+                        { let u = lo[1]; let v = hi[1];
+                            let tr = C8 * v.re + S8 * v.im; let ti = C8 * v.im - S8 * v.re;
+                            lo[1] = Complex32::new(u.re + tr, u.im + ti);
+                            hi[1] = Complex32::new(u.re - tr, u.im - ti); }
+                        { let u = lo[2]; let v = hi[2];
+                            let tr = C * (v.re + v.im); let ti = C * (v.im - v.re);
+                            lo[2] = Complex32::new(u.re + tr, u.im + ti);
+                            hi[2] = Complex32::new(u.re - tr, u.im - ti); }
+                        { let u = lo[3]; let v = hi[3];
+                            let tr = S8 * v.re + C8 * v.im; let ti = S8 * v.im - C8 * v.re;
+                            lo[3] = Complex32::new(u.re + tr, u.im + ti);
+                            hi[3] = Complex32::new(u.re - tr, u.im - ti); }
+                        { let u = lo[4]; let v = hi[4];
+                            lo[4] = Complex32::new(u.re + v.im, u.im - v.re);
+                            hi[4] = Complex32::new(u.re - v.im, u.im + v.re); }
+                        { let u = lo[5]; let v = hi[5];
+                            let tr = -S8 * v.re + C8 * v.im; let ti = -S8 * v.im - C8 * v.re;
+                            lo[5] = Complex32::new(u.re + tr, u.im + ti);
+                            hi[5] = Complex32::new(u.re - tr, u.im - ti); }
+                        { let u = lo[6]; let v = hi[6];
+                            let tr = C * (v.im - v.re); let ti = -C * (v.re + v.im);
+                            lo[6] = Complex32::new(u.re + tr, u.im + ti);
+                            hi[6] = Complex32::new(u.re - tr, u.im - ti); }
+                        { let u = lo[7]; let v = hi[7];
+                            let tr = -C8 * v.re + S8 * v.im; let ti = -C8 * v.im - S8 * v.re;
+                            lo[7] = Complex32::new(u.re + tr, u.im + ti);
+                            hi[7] = Complex32::new(u.re - tr, u.im - ti); }
+                }
+        }
+        let mut len = 32usize;
+        let mut base = 15usize;
     while len <= n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
@@ -1052,8 +1227,45 @@ pub fn inverse_inplace_unnorm_32_with_twiddles(data: &mut [Complex32], twiddles:
             }
         }
     }
-    let mut len = 16usize;
-    let mut base = 7usize;
+        // Stage 4 (len=16) inverse f32: W_16^j = exp(+2πi·j/16) constants.
+        if n >= 16 {
+                const C: f32 = std::f32::consts::FRAC_1_SQRT_2;
+                const C8: f32 = 0.9238795_f32;
+                const S8: f32 = 0.38268343_f32;
+                for chunk in data.chunks_exact_mut(16) {
+                        let (lo, hi) = chunk.split_at_mut(8);
+                        { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+                        { let u = lo[1]; let v = hi[1];
+                            let tr = C8 * v.re - S8 * v.im; let ti = C8 * v.im + S8 * v.re;
+                            lo[1] = Complex32::new(u.re + tr, u.im + ti);
+                            hi[1] = Complex32::new(u.re - tr, u.im - ti); }
+                        { let u = lo[2]; let v = hi[2];
+                            let tr = C * (v.re - v.im); let ti = C * (v.re + v.im);
+                            lo[2] = Complex32::new(u.re + tr, u.im + ti);
+                            hi[2] = Complex32::new(u.re - tr, u.im - ti); }
+                        { let u = lo[3]; let v = hi[3];
+                            let tr = S8 * v.re - C8 * v.im; let ti = S8 * v.im + C8 * v.re;
+                            lo[3] = Complex32::new(u.re + tr, u.im + ti);
+                            hi[3] = Complex32::new(u.re - tr, u.im - ti); }
+                        { let u = lo[4]; let v = hi[4];
+                            lo[4] = Complex32::new(u.re - v.im, u.im + v.re);
+                            hi[4] = Complex32::new(u.re + v.im, u.im - v.re); }
+                        { let u = lo[5]; let v = hi[5];
+                            let tr = -S8 * v.re - C8 * v.im; let ti = C8 * v.re - S8 * v.im;
+                            lo[5] = Complex32::new(u.re + tr, u.im + ti);
+                            hi[5] = Complex32::new(u.re - tr, u.im - ti); }
+                        { let u = lo[6]; let v = hi[6];
+                            let tr = -C * (v.re + v.im); let ti = C * (v.re - v.im);
+                            lo[6] = Complex32::new(u.re + tr, u.im + ti);
+                            hi[6] = Complex32::new(u.re - tr, u.im - ti); }
+                        { let u = lo[7]; let v = hi[7];
+                            let tr = -C8 * v.re - S8 * v.im; let ti = S8 * v.re - C8 * v.im;
+                            lo[7] = Complex32::new(u.re + tr, u.im + ti);
+                            hi[7] = Complex32::new(u.re - tr, u.im - ti); }
+                }
+        }
+        let mut len = 32usize;
+        let mut base = 15usize;
     while len <= n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
@@ -1205,9 +1417,47 @@ pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
             }
         }
     }
-    // General intermediate stages: len=16, 32, …, n/2. base=7 (stages 1-3: 1+2+4=7 entries).
-    let mut len = 16usize;
-    let mut base = 7usize;
+        // Stage 4 (len=16) inverse f32 constants.
+        // Guard: only when n >= 32; for n=16 this stage is fused with final scaling.
+        if n >= 32 {
+                const C: f32 = std::f32::consts::FRAC_1_SQRT_2;
+                const C8: f32 = 0.9238795_f32;
+                const S8: f32 = 0.38268343_f32;
+                for chunk in data.chunks_exact_mut(16) {
+                        let (lo, hi) = chunk.split_at_mut(8);
+                        { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+                        { let u = lo[1]; let v = hi[1];
+                            let tr = C8 * v.re - S8 * v.im; let ti = C8 * v.im + S8 * v.re;
+                            lo[1] = Complex32::new(u.re + tr, u.im + ti);
+                            hi[1] = Complex32::new(u.re - tr, u.im - ti); }
+                        { let u = lo[2]; let v = hi[2];
+                            let tr = C * (v.re - v.im); let ti = C * (v.re + v.im);
+                            lo[2] = Complex32::new(u.re + tr, u.im + ti);
+                            hi[2] = Complex32::new(u.re - tr, u.im - ti); }
+                        { let u = lo[3]; let v = hi[3];
+                            let tr = S8 * v.re - C8 * v.im; let ti = S8 * v.im + C8 * v.re;
+                            lo[3] = Complex32::new(u.re + tr, u.im + ti);
+                            hi[3] = Complex32::new(u.re - tr, u.im - ti); }
+                        { let u = lo[4]; let v = hi[4];
+                            lo[4] = Complex32::new(u.re - v.im, u.im + v.re);
+                            hi[4] = Complex32::new(u.re + v.im, u.im - v.re); }
+                        { let u = lo[5]; let v = hi[5];
+                            let tr = -S8 * v.re - C8 * v.im; let ti = C8 * v.re - S8 * v.im;
+                            lo[5] = Complex32::new(u.re + tr, u.im + ti);
+                            hi[5] = Complex32::new(u.re - tr, u.im - ti); }
+                        { let u = lo[6]; let v = hi[6];
+                            let tr = -C * (v.re + v.im); let ti = C * (v.re - v.im);
+                            lo[6] = Complex32::new(u.re + tr, u.im + ti);
+                            hi[6] = Complex32::new(u.re - tr, u.im - ti); }
+                        { let u = lo[7]; let v = hi[7];
+                            let tr = -C8 * v.re - S8 * v.im; let ti = S8 * v.re - C8 * v.im;
+                            lo[7] = Complex32::new(u.re + tr, u.im + ti);
+                            hi[7] = Complex32::new(u.re - tr, u.im - ti); }
+                }
+        }
+        // General intermediate stages. Start after stage 4 when specialized.
+        let mut len = if n >= 32 { 32usize } else { 16usize };
+        let mut base = if n >= 32 { 15usize } else { 7usize };
     while len < n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];

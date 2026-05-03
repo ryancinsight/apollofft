@@ -1,8 +1,11 @@
-//! Criterion benchmarks for Apollo FFT kernel strategies (direct, radix-2, Bluestein).
+//! Criterion benchmarks for Apollo FFT kernel strategies.
 
 #![allow(missing_docs)]
 
-use apollo_fft::application::execution::kernel::{bluestein, direct, radix2};
+use apollo_fft::application::execution::kernel::{
+    bluestein, direct, fft_forward_64, mixed_radix, radix16, radix2, radix32, radix4, radix64,
+    radix8,
+};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
 
@@ -16,22 +19,24 @@ fn signal(len: usize) -> Vec<Complex64> {
         .collect()
 }
 
-/// Benchmark direct-DFT, radix-2, and Bluestein kernel strategies across power-of-two and non-power-of-two lengths.
+/// Benchmark direct-DFT, radix strategies, mixed-radix, auto-selector and Bluestein.
 fn bench_fft_kernels(c: &mut Criterion) {
     let mut group = c.benchmark_group("fft_kernel_strategy");
 
-    for len in [32usize, 64, 128] {
+    for len in [16usize, 32, 64, 128, 256] {
         let input = signal(len);
-        group.bench_with_input(
-            BenchmarkId::new("direct_dft", len),
-            &input,
-            |bench, input| {
-                bench.iter(|| {
-                    let output = direct::dft_forward_64(black_box(input));
-                    black_box(output);
-                });
-            },
-        );
+        if len <= 128 {
+            group.bench_with_input(
+                BenchmarkId::new("direct_dft", len),
+                &input,
+                |bench, input| {
+                    bench.iter(|| {
+                        let output = direct::dft_forward_64(black_box(input));
+                        black_box(output);
+                    });
+                },
+            );
+        }
 
         group.bench_with_input(
             BenchmarkId::new("radix2_inplace", len),
@@ -40,6 +45,96 @@ fn bench_fft_kernels(c: &mut Criterion) {
                 bench.iter(|| {
                     let mut data = input.clone();
                     radix2::forward_inplace_64(black_box(&mut data));
+                    black_box(data);
+                });
+            },
+        );
+
+        if len.is_power_of_two() && (len.trailing_zeros() % 2 == 0) {
+            group.bench_with_input(
+                BenchmarkId::new("radix4_inplace", len),
+                &input,
+                |bench, input| {
+                    bench.iter(|| {
+                        let mut data = input.clone();
+                        radix4::forward_inplace_64(black_box(&mut data));
+                        black_box(data);
+                    });
+                },
+            );
+        }
+        if len.is_power_of_two() && (len.trailing_zeros() % 3 == 0) {
+            group.bench_with_input(
+                BenchmarkId::new("radix8_inplace", len),
+                &input,
+                |bench, input| {
+                    bench.iter(|| {
+                        let mut data = input.clone();
+                        radix8::forward_inplace_64(black_box(&mut data));
+                        black_box(data);
+                    });
+                },
+            );
+        }
+        if len.is_power_of_two() && (len.trailing_zeros() % 4 == 0) {
+            group.bench_with_input(
+                BenchmarkId::new("radix16_inplace", len),
+                &input,
+                |bench, input| {
+                    bench.iter(|| {
+                        let mut data = input.clone();
+                        radix16::forward_inplace_64(black_box(&mut data));
+                        black_box(data);
+                    });
+                },
+            );
+        }
+        if len.is_power_of_two() && (len.trailing_zeros() % 5 == 0) {
+            group.bench_with_input(
+                BenchmarkId::new("radix32_inplace", len),
+                &input,
+                |bench, input| {
+                    bench.iter(|| {
+                        let mut data = input.clone();
+                        radix32::forward_inplace_64(black_box(&mut data));
+                        black_box(data);
+                    });
+                },
+            );
+        }
+        if len.is_power_of_two() && (len.trailing_zeros() % 6 == 0) {
+            group.bench_with_input(
+                BenchmarkId::new("radix64_inplace", len),
+                &input,
+                |bench, input| {
+                    bench.iter(|| {
+                        let mut data = input.clone();
+                        radix64::forward_inplace_64(black_box(&mut data));
+                        black_box(data);
+                    });
+                },
+            );
+        }
+
+        group.bench_with_input(
+            BenchmarkId::new("mixed_radix_inplace", len),
+            &input,
+            |bench, input| {
+                bench.iter(|| {
+                    let mut data = input.clone();
+                    mixed_radix::forward_inplace_64(black_box(&mut data));
+                    black_box(data);
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("auto_selector", len),
+            &input,
+            |bench, input| {
+                bench.iter(|| {
+                    let mut data = input.clone();
+                    fft_forward_64(black_box(&mut data));
                     black_box(data);
                 });
             },

@@ -57,6 +57,45 @@ impl GpuFft3d {
             return;
         }
 
+        if stages.radix4 {
+            let bitrev_total = stages.batch_count * stages.fft_m;
+            let butterfly_total = stages.batch_count * (stages.fft_m / 4);
+
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("apollo-fft-wgpu radix4 bitrev pass"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&self.bitrev_radix4_pipeline);
+                pass.set_bind_group(0, &self.data_bg, &[]);
+                pass.set_bind_group(1, &stages.bgs[0], &[]);
+                pass.dispatch_workgroups(bitrev_total.div_ceil(256), 1, 1);
+            }
+
+            for stage_idx in 0..(stages.fft_m.trailing_zeros() as usize / 2) {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("apollo-fft-wgpu radix4 butterfly pass"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&self.forward_radix4_pipeline);
+                pass.set_bind_group(0, &self.data_bg, &[]);
+                pass.set_bind_group(1, &stages.bgs[1 + stage_idx], &[]);
+                pass.dispatch_workgroups(butterfly_total.div_ceil(256), 1, 1);
+            }
+
+            if stages.bgs.len() > 1 + (stages.fft_m.trailing_zeros() as usize / 2) {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("apollo-fft-wgpu radix4 scale pass"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&self.scale_pipeline);
+                pass.set_bind_group(0, &self.data_bg, &[]);
+                pass.set_bind_group(1, stages.bgs.last().unwrap(), &[]);
+                pass.dispatch_workgroups(bitrev_total.div_ceil(256), 1, 1);
+            }
+            return;
+        }
+
         let bitrev_total = stages.batch_count * stages.fft_m;
         let butterfly_total = stages.batch_count * (stages.fft_m / 2);
 
