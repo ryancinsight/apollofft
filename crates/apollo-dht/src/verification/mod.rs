@@ -188,6 +188,32 @@ mod tests {
         assert!(err < 1.0e-10, "fast DHT mismatch vs direct kernel: err={err}");
     }
 
+    #[test]
+    fn fast_wrapper_matches_direct_hartley_output() {
+        use crate::infrastructure::kernel::direct::transform_real;
+        use crate::infrastructure::kernel::fast::dht_fast;
+
+        let n = 512usize;
+        let signal: Vec<f64> = (0..n)
+            .map(|i| (i as f64 * 0.137).cos() - 0.5 * (i as f64 * 0.041).sin())
+            .collect();
+        let mut got = vec![0.0; n];
+        let mut expected = vec![0.0; n];
+
+        dht_fast(&signal, &mut got);
+        transform_real(&signal, &mut expected).expect("direct hartley");
+
+        let err = got
+            .iter()
+            .zip(expected.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f64, f64::max);
+        assert!(
+            err < 1.0e-10,
+            "fast wrapper mismatch vs direct kernel: err={err}"
+        );
+    }
+
     proptest! {
         /// Serial-range roundtrip: for n in [2,16], DHT inverse recovers the signal.
         #[test]

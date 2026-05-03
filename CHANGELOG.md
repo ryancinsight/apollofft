@@ -11,6 +11,22 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.21] — Closure LX
+
+### Closure LX — apollo-dht: remove redundant fast-wrapper scratch initialization [patch]
+
+#### Changed
+- `apollo-dht` / `infrastructure/kernel/fast.rs`: `dht_fast` now allocates an uninitialized-value-equivalent
+  zeroed complex scratch buffer once and delegates population to `dht_fast_with_scratch`, removing the
+  previous redundant pass that built `Complex64 { re: x, im: 0.0 }` for every sample before rewriting every slot.
+
+#### Verification
+- Added explicit wrapper-level output comparison coverage: the standalone `dht_fast` path is now checked
+  directly against the independent O(N²) Hartley kernel at `N=512`.
+- `cargo test -p apollo-dht`: 21 passed, 0 failed.
+
+---
+
 ## [0.13.20] — Closure LIX
 
 ### Closure LIX — apollo-dht: remove full-result allocation from caller-owned 2D/3D APIs [patch]

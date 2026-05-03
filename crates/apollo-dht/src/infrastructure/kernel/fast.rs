@@ -37,9 +37,6 @@ pub fn dht_fast(signal: &[f64], output: &mut [f64]) {
         return;
     }
 
-    let mut scratch: Vec<Complex64> = signal
-        .iter()
-        .map(|&x| Complex64::new(x, 0.0))
-        .collect();
+    let mut scratch = vec![Complex64::default(); n];
     dht_fast_with_scratch(signal, output, &mut scratch);
 }
