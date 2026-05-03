@@ -117,21 +117,26 @@ impl DhtPlan {
         }
         // Row pass.
         let mut tmp = Array2::<f64>::zeros((n, n));
-        let mut buf = vec![0.0_f64; n];
+        let mut lane_in = vec![0.0_f64; n];
+        let mut lane_out = vec![0.0_f64; n];
         for r in 0..n {
-            let row: Vec<f64> = input.row(r).iter().copied().collect();
-            self.forward_into(&row, &mut buf)?;
             for c in 0..n {
-                tmp[[r, c]] = buf[c];
+                lane_in[c] = input[[r, c]];
+            }
+            self.forward_into(&lane_in, &mut lane_out)?;
+            for c in 0..n {
+                tmp[[r, c]] = lane_out[c];
             }
         }
         // Column pass.
         let mut result = Array2::<f64>::zeros((n, n));
         for c in 0..n {
-            let col: Vec<f64> = tmp.column(c).iter().copied().collect();
-            self.forward_into(&col, &mut buf)?;
             for r in 0..n {
-                result[[r, c]] = buf[r];
+                lane_in[r] = tmp[[r, c]];
+            }
+            self.forward_into(&lane_in, &mut lane_out)?;
+            for r in 0..n {
+                result[[r, c]] = lane_out[r];
             }
         }
         Ok(result)
@@ -179,15 +184,18 @@ impl DhtPlan {
                 d2,
             });
         }
-        let mut buf = vec![0.0_f64; n];
+        let mut lane_in = vec![0.0_f64; n];
+        let mut lane_out = vec![0.0_f64; n];
         // Axis-0 pass.
         let mut tmp0 = Array3::<f64>::zeros((n, n, n));
         for j in 0..n {
             for k in 0..n {
-                let fiber: Vec<f64> = (0..n).map(|i| input[[i, j, k]]).collect();
-                self.forward_into(&fiber, &mut buf)?;
                 for i in 0..n {
-                    tmp0[[i, j, k]] = buf[i];
+                    lane_in[i] = input[[i, j, k]];
+                }
+                self.forward_into(&lane_in, &mut lane_out)?;
+                for i in 0..n {
+                    tmp0[[i, j, k]] = lane_out[i];
                 }
             }
         }
@@ -195,10 +203,12 @@ impl DhtPlan {
         let mut tmp1 = Array3::<f64>::zeros((n, n, n));
         for i in 0..n {
             for k in 0..n {
-                let fiber: Vec<f64> = (0..n).map(|j| tmp0[[i, j, k]]).collect();
-                self.forward_into(&fiber, &mut buf)?;
                 for j in 0..n {
-                    tmp1[[i, j, k]] = buf[j];
+                    lane_in[j] = tmp0[[i, j, k]];
+                }
+                self.forward_into(&lane_in, &mut lane_out)?;
+                for j in 0..n {
+                    tmp1[[i, j, k]] = lane_out[j];
                 }
             }
         }
@@ -206,10 +216,12 @@ impl DhtPlan {
         let mut result = Array3::<f64>::zeros((n, n, n));
         for i in 0..n {
             for j in 0..n {
-                let fiber: Vec<f64> = (0..n).map(|k| tmp1[[i, j, k]]).collect();
-                self.forward_into(&fiber, &mut buf)?;
                 for k in 0..n {
-                    result[[i, j, k]] = buf[k];
+                    lane_in[k] = tmp1[[i, j, k]];
+                }
+                self.forward_into(&lane_in, &mut lane_out)?;
+                for k in 0..n {
+                    result[[i, j, k]] = lane_out[k];
                 }
             }
         }

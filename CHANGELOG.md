@@ -11,6 +11,35 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.19] — Closure LVIII
+
+### Closure LVIII — apollo-dht: reuse 2D/3D lane buffers in separable plan passes [patch]
+
+#### Changed
+- `apollo-dht` / `application/execution/plan/dht.rs`: removed per-lane `Vec<f64>`
+  allocation in `forward_2d` and `forward_3d`.
+- 2D row/column passes now reuse two plan-local vectors per call:
+  - `lane_in` for gathering the current row or column
+  - `lane_out` for the transform result
+- 3D axis-0/1/2 passes now do the same for every fiber instead of allocating a fresh
+  `Vec<f64>` inside each nested loop.
+
+#### Memory and performance impact
+- Eliminates one heap allocation per 2D row and per 2D column transform.
+- Eliminates one heap allocation per 3D fiber transform on all three axes.
+- Combined with Closure LVII scratch reuse, large separable DHT passes now avoid both:
+  - repeated lane-buffer allocation at the plan layer
+  - repeated complex FFT scratch allocation in the fast 1D kernel path
+
+#### Verification
+- `cargo test -p apollo-dht`: 20 passed, 0 failed.
+- Existing output-comparison coverage remains green, including:
+  - direct Hartley parity at the fast threshold
+  - 2D separability known-value verification
+  - 2D and 3D inverse roundtrip recovery
+
+---
+
 ## [0.13.18] — Closure LVII
 
 ### Closure LVII — apollo-dht: reuse FFT scratch in fast Hartley plan path [patch]
