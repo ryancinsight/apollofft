@@ -35,7 +35,7 @@ fn chirp_premul(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let n_f = f32(local_idx);
-    let arg = PI * n_f * n_f / f32(params.n);
+    let arg = -PI * n_f * n_f / f32(params.n);
     let cos_arg = cos(arg);
     let sin_arg = sin(arg);
 
@@ -65,24 +65,32 @@ fn chirp_pointmul(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 @compute @workgroup_size(256, 1, 1)
 fn chirp_scale(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
+    let linear_idx = gid.x;
     let total = params.n * params.batch_count;
-    if idx >= total {
+    if linear_idx >= total {
         return;
     }
+    let row = linear_idx / params.n;
+    let local_idx = linear_idx % params.n;
+    let idx = row * params.m + local_idx;
+    let inv_n = 1.0 / f32(params.n);
+    data_re[idx] = data_re[idx] * inv_n;
+    data_im[idx] = data_im[idx] * inv_n;
 }
 
 @compute @workgroup_size(256, 1, 1)
 fn chirp_postmul(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
+    let linear_idx = gid.x;
     let total = params.n * params.batch_count;
-    if idx >= total {
+    if linear_idx >= total {
         return;
     }
-    let local_idx = idx % params.n;
+    let row = linear_idx / params.n;
+    let local_idx = linear_idx % params.n;
+    let idx = row * params.m + local_idx;
 
     let k_f = f32(local_idx);
-    let arg = PI * k_f * k_f / f32(params.n);
+    let arg = -PI * k_f * k_f / f32(params.n);
     let cos_arg = cos(arg);
     let sin_arg = sin(arg);
 
@@ -94,10 +102,13 @@ fn chirp_postmul(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 @compute @workgroup_size(256, 1, 1)
 fn chirp_negate_im(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
+    let linear_idx = gid.x;
     let total = params.n * params.batch_count;
-    if idx >= total {
+    if linear_idx >= total {
         return;
     }
+    let row = linear_idx / params.n;
+    let local_idx = linear_idx % params.n;
+    let idx = row * params.m + local_idx;
     data_im[idx] = -data_im[idx];
 }

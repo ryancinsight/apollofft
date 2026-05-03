@@ -30,8 +30,8 @@
 
 use crate::infrastructure::gpu_fft::pipeline::AxisPackStage;
 use crate::infrastructure::gpu_fft::strategy::{Axis, AxisStrategy, ChirpData, RadixStages};
-use apollo_fft::f16 as HalfF16;
-use ndarray::Array3;
+use apollo_fft::{f16 as HalfF16, fft_1d_complex_inplace, Complex64};
+use ndarray::{Array1, Array3};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
@@ -796,28 +796,25 @@ impl GpuFft3dF16Native {
         // Compute h[j] = exp(-πi j²/N) in f32, then narrow to f16.
         // The symmetric extension h[m-j] = h[j] for j=1..N-1 ensures the
         // circular convolution of length M produces the correct linear sum.
-        let mut h_re_f32 = vec![0.0_f32; m];
-        let mut h_im_f32 = vec![0.0_f32; m];
+        let mut h = Array1::<Complex64>::zeros(m);
         for idx in 0..n {
-            let arg = -std::f32::consts::PI * (idx * idx) as f32 / n as f32;
-            let re = arg.cos();
-            let im = arg.sin();
-            h_re_f32[idx] = re;
-            h_im_f32[idx] = im;
+            let arg = std::f32::consts::PI * (idx * idx) as f32 / n as f32;
+            let value = Complex64::new(arg.cos() as f64, arg.sin() as f64);
+            h[idx] = value;
             if idx > 0 {
-                h_re_f32[m - idx] = re;
-                h_im_f32[m - idx] = im;
+                h[m - idx] = value;
             }
         }
+        fft_1d_complex_inplace(&mut h);
 
         // Convert to f16 bit patterns (u16, little-endian).
-        let h_re_bits: Vec<u16> = h_re_f32
+        let h_re_bits: Vec<u16> = h
             .iter()
-            .map(|&v| HalfF16::from_f32(v).to_bits())
+            .map(|value| HalfF16::from_f32(value.re as f32).to_bits())
             .collect();
-        let h_im_bits: Vec<u16> = h_im_f32
+        let h_im_bits: Vec<u16> = h
             .iter()
-            .map(|&v| HalfF16::from_f32(v).to_bits())
+            .map(|value| HalfF16::from_f32(value.im as f32).to_bits())
             .collect();
 
         let h_fft_re = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -946,11 +943,11 @@ impl GpuFft3dF16Native {
     ///   1. chirp_premul  — a[n] = x[n]·exp(+πi n²/N), zero-pad n≥N
     ///   2. radix2_fwd    — M-point forward FFT of padded sequence
     ///   3. chirp_pointmul — pointwise multiply with H = precomputed FFT(h)
-    ///   4. radix2_inv    — M-point inverse FFT (includes 1/M from fft_scale)
+    ///   4. radix2_inv    — M-point inverse FFT (includes convolution 1/M)
     ///   5. chirp_postmul — X[k] *= exp(+πi k²/N)
     ///
     /// Inverse (inverse=true): additionally negate_im (between premul and
-    /// radix2_fwd) and scale (no-op) after postmul.
+    /// radix2_fwd) and scale by `1/N` after postmul.
     fn dispatch_chirp_f16(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -964,7 +961,18 @@ impl GpuFft3dF16Native {
         let premul_total = chirp.m * chirp.batch_count;
         let postmul_total = chirp.n * chirp.batch_count;
 
-        // Step 1: premultiply (a[n] = x[n]·exp(+πi n²/N), zero padding n≥N).
+        if inverse {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollo-fft-wgpu f16 chirp pre-conjugate"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&chirp.negate_im_pipeline);
+            pass.set_bind_group(0, &chirp.data_chirp_bg, &[]);
+            pass.set_bind_group(1, &chirp.params_bg, &[]);
+            pass.dispatch_workgroups(postmul_total.div_ceil(256), 1, 1);
+        }
+
+        // Step 1: premultiply (a[n] = x[n]·exp(-πi n²/N), zero padding n≥N).
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("apollo-fft-wgpu f16 chirp premul"),
@@ -974,18 +982,6 @@ impl GpuFft3dF16Native {
             pass.set_bind_group(0, &chirp.data_chirp_bg, &[]);
             pass.set_bind_group(1, &chirp.params_bg, &[]);
             pass.dispatch_workgroups(premul_total.div_ceil(256), 1, 1);
-        }
-
-        // For inverse: conjugate by negating imaginary component.
-        if inverse {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("apollo-fft-wgpu f16 chirp negate_im"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&chirp.negate_im_pipeline);
-            pass.set_bind_group(0, &chirp.data_chirp_bg, &[]);
-            pass.set_bind_group(1, &chirp.params_bg, &[]);
-            pass.dispatch_workgroups(postmul_total.div_ceil(256), 1, 1);
         }
 
         // Step 2: forward radix-2 FFT of padded sequence (uses self.data_bg).
@@ -1003,7 +999,7 @@ impl GpuFft3dF16Native {
             pass.dispatch_workgroups(premul_total.div_ceil(256), 1, 1);
         }
 
-        // Step 4: inverse radix-2 FFT (1/M normalization applied by fft_scale).
+        // Step 4: inverse radix-2 FFT applies the convolution 1/M normalization.
         self.dispatch_radix2(encoder, &chirp.radix2_inv);
 
         // Step 5: postmultiply X[k] *= exp(+πi k²/N).
@@ -1018,7 +1014,18 @@ impl GpuFft3dF16Native {
             pass.dispatch_workgroups(postmul_total.div_ceil(256), 1, 1);
         }
 
-        // Scale (no-op in chirp_native_f16.wgsl; normalization handled by radix2_inv).
+        if inverse {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollo-fft-wgpu f16 chirp post-conjugate"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&chirp.negate_im_pipeline);
+            pass.set_bind_group(0, &chirp.data_chirp_bg, &[]);
+            pass.set_bind_group(1, &chirp.params_bg, &[]);
+            pass.dispatch_workgroups(postmul_total.div_ceil(256), 1, 1);
+        }
+
+        // Scale by 1/N for inverse DFT normalization on the original axis.
         if inverse {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("apollo-fft-wgpu f16 chirp scale"),

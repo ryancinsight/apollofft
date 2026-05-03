@@ -96,7 +96,7 @@ fn chirp_premul(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Twiddle: exp(+pi*i * n^2 / N) = cos(pi*n^2/N) + i*sin(pi*n^2/N).
     // Computed in f32, narrowed to f16.
     let n_f = f32(local_idx);
-    let arg = PI * n_f * n_f / f32(params.n);
+    let arg = -PI * n_f * n_f / f32(params.n);
     let cos_arg: f16 = f16(cos(arg));
     let sin_arg: f16 = f16(sin(arg));
 
@@ -136,21 +136,25 @@ fn chirp_pointmul(@builtin(global_invocation_id) gid: vec3<u32>) {
 // ---------------------------------------------------------------------------
 // chirp_scale
 //
-// No-op.  The 1/M normalization is already applied by fft_scale in the
-// inverse radix-2 pass (radix2_inv).  This entry point exists solely to
-// satisfy the ChirpData pipeline-handle layout in Rust; the Rust dispatcher
-// may call it for inverse passes without effect.
+// Applies the inverse-DFT 1/N normalization for a Bluestein axis. The 1/M
+// normalization from radix2_inv belongs to the convolution evaluation; it is
+// not the inverse transform normalization for the original N-point axis.
 //
 // Total elements = N * batch_count.
 // ---------------------------------------------------------------------------
 @compute @workgroup_size(256, 1, 1)
 fn chirp_scale(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
+    let linear_idx = gid.x;
     let total = params.n * params.batch_count;
-    if idx >= total {
+    if linear_idx >= total {
         return;
     }
-    // Intentional no-op: normalization is handled by fft_scale in radix2_inv.
+    let row = linear_idx / params.n;
+    let local_idx = linear_idx % params.n;
+    let idx = row * params.m + local_idx;
+    let inv_n: f16 = f16(1.0 / f32(params.n));
+    data_re[idx] = data_re[idx] * inv_n;
+    data_im[idx] = data_im[idx] * inv_n;
 }
 
 // ---------------------------------------------------------------------------
@@ -166,15 +170,17 @@ fn chirp_scale(@builtin(global_invocation_id) gid: vec3<u32>) {
 // ---------------------------------------------------------------------------
 @compute @workgroup_size(256, 1, 1)
 fn chirp_postmul(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
+    let linear_idx = gid.x;
     let total = params.n * params.batch_count;
-    if idx >= total {
+    if linear_idx >= total {
         return;
     }
-    let local_idx = idx % params.n;
+    let row = linear_idx / params.n;
+    let local_idx = linear_idx % params.n;
+    let idx = row * params.m + local_idx;
 
     let k_f = f32(local_idx);
-    let arg = PI * k_f * k_f / f32(params.n);
+    let arg = -PI * k_f * k_f / f32(params.n);
     let cos_arg: f16 = f16(cos(arg));
     let sin_arg: f16 = f16(sin(arg));
 
@@ -195,10 +201,13 @@ fn chirp_postmul(@builtin(global_invocation_id) gid: vec3<u32>) {
 // ---------------------------------------------------------------------------
 @compute @workgroup_size(256, 1, 1)
 fn chirp_negate_im(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
+    let linear_idx = gid.x;
     let total = params.n * params.batch_count;
-    if idx >= total {
+    if linear_idx >= total {
         return;
     }
+    let row = linear_idx / params.n;
+    let local_idx = linear_idx % params.n;
+    let idx = row * params.m + local_idx;
     data_im[idx] = -data_im[idx];
 }

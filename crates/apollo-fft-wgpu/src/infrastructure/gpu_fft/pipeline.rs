@@ -1,6 +1,8 @@
 //! Core WGPU 3D FFT planning structures and dispatch operations.
 
 use crate::infrastructure::gpu_fft::strategy::{Axis, AxisStrategy, ChirpData, RadixStages};
+use apollo_fft::{fft_1d_complex_inplace, Complex64};
+use ndarray::Array1;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
@@ -531,19 +533,18 @@ impl GpuFft3d {
         m: usize,
         batch_count: u32,
     ) -> ChirpData {
-        let mut h_re = vec![0.0_f32; m];
-        let mut h_im = vec![0.0_f32; m];
+        let mut h = Array1::<Complex64>::zeros(m);
         for idx in 0..n {
-            let arg = -std::f32::consts::PI * (idx * idx) as f32 / n as f32;
-            let re = arg.cos();
-            let im = arg.sin();
-            h_re[idx] = re;
-            h_im[idx] = im;
+            let arg = std::f32::consts::PI * (idx * idx) as f32 / n as f32;
+            let value = Complex64::new(arg.cos() as f64, arg.sin() as f64);
+            h[idx] = value;
             if idx > 0 {
-                h_re[m - idx] = re;
-                h_im[m - idx] = im;
+                h[m - idx] = value;
             }
         }
+        fft_1d_complex_inplace(&mut h);
+        let h_re: Vec<f32> = h.iter().map(|value| value.re as f32).collect();
+        let h_im: Vec<f32> = h.iter().map(|value| value.im as f32).collect();
 
         let h_fft_re = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("apollo-fft-wgpu chirp re"),

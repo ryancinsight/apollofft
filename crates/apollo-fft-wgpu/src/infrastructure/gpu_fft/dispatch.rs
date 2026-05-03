@@ -104,6 +104,20 @@ impl GpuFft3d {
             return;
         }
 
+        let padded_total = chirp.m * chirp.batch_count;
+        let output_total = chirp.n * chirp.batch_count;
+
+        if inverse {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollo-fft-wgpu chirp pass (pre-conjugate)"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&chirp.negate_im_pipeline);
+            pass.set_bind_group(0, &chirp.data_chirp_bg, &[]);
+            pass.set_bind_group(1, &chirp.params_bg, &[]);
+            pass.dispatch_workgroups(output_total.div_ceil(256), 1, 1);
+        }
+
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("apollo-fft-wgpu chirp pass (premul)"),
             timestamp_writes: None,
@@ -111,19 +125,8 @@ impl GpuFft3d {
         pass.set_pipeline(&chirp.premul_pipeline);
         pass.set_bind_group(0, &chirp.data_chirp_bg, &[]);
         pass.set_bind_group(1, &chirp.params_bg, &[]);
-        pass.dispatch_workgroups(chirp.batch_count, chirp.m, 1);
+        pass.dispatch_workgroups(padded_total.div_ceil(256), 1, 1);
         drop(pass);
-
-        if inverse {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("apollo-fft-wgpu chirp pass (negate_im)"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&chirp.negate_im_pipeline);
-            pass.set_bind_group(0, &chirp.data_chirp_bg, &[]);
-            pass.set_bind_group(1, &chirp.params_bg, &[]);
-            pass.dispatch_workgroups(chirp.batch_count, chirp.m, 1);
-        }
 
         self.dispatch_radix2(encoder, &chirp.radix2_fwd);
 
@@ -134,7 +137,7 @@ impl GpuFft3d {
         pass.set_pipeline(&chirp.pointmul_pipeline);
         pass.set_bind_group(0, &chirp.data_chirp_bg, &[]);
         pass.set_bind_group(1, &chirp.params_bg, &[]);
-        pass.dispatch_workgroups(chirp.batch_count, chirp.m, 1);
+        pass.dispatch_workgroups(padded_total.div_ceil(256), 1, 1);
         drop(pass);
 
         self.dispatch_radix2(encoder, &chirp.radix2_inv);
@@ -146,13 +149,28 @@ impl GpuFft3d {
         pass.set_pipeline(&chirp.postmul_pipeline);
         pass.set_bind_group(0, &chirp.data_chirp_bg, &[]);
         pass.set_bind_group(1, &chirp.params_bg, &[]);
-        pass.dispatch_workgroups(chirp.batch_count, chirp.n, 1);
+        pass.dispatch_workgroups(output_total.div_ceil(256), 1, 1);
+        drop(pass);
 
         if inverse {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollo-fft-wgpu chirp pass (post-conjugate)"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&chirp.negate_im_pipeline);
+            pass.set_bind_group(0, &chirp.data_chirp_bg, &[]);
+            pass.set_bind_group(1, &chirp.params_bg, &[]);
+            pass.dispatch_workgroups(output_total.div_ceil(256), 1, 1);
+            drop(pass);
+
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apollo-fft-wgpu chirp pass (scale)"),
+                timestamp_writes: None,
+            });
             pass.set_pipeline(&chirp.scale_pipeline);
             pass.set_bind_group(0, &chirp.data_chirp_bg, &[]);
             pass.set_bind_group(1, &chirp.params_bg, &[]);
-            pass.dispatch_workgroups(chirp.batch_count, chirp.n, 1);
+            pass.dispatch_workgroups(output_total.div_ceil(256), 1, 1);
         }
     }
 }
