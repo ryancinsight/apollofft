@@ -11,6 +11,38 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.12] — Closure LI
+
+### Closure LI — apollo-fft: stage-3 (len=8) butterfly specialization, compile-time W_8^j constants [patch]
+
+#### Changed
+- `apollo-fft` / `radix2.rs`: peeled the len=8 butterfly stage out of the general twiddle loop
+  in all six precomputed-twiddle functions (f64/f32 forward, unnormalized inverse, normalized
+  inverse). Stage-3 twiddles W_8^1=(C,∓C), W_8^2=∓i, W_8^3=(-C,∓C) with C=1/√2 are
+  replaced by compile-time `std::f{64,32}::consts::FRAC_1_SQRT_2` constants, eliminating all
+  four twiddle-table reads per chunk and reducing multiplications from 12 to 4 per chunk
+  (j=1 and j=3 each require 2 muls; j=0 bypass and j=2 ∓i have zero muls).
+- `apollo-fft` / `radix2.rs`: added `n == 8` early-return paths to normalized inverse
+  functions with fused 1/N scale — no twiddle table access, no final-stage allocations.
+- General twiddle loop now starts at `len=16, base=7` in all six functions (stages 1-3
+  consume 1+2+4=7 twiddle entries). Stages 1, 2, and 3 are now entirely handled by
+  multiply-free bypasses and compile-time constants.
+- Combined savings across stages 1-3: N/2 (stage-1) + N/4 (stage-2) + N (stage-3) =
+  7N/4 multiplications eliminated per forward transform; same for inverse.
+
+#### Benchmark (v0.13.12 vs v0.13.11, median over 20 trials)
+| Size | Before | After | Δ |
+|---|---|---|---|
+| 1D real N=64 | 8.00× | 4.83× | var |
+| 1D cpx N=64 | 7.00× | 7.83× | +12% |
+| 1D cpx N=16384 | 0.92× | **1.06×** | sub-1× resolved |
+| 1D cpx N=65536 | 1.34× | 1.53× | +14% |
+| 2D 128×128 | 1.11× | **1.28×** | +15% |
+| 2D 512×512 | 1.87× | 2.08× | +11% |
+| 3D 128³ | 1.15× | **1.47×** | +28% |
+
+---
+
 ## [0.13.11] — Closure L
 
 ### Closure L — apollo-fft: stage-2 (len=4) butterfly specialization, multiply-free W_4^1=±i rotation [patch]

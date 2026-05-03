@@ -505,11 +505,32 @@ pub fn forward_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
             hi[1] = Complex64::new(u.re - v.im, u.im + v.re);
         }
     }
-    // General stages: len = 8, 16, …, n. base=3 (stage-1: 1 entry; stage-2: 2 entries consumed).
+    // Stage 3 (len=8): W_8^j for j=0..3. Compile-time constants eliminate twiddle table reads.
+    // Proof: W_8=exp(-2πi/8). W_8^1=(C,-C), W_8^2=(0,-1)=-i, W_8^3=(-C,-C), C=1/√2.
+    // j=1: tr=C(v.re+v.im), ti=C(v.im-v.re). j=2: zero-multiply. j=3: tr=C(v.im-v.re), ti=-C(v.re+v.im).
+    if n >= 8 {
+        const C: f64 = std::f64::consts::FRAC_1_SQRT_2;
+        for chunk in data.chunks_exact_mut(8) {
+            let (lo, hi) = chunk.split_at_mut(4);
+            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+            { let u = lo[1]; let v = hi[1];
+              let tr = C * (v.re + v.im); let ti = C * (v.im - v.re);
+              lo[1] = Complex64::new(u.re + tr, u.im + ti);
+              hi[1] = Complex64::new(u.re - tr, u.im - ti); }
+            { let u = lo[2]; let v = hi[2];
+              lo[2] = Complex64::new(u.re + v.im, u.im - v.re);
+              hi[2] = Complex64::new(u.re - v.im, u.im + v.re); }
+            { let u = lo[3]; let v = hi[3];
+              let tr = C * (v.im - v.re); let ti = -C * (v.re + v.im);
+              lo[3] = Complex64::new(u.re + tr, u.im + ti);
+              hi[3] = Complex64::new(u.re - tr, u.im - ti); }
+        }
+    }
+    // General stages: len = 16, 32, …, n. base=7 (stages 1-3: 1+2+4=7 twiddle entries consumed).
     // split_at_mut exposes non-aliasing of lo/hi to LLVM, enabling
     // autovectorization of the j-loop across butterfly pairs.
-    let mut len = 8usize;
-    let mut base = 3usize;
+    let mut len = 16usize;
+    let mut base = 7usize;
     while len <= n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
@@ -562,8 +583,29 @@ pub fn inverse_inplace_unnorm_64_with_twiddles(data: &mut [Complex64], twiddles:
             hi[1] = Complex64::new(u.re + v.im, u.im - v.re);
         }
     }
-    let mut len = 8usize;
-    let mut base = 3usize;
+    // Stage 3 (len=8) inverse: W_8^j=exp(+2πi·j/8). Compile-time constants; zero twiddle reads.
+    // W_8^1=(C,+C), W_8^2=(0,+1)=+i, W_8^3=(-C,+C), C=1/√2.
+    // j=1: tr=C(v.re-v.im), ti=C(v.re+v.im). j=2: zero-multiply. j=3: tr=-C(v.re+v.im), ti=C(v.re-v.im).
+    if n >= 8 {
+        const C: f64 = std::f64::consts::FRAC_1_SQRT_2;
+        for chunk in data.chunks_exact_mut(8) {
+            let (lo, hi) = chunk.split_at_mut(4);
+            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+            { let u = lo[1]; let v = hi[1];
+              let tr = C * (v.re - v.im); let ti = C * (v.re + v.im);
+              lo[1] = Complex64::new(u.re + tr, u.im + ti);
+              hi[1] = Complex64::new(u.re - tr, u.im - ti); }
+            { let u = lo[2]; let v = hi[2];
+              lo[2] = Complex64::new(u.re - v.im, u.im + v.re);
+              hi[2] = Complex64::new(u.re + v.im, u.im - v.re); }
+            { let u = lo[3]; let v = hi[3];
+              let tr = -C * (v.re + v.im); let ti = C * (v.re - v.im);
+              lo[3] = Complex64::new(u.re + tr, u.im + ti);
+              hi[3] = Complex64::new(u.re - tr, u.im - ti); }
+        }
+    }
+    let mut len = 16usize;
+    let mut base = 7usize;
     while len <= n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
@@ -632,9 +674,47 @@ pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
         lo[1] = Complex64::new(u.re - v.im, u.im + v.re);
         hi[1] = Complex64::new(u.re + v.im, u.im - v.re);
     }
-    // General intermediate stages: len=8, 16, …, n/2. base=3 (stage-1: 1; stage-2: 2 entries).
-    let mut len = 8usize;
-    let mut base = 3usize;
+    if n == 8 {
+        // Stage 3 is the final stage. W_8^1=(C,+C), W_8^2=+i, W_8^3=(-C,+C). Fuse 1/N scale.
+        // Proof: W_8=exp(+2πi/8). C=1/√2. Compile-time constants; zero twiddle table reads.
+        const C: f64 = std::f64::consts::FRAC_1_SQRT_2;
+        let (lo, hi) = data.split_at_mut(4);
+        { let u = lo[0]; let v = hi[0]; lo[0] = (u + v) * scale; hi[0] = (u - v) * scale; }
+        { let u = lo[1]; let v = hi[1];
+          let tr = C * (v.re - v.im); let ti = C * (v.re + v.im);
+          lo[1] = Complex64::new((u.re + tr) * scale, (u.im + ti) * scale);
+          hi[1] = Complex64::new((u.re - tr) * scale, (u.im - ti) * scale); }
+        { let u = lo[2]; let v = hi[2];
+          lo[2] = Complex64::new((u.re - v.im) * scale, (u.im + v.re) * scale);
+          hi[2] = Complex64::new((u.re + v.im) * scale, (u.im - v.re) * scale); }
+        { let u = lo[3]; let v = hi[3];
+          let tr = -C * (v.re + v.im); let ti = C * (v.re - v.im);
+          lo[3] = Complex64::new((u.re + tr) * scale, (u.im + ti) * scale);
+          hi[3] = Complex64::new((u.re - tr) * scale, (u.im - ti) * scale); }
+        return;
+    }
+    // Stage 3 (len=8) as intermediate. n > 8 here (n >= 16). W_8^1=(C,+C), W_8^2=+i, W_8^3=(-C,+C).
+    {
+        const C: f64 = std::f64::consts::FRAC_1_SQRT_2;
+        for chunk in data.chunks_exact_mut(8) {
+            let (lo, hi) = chunk.split_at_mut(4);
+            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+            { let u = lo[1]; let v = hi[1];
+              let tr = C * (v.re - v.im); let ti = C * (v.re + v.im);
+              lo[1] = Complex64::new(u.re + tr, u.im + ti);
+              hi[1] = Complex64::new(u.re - tr, u.im - ti); }
+            { let u = lo[2]; let v = hi[2];
+              lo[2] = Complex64::new(u.re - v.im, u.im + v.re);
+              hi[2] = Complex64::new(u.re + v.im, u.im - v.re); }
+            { let u = lo[3]; let v = hi[3];
+              let tr = -C * (v.re + v.im); let ti = C * (v.re - v.im);
+              lo[3] = Complex64::new(u.re + tr, u.im + ti);
+              hi[3] = Complex64::new(u.re - tr, u.im - ti); }
+        }
+    }
+    // General intermediate stages: len=16, 32, …, n/2. base=7 (stages 1-3: 1+2+4=7 entries).
+    let mut len = 16usize;
+    let mut base = 7usize;
     while len < n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
@@ -699,8 +779,27 @@ pub fn forward_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
             hi[1] = Complex32::new(u.re - v.im, u.im + v.re);
         }
     }
-    let mut len = 8usize;
-    let mut base = 3usize;
+    // Stage 3 (len=8) f32: W_8^1=(C,-C), W_8^2=-i, W_8^3=(-C,-C), C=1/√2. Compile-time constants.
+    if n >= 8 {
+        const C: f32 = std::f32::consts::FRAC_1_SQRT_2;
+        for chunk in data.chunks_exact_mut(8) {
+            let (lo, hi) = chunk.split_at_mut(4);
+            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+            { let u = lo[1]; let v = hi[1];
+              let tr = C * (v.re + v.im); let ti = C * (v.im - v.re);
+              lo[1] = Complex32::new(u.re + tr, u.im + ti);
+              hi[1] = Complex32::new(u.re - tr, u.im - ti); }
+            { let u = lo[2]; let v = hi[2];
+              lo[2] = Complex32::new(u.re + v.im, u.im - v.re);
+              hi[2] = Complex32::new(u.re - v.im, u.im + v.re); }
+            { let u = lo[3]; let v = hi[3];
+              let tr = C * (v.im - v.re); let ti = -C * (v.re + v.im);
+              lo[3] = Complex32::new(u.re + tr, u.im + ti);
+              hi[3] = Complex32::new(u.re - tr, u.im - ti); }
+        }
+    }
+    let mut len = 16usize;
+    let mut base = 7usize;
     while len <= n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
@@ -751,8 +850,27 @@ pub fn inverse_inplace_unnorm_32_with_twiddles(data: &mut [Complex32], twiddles:
             hi[1] = Complex32::new(u.re + v.im, u.im - v.re);
         }
     }
-    let mut len = 8usize;
-    let mut base = 3usize;
+    // Stage 3 (len=8) inverse f32: W_8^1=(C,+C), W_8^2=+i, W_8^3=(-C,+C), C=1/√2.
+    if n >= 8 {
+        const C: f32 = std::f32::consts::FRAC_1_SQRT_2;
+        for chunk in data.chunks_exact_mut(8) {
+            let (lo, hi) = chunk.split_at_mut(4);
+            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+            { let u = lo[1]; let v = hi[1];
+              let tr = C * (v.re - v.im); let ti = C * (v.re + v.im);
+              lo[1] = Complex32::new(u.re + tr, u.im + ti);
+              hi[1] = Complex32::new(u.re - tr, u.im - ti); }
+            { let u = lo[2]; let v = hi[2];
+              lo[2] = Complex32::new(u.re - v.im, u.im + v.re);
+              hi[2] = Complex32::new(u.re + v.im, u.im - v.re); }
+            { let u = lo[3]; let v = hi[3];
+              let tr = -C * (v.re + v.im); let ti = C * (v.re - v.im);
+              lo[3] = Complex32::new(u.re + tr, u.im + ti);
+              hi[3] = Complex32::new(u.re - tr, u.im - ti); }
+        }
+    }
+    let mut len = 16usize;
+    let mut base = 7usize;
     while len <= n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
@@ -818,9 +936,46 @@ pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
         lo[1] = Complex32::new(u.re - v.im, u.im + v.re);
         hi[1] = Complex32::new(u.re + v.im, u.im - v.re);
     }
-    // General intermediate stages: len=8, 16, …, n/2. base=3 (stage-1: 1; stage-2: 2 entries).
-    let mut len = 8usize;
-    let mut base = 3usize;
+    if n == 8 {
+        // Stage 3 is the final stage. W_8^1=(C,+C), W_8^2=+i, W_8^3=(-C,+C). Fuse 1/N scale.
+        const C: f32 = std::f32::consts::FRAC_1_SQRT_2;
+        let (lo, hi) = data.split_at_mut(4);
+        { let u = lo[0]; let v = hi[0]; lo[0] = (u + v) * scale; hi[0] = (u - v) * scale; }
+        { let u = lo[1]; let v = hi[1];
+          let tr = C * (v.re - v.im); let ti = C * (v.re + v.im);
+          lo[1] = Complex32::new((u.re + tr) * scale, (u.im + ti) * scale);
+          hi[1] = Complex32::new((u.re - tr) * scale, (u.im - ti) * scale); }
+        { let u = lo[2]; let v = hi[2];
+          lo[2] = Complex32::new((u.re - v.im) * scale, (u.im + v.re) * scale);
+          hi[2] = Complex32::new((u.re + v.im) * scale, (u.im - v.re) * scale); }
+        { let u = lo[3]; let v = hi[3];
+          let tr = -C * (v.re + v.im); let ti = C * (v.re - v.im);
+          lo[3] = Complex32::new((u.re + tr) * scale, (u.im + ti) * scale);
+          hi[3] = Complex32::new((u.re - tr) * scale, (u.im - ti) * scale); }
+        return;
+    }
+    // Stage 3 (len=8) as intermediate. n > 8 here. W_8^1=(C,+C), W_8^2=+i, W_8^3=(-C,+C).
+    {
+        const C: f32 = std::f32::consts::FRAC_1_SQRT_2;
+        for chunk in data.chunks_exact_mut(8) {
+            let (lo, hi) = chunk.split_at_mut(4);
+            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
+            { let u = lo[1]; let v = hi[1];
+              let tr = C * (v.re - v.im); let ti = C * (v.re + v.im);
+              lo[1] = Complex32::new(u.re + tr, u.im + ti);
+              hi[1] = Complex32::new(u.re - tr, u.im - ti); }
+            { let u = lo[2]; let v = hi[2];
+              lo[2] = Complex32::new(u.re - v.im, u.im + v.re);
+              hi[2] = Complex32::new(u.re + v.im, u.im - v.re); }
+            { let u = lo[3]; let v = hi[3];
+              let tr = -C * (v.re + v.im); let ti = C * (v.re - v.im);
+              lo[3] = Complex32::new(u.re + tr, u.im + ti);
+              hi[3] = Complex32::new(u.re - tr, u.im - ti); }
+        }
+    }
+    // General intermediate stages: len=16, 32, …, n/2. base=7 (stages 1-3: 1+2+4=7 entries).
+    let mut len = 16usize;
+    let mut base = 7usize;
     while len < n {
         let half = len >> 1;
         let stage_twiddles = &twiddles[base..base + half];
