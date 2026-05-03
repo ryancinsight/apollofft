@@ -33,13 +33,13 @@ use wgpu::util::DeviceExt;
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub(crate) struct StftChirpParamsPod {
     pub(crate) frame_count: u32,
-    pub(crate) frame_len:   u32,
-    pub(crate) chirp_len:   u32,
-    pub(crate) hop_len:     u32,
-    pub(crate) signal_len:  u32,
-    pub(crate) _pad0:       u32,
-    pub(crate) _pad1:       u32,
-    pub(crate) _pad2:       u32,
+    pub(crate) frame_len: u32,
+    pub(crate) chirp_len: u32,
+    pub(crate) hop_len: u32,
+    pub(crate) signal_len: u32,
+    pub(crate) _pad0: u32,
+    pub(crate) _pad1: u32,
+    pub(crate) _pad2: u32,
 }
 
 /// Pre-allocated GPU resources for the Bluestein/Chirp-Z STFT path.
@@ -59,12 +59,12 @@ pub(crate) struct StftChirpData {
 
     // ── Chirp BGL (group 0): [rw chirp_re, rw chirp_im, ro h_fft_re, ro h_fft_im] ──
     pub(crate) chirp_data_bgl: wgpu::BindGroupLayout,
-    pub(crate) chirp_data_bg:  wgpu::BindGroup,
+    pub(crate) chirp_data_bg: wgpu::BindGroup,
 
     // ── Chirp params BGL (group 1): 1 uniform (StftChirpParamsPod) ──────────
-    pub(crate) chirp_params_bgl:  wgpu::BindGroupLayout,
+    pub(crate) chirp_params_bgl: wgpu::BindGroupLayout,
     pub(crate) _chirp_params_buf: wgpu::Buffer,
-    pub(crate) chirp_params_bg:   wgpu::BindGroup,
+    pub(crate) chirp_params_bg: wgpu::BindGroup,
 
     // ── IO BGL (group 2): [ro input, rw output] ──────────────────────────────
     /// Used for both the forward premul pass (signal input, complex output slot unused)
@@ -84,13 +84,13 @@ pub(crate) struct StftChirpData {
     pub(crate) _radix2_param_bufs: Vec<wgpu::Buffer>,
 
     // ── Pipelines ─────────────────────────────────────────────────────────────
-    pub(crate) premul_fwd_pipeline:  wgpu::ComputePipeline,
-    pub(crate) premul_inv_pipeline:  wgpu::ComputePipeline,
-    pub(crate) pointmul_pipeline:    wgpu::ComputePipeline,
+    pub(crate) premul_fwd_pipeline: wgpu::ComputePipeline,
+    pub(crate) premul_inv_pipeline: wgpu::ComputePipeline,
+    pub(crate) pointmul_pipeline: wgpu::ComputePipeline,
     pub(crate) postmul_fwd_pipeline: wgpu::ComputePipeline,
     pub(crate) postmul_inv_pipeline: wgpu::ComputePipeline,
     /// Radix-2 bitrev pipeline operating on chirp_re/im (group 0 = chirp_data_bg).
-    pub(crate) chirp_bitrev_pipeline:    wgpu::ComputePipeline,
+    pub(crate) chirp_bitrev_pipeline: wgpu::ComputePipeline,
     /// Radix-2 butterfly pipeline for forward sub-FFT on chirp buffers.
     pub(crate) chirp_fwd_butterfly_pipeline: wgpu::ComputePipeline,
     /// Radix-2 butterfly pipeline for inverse sub-FFT on chirp buffers.
@@ -101,10 +101,10 @@ pub(crate) struct StftChirpData {
     pub(crate) pointmul_fwd_pipeline: wgpu::ComputePipeline,
 
     // ── Dimensions ────────────────────────────────────────────────────────────
-    pub(crate) n:           u32,   // original frame_len
-    pub(crate) m:           u32,   // padded Radix-2 length
+    pub(crate) n: u32, // original frame_len
+    pub(crate) m: u32, // padded Radix-2 length
     pub(crate) frame_count: u32,
-    pub(crate) log2_m:      u32,
+    pub(crate) log2_m: u32,
 }
 
 /// Compute M = 2^⌈log₂(2N−1)⌉ — the smallest power-of-two ≥ 2N−1.
@@ -120,12 +120,12 @@ impl StftChirpData {
     /// can locate each frame in the signal.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        device:      &wgpu::Device,
-        queue:       &wgpu::Queue,
-        n:           usize,  // frame_len
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        n: usize, // frame_len
         frame_count: usize,
-        hop_len:     usize,
-        signal_len:  usize,
+        hop_len: usize,
+        signal_len: usize,
     ) -> Self {
         let m = chirp_padded_len(n);
         let log2_m = m.trailing_zeros();
@@ -189,10 +189,22 @@ impl StftChirpData {
             label: Some("apollo-stft-wgpu chirp data BG"),
             layout: &chirp_data_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: chirp_re_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: chirp_im_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: h_fft_re_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: h_fft_im_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: chirp_re_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: chirp_im_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: h_fft_re_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: h_fft_im_buf.as_entire_binding(),
+                },
             ],
         });
 
@@ -206,10 +218,8 @@ impl StftChirpData {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
                     min_binding_size: Some(
-                        std::num::NonZeroU64::new(
-                            std::mem::size_of::<StftChirpParamsPod>() as u64,
-                        )
-                        .expect("nonzero"),
+                        std::num::NonZeroU64::new(std::mem::size_of::<StftChirpParamsPod>() as u64)
+                            .expect("nonzero"),
                     ),
                 },
                 count: None,
@@ -217,10 +227,10 @@ impl StftChirpData {
         });
         let chirp_params_pod = StftChirpParamsPod {
             frame_count: frame_count as u32,
-            frame_len:   n as u32,
-            chirp_len:   m as u32,
-            hop_len:     hop_len as u32,
-            signal_len:  signal_len as u32,
+            frame_len: n as u32,
+            chirp_len: m as u32,
+            hop_len: hop_len as u32,
+            signal_len: signal_len as u32,
             _pad0: 0,
             _pad1: 0,
             _pad2: 0,
@@ -242,18 +252,15 @@ impl StftChirpData {
         // ── IO BGL (group 2): [ro input, rw output] ──────────────────────────
         let io_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("apollo-stft-wgpu chirp IO BGL"),
-            entries: &[
-                bgl_storage_entry(0, true),
-                bgl_storage_entry(1, false),
-            ],
+            entries: &[bgl_storage_entry(0, true), bgl_storage_entry(1, false)],
         });
 
         // ── Chirp Radix-2 sub-FFT params BGL: 1 uniform ──────────────────────
         // Reuses same layout as fft_params_bgl (16-byte uniform).
         // The chirp sub-FFT operates on the chirp working buffers (group 0 = chirp_data_bg).
         // We need a separate params BGL for sub-FFT stage params.
-        let chirp_radix2_params_bgl = device.create_bind_group_layout(
-            &wgpu::BindGroupLayoutDescriptor {
+        let chirp_radix2_params_bgl =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("apollo-stft-wgpu chirp radix2 params BGL"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -265,8 +272,7 @@ impl StftChirpData {
                     },
                     count: None,
                 }],
-            },
-        );
+            });
 
         // ── Pipeline layouts ──────────────────────────────────────────────────
         // Chirp premul/postmul: groups 0 (chirp_data) + 1 (chirp_params) + 2 (io).
@@ -294,9 +300,7 @@ impl StftChirpData {
         // ── Compile chirp shader ──────────────────────────────────────────────
         let chirp_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("apollo-stft-wgpu chirp shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("shaders/stft_chirp.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/stft_chirp.wgsl").into()),
         });
 
         // ── Compile chirp sub-FFT shader ──────────────────────────────────────
@@ -305,33 +309,72 @@ impl StftChirpData {
         // We compile a dedicated sub-FFT shader targeting the chirp BGL.
         let chirp_fft_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("apollo-stft-wgpu chirp sub-FFT shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("shaders/stft_chirp_fft.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/stft_chirp_fft.wgsl").into()),
         });
 
-        let build_pipeline = |layout: &wgpu::PipelineLayout, module: &wgpu::ShaderModule, entry: &str| {
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(entry),
-                layout: Some(layout),
-                module,
-                entry_point: Some(entry),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                cache: None,
-            })
-        };
+        let build_pipeline =
+            |layout: &wgpu::PipelineLayout, module: &wgpu::ShaderModule, entry: &str| {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(entry),
+                    layout: Some(layout),
+                    module,
+                    entry_point: Some(entry),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                })
+            };
 
-        let premul_fwd_pipeline  = build_pipeline(&chirp_io_pipeline_layout, &chirp_shader, "stft_chirp_premul_fwd");
-        let premul_inv_pipeline  = build_pipeline(&chirp_io_pipeline_layout, &chirp_shader, "stft_chirp_premul_inv");
-        let pointmul_pipeline    = build_pipeline(&chirp_pm_pipeline_layout, &chirp_shader, "stft_chirp_pointmul");
-        let postmul_fwd_pipeline = build_pipeline(&chirp_io_pipeline_layout, &chirp_shader, "stft_chirp_postmul_fwd");
-        let postmul_inv_pipeline = build_pipeline(&chirp_io_pipeline_layout, &chirp_shader, "stft_chirp_postmul_inv");
-            let pointmul_fwd_pipeline = build_pipeline(&chirp_pm_pipeline_layout, &chirp_shader, "stft_chirp_pointmul_fwd");
+        let premul_fwd_pipeline = build_pipeline(
+            &chirp_io_pipeline_layout,
+            &chirp_shader,
+            "stft_chirp_premul_fwd",
+        );
+        let premul_inv_pipeline = build_pipeline(
+            &chirp_io_pipeline_layout,
+            &chirp_shader,
+            "stft_chirp_premul_inv",
+        );
+        let pointmul_pipeline = build_pipeline(
+            &chirp_pm_pipeline_layout,
+            &chirp_shader,
+            "stft_chirp_pointmul",
+        );
+        let postmul_fwd_pipeline = build_pipeline(
+            &chirp_io_pipeline_layout,
+            &chirp_shader,
+            "stft_chirp_postmul_fwd",
+        );
+        let postmul_inv_pipeline = build_pipeline(
+            &chirp_io_pipeline_layout,
+            &chirp_shader,
+            "stft_chirp_postmul_inv",
+        );
+        let pointmul_fwd_pipeline = build_pipeline(
+            &chirp_pm_pipeline_layout,
+            &chirp_shader,
+            "stft_chirp_pointmul_fwd",
+        );
 
-        let chirp_bitrev_pipeline        = build_pipeline(&radix2_pipeline_layout, &chirp_fft_shader, "chirp_fft_bitrev");
-        let chirp_fwd_butterfly_pipeline = build_pipeline(&radix2_pipeline_layout, &chirp_fft_shader, "chirp_fft_butterfly_fwd");
-        let chirp_inv_butterfly_pipeline = build_pipeline(&radix2_pipeline_layout, &chirp_fft_shader, "chirp_fft_butterfly_inv");
-        let chirp_scale_pipeline         = build_pipeline(&radix2_pipeline_layout, &chirp_fft_shader, "chirp_fft_scale");
+        let chirp_bitrev_pipeline = build_pipeline(
+            &radix2_pipeline_layout,
+            &chirp_fft_shader,
+            "chirp_fft_bitrev",
+        );
+        let chirp_fwd_butterfly_pipeline = build_pipeline(
+            &radix2_pipeline_layout,
+            &chirp_fft_shader,
+            "chirp_fft_butterfly_fwd",
+        );
+        let chirp_inv_butterfly_pipeline = build_pipeline(
+            &radix2_pipeline_layout,
+            &chirp_fft_shader,
+            "chirp_fft_butterfly_inv",
+        );
+        let chirp_scale_pipeline = build_pipeline(
+            &radix2_pipeline_layout,
+            &chirp_fft_shader,
+            "chirp_fft_scale",
+        );
 
         // ── Precompute Radix-2 stage bind groups ──────────────────────────────
         // Forward sub-FFT: bitrev + log₂M butterfly stages.
@@ -343,39 +386,59 @@ impl StftChirpData {
         let mut radix2_fwd_bgs: Vec<wgpu::BindGroup> = Vec::with_capacity(fwd_stage_count);
         let mut radix2_inv_bgs: Vec<wgpu::BindGroup> = Vec::with_capacity(inv_stage_count);
 
-        let push_radix2_bg = |data: [u32; 4], bgs: &mut Vec<wgpu::BindGroup>,
-                                   bufs: &mut Vec<wgpu::Buffer>| {
-            let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("apollo-stft-wgpu chirp radix2 stage params"),
-                contents: bytemuck::cast_slice(&data),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("apollo-stft-wgpu chirp radix2 stage params BG"),
-                layout: &chirp_radix2_params_bgl,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buf.as_entire_binding(),
-                }],
-            });
-            bufs.push(buf);
-            bgs.push(bg);
-        };
+        let push_radix2_bg =
+            |data: [u32; 4], bgs: &mut Vec<wgpu::BindGroup>, bufs: &mut Vec<wgpu::Buffer>| {
+                let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("apollo-stft-wgpu chirp radix2 stage params"),
+                    contents: bytemuck::cast_slice(&data),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+                let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("apollo-stft-wgpu chirp radix2 stage params BG"),
+                    layout: &chirp_radix2_params_bgl,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: buf.as_entire_binding(),
+                    }],
+                });
+                bufs.push(buf);
+                bgs.push(bg);
+            };
 
         // Forward sub-FFT bind groups: [m, 0, 0, frame_count] for bitrev,
         // then [m, stage, 0, frame_count] for each butterfly stage.
-        push_radix2_bg([m as u32, 0, 0, frame_count as u32], &mut radix2_fwd_bgs, &mut radix2_param_bufs);
+        push_radix2_bg(
+            [m as u32, 0, 0, frame_count as u32],
+            &mut radix2_fwd_bgs,
+            &mut radix2_param_bufs,
+        );
         for s in 0..log2_m {
-            push_radix2_bg([m as u32, s, 0, frame_count as u32], &mut radix2_fwd_bgs, &mut radix2_param_bufs);
+            push_radix2_bg(
+                [m as u32, s, 0, frame_count as u32],
+                &mut radix2_fwd_bgs,
+                &mut radix2_param_bufs,
+            );
         }
 
         // Inverse sub-FFT bind groups: same as forward + one scale stage.
-        push_radix2_bg([m as u32, 0, 1, frame_count as u32], &mut radix2_inv_bgs, &mut radix2_param_bufs);
+        push_radix2_bg(
+            [m as u32, 0, 1, frame_count as u32],
+            &mut radix2_inv_bgs,
+            &mut radix2_param_bufs,
+        );
         for s in 0..log2_m {
-            push_radix2_bg([m as u32, s, 1, frame_count as u32], &mut radix2_inv_bgs, &mut radix2_param_bufs);
+            push_radix2_bg(
+                [m as u32, s, 1, frame_count as u32],
+                &mut radix2_inv_bgs,
+                &mut radix2_param_bufs,
+            );
         }
         // Scale stage (1/M normalisation): reuse same params layout.
-        push_radix2_bg([m as u32, 0, 1, frame_count as u32], &mut radix2_inv_bgs, &mut radix2_param_bufs);
+        push_radix2_bg(
+            [m as u32, 0, 1, frame_count as u32],
+            &mut radix2_inv_bgs,
+            &mut radix2_param_bufs,
+        );
 
         let _ = queue; // queue used for construction in future if needed
 
@@ -403,7 +466,7 @@ impl StftChirpData {
             chirp_fwd_butterfly_pipeline,
             chirp_inv_butterfly_pipeline,
             chirp_scale_pipeline,
-                        pointmul_fwd_pipeline,
+            pointmul_fwd_pipeline,
             n: n as u32,
             m: m as u32,
             frame_count: frame_count as u32,

@@ -38,14 +38,14 @@
 //! - caller-supplied buffers must match the plan dimensions
 //! - non-contiguous ndarray buffers panic when a contiguous slice is required
 
+use crate::application::execution::kernel::radix2::{
+    build_forward_twiddle_table_32, build_forward_twiddle_table_64, build_inverse_twiddle_table_32,
+    build_inverse_twiddle_table_64, forward_inplace_32_with_twiddles,
+    forward_inplace_64_with_twiddles, inverse_inplace_32_with_twiddles,
+    inverse_inplace_64_with_twiddles,
+};
 use crate::application::execution::kernel::{
     fft_forward_32, fft_forward_64, fft_inverse_32, fft_inverse_64,
-};
-use crate::application::execution::kernel::radix2::{
-    build_forward_twiddle_table_32, build_forward_twiddle_table_64,
-    build_inverse_twiddle_table_32, build_inverse_twiddle_table_64,
-    forward_inplace_32_with_twiddles, forward_inplace_64_with_twiddles,
-    inverse_inplace_32_with_twiddles, inverse_inplace_64_with_twiddles,
 };
 use crate::application::execution::plan::fft::real_storage::RealFftData;
 use crate::domain::metadata::precision::PrecisionProfile;
@@ -592,7 +592,10 @@ impl FftPlan3D {
         let data_slice = data
             .as_slice_memory_order_mut()
             .expect("3D complex data must be contiguous");
-        let mut scratch = self.scratch_y_64.lock().expect("scratch_y_64 mutex poisoned");
+        let mut scratch = self
+            .scratch_y_64
+            .lock()
+            .expect("scratch_y_64 mutex poisoned");
         // Cache-blocked gather: data[i,j,k] (row-major) → scratch[i,k,j].
         // j-outer / k-inner: reads data_slice[i][j][k] sequentially in k (stride 1),
         // writes scratch[i][k][j] with stride ny. Strided stores buffer in the store
@@ -611,10 +614,20 @@ impl FftPlan3D {
                 }
             }
         }
-        let lane_fn_64 = |lane: &mut [Complex64]| match (forward, &self.twiddle_y_fwd_64, &self.twiddle_y_inv_64) {
-            (true,  Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_slice()),
+        let lane_fn_64 = |lane: &mut [Complex64]| match (
+            forward,
+            &self.twiddle_y_fwd_64,
+            &self.twiddle_y_inv_64,
+        ) {
+            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_slice()),
             (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_slice()),
-            _ => if forward { fft_forward_64(lane) } else { fft_inverse_64(lane) },
+            _ => {
+                if forward {
+                    fft_forward_64(lane)
+                } else {
+                    fft_inverse_64(lane)
+                }
+            }
         };
         if scratch.len() > RAYON_THRESHOLD {
             scratch.par_chunks_mut(self.ny).for_each(lane_fn_64);
@@ -644,7 +657,10 @@ impl FftPlan3D {
         let data_slice = data
             .as_slice_memory_order_mut()
             .expect("3D complex data must be contiguous");
-        let mut scratch = self.scratch_x_64.lock().expect("scratch_x_64 mutex poisoned");
+        let mut scratch = self
+            .scratch_x_64
+            .lock()
+            .expect("scratch_x_64 mutex poisoned");
         // Cache-blocked gather: data[i,j,k] → scratch[j,k,i].
         // i-outer loop: for each i reads data_slice[i][j][k] sequentially in k (stride 1),
         // writes scratch[j][k][i] with stride nx. Strided stores buffer in the store
@@ -664,10 +680,20 @@ impl FftPlan3D {
                 }
             }
         }
-        let lane_fn_64 = |lane: &mut [Complex64]| match (forward, &self.twiddle_x_fwd_64, &self.twiddle_x_inv_64) {
-            (true,  Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_slice()),
+        let lane_fn_64 = |lane: &mut [Complex64]| match (
+            forward,
+            &self.twiddle_x_fwd_64,
+            &self.twiddle_x_inv_64,
+        ) {
+            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_slice()),
             (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_slice()),
-            _ => if forward { fft_forward_64(lane) } else { fft_inverse_64(lane) },
+            _ => {
+                if forward {
+                    fft_forward_64(lane)
+                } else {
+                    fft_inverse_64(lane)
+                }
+            }
         };
         if scratch.len() > RAYON_THRESHOLD {
             scratch.par_chunks_mut(self.nx).for_each(lane_fn_64);
@@ -701,10 +727,20 @@ impl FftPlan3D {
         let data_slice = data
             .as_slice_memory_order_mut()
             .expect("3D complex data must be contiguous");
-        let lane_fn_64 = |lane: &mut [Complex64]| match (forward, &self.twiddle_z_fwd_64, &self.twiddle_z_inv_64) {
-            (true,  Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_slice()),
+        let lane_fn_64 = |lane: &mut [Complex64]| match (
+            forward,
+            &self.twiddle_z_fwd_64,
+            &self.twiddle_z_inv_64,
+        ) {
+            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_slice()),
             (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_slice()),
-            _ => if forward { fft_forward_64(lane) } else { fft_inverse_64(lane) },
+            _ => {
+                if forward {
+                    fft_forward_64(lane)
+                } else {
+                    fft_inverse_64(lane)
+                }
+            }
         };
         if data_slice.len() > RAYON_THRESHOLD {
             data_slice.par_chunks_mut(self.nz).for_each(lane_fn_64);
@@ -734,7 +770,10 @@ impl FftPlan3D {
         let data_slice = data
             .as_slice_memory_order_mut()
             .expect("3D f32 complex data must be contiguous");
-        let mut scratch = self.scratch_y_32.lock().expect("scratch_y_32 mutex poisoned");
+        let mut scratch = self
+            .scratch_y_32
+            .lock()
+            .expect("scratch_y_32 mutex poisoned");
         for i in 0..self.nx {
             for j_t in (0..self.ny).step_by(GATHER_TILE) {
                 let j_end = (j_t + GATHER_TILE).min(self.ny);
@@ -749,10 +788,20 @@ impl FftPlan3D {
                 }
             }
         }
-        let lane_fn_32 = |lane: &mut [Complex32]| match (forward, &self.twiddle_y_fwd_32, &self.twiddle_y_inv_32) {
-            (true,  Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_slice()),
+        let lane_fn_32 = |lane: &mut [Complex32]| match (
+            forward,
+            &self.twiddle_y_fwd_32,
+            &self.twiddle_y_inv_32,
+        ) {
+            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_slice()),
             (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_slice()),
-            _ => if forward { fft_forward_32(lane) } else { fft_inverse_32(lane) },
+            _ => {
+                if forward {
+                    fft_forward_32(lane)
+                } else {
+                    fft_inverse_32(lane)
+                }
+            }
         };
         if scratch.len() > RAYON_THRESHOLD {
             scratch.par_chunks_mut(self.ny).for_each(lane_fn_32);
@@ -779,7 +828,10 @@ impl FftPlan3D {
         let data_slice = data
             .as_slice_memory_order_mut()
             .expect("3D f32 complex data must be contiguous");
-        let mut scratch = self.scratch_x_32.lock().expect("scratch_x_32 mutex poisoned");
+        let mut scratch = self
+            .scratch_x_32
+            .lock()
+            .expect("scratch_x_32 mutex poisoned");
         for i in 0..self.nx {
             let src_base = i * self.ny * self.nz;
             for j_t in (0..self.ny).step_by(GATHER_TILE) {
@@ -795,10 +847,20 @@ impl FftPlan3D {
                 }
             }
         }
-        let lane_fn_32 = |lane: &mut [Complex32]| match (forward, &self.twiddle_x_fwd_32, &self.twiddle_x_inv_32) {
-            (true,  Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_slice()),
+        let lane_fn_32 = |lane: &mut [Complex32]| match (
+            forward,
+            &self.twiddle_x_fwd_32,
+            &self.twiddle_x_inv_32,
+        ) {
+            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_slice()),
             (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_slice()),
-            _ => if forward { fft_forward_32(lane) } else { fft_inverse_32(lane) },
+            _ => {
+                if forward {
+                    fft_forward_32(lane)
+                } else {
+                    fft_inverse_32(lane)
+                }
+            }
         };
         if scratch.len() > RAYON_THRESHOLD {
             scratch.par_chunks_mut(self.nx).for_each(lane_fn_32);
@@ -829,10 +891,20 @@ impl FftPlan3D {
         let data_slice = data
             .as_slice_memory_order_mut()
             .expect("3D f32 complex data must be contiguous");
-        let lane_fn_32 = |lane: &mut [Complex32]| match (forward, &self.twiddle_z_fwd_32, &self.twiddle_z_inv_32) {
-            (true,  Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_slice()),
+        let lane_fn_32 = |lane: &mut [Complex32]| match (
+            forward,
+            &self.twiddle_z_fwd_32,
+            &self.twiddle_z_inv_32,
+        ) {
+            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_slice()),
             (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_slice()),
-            _ => if forward { fft_forward_32(lane) } else { fft_inverse_32(lane) },
+            _ => {
+                if forward {
+                    fft_forward_32(lane)
+                } else {
+                    fft_inverse_32(lane)
+                }
+            }
         };
         if data_slice.len() > RAYON_THRESHOLD {
             data_slice.par_chunks_mut(self.nz).for_each(lane_fn_32);

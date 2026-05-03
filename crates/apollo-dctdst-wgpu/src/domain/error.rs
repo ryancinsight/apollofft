@@ -58,7 +58,9 @@ pub enum WgpuError {
     #[error("precision profile does not match typed DCT/DST WGPU storage")]
     InvalidPrecisionProfile,
     /// Input shape does not match the plan dimensions.
-    #[error("input shape mismatch: expected {expected}x{expected} (n={expected}), got {rows}x{cols}")]
+    #[error(
+        "input shape mismatch: expected {expected}x{expected} (n={expected}), got {rows}x{cols}"
+    )]
     ShapeMismatch {
         /// Expected side length.
         expected: usize,

@@ -466,11 +466,7 @@ mod tests {
         use ndarray::array;
         // 3×3 analytically-separable: each row and column independently verified by
         // the 1D DCT-II; the 2D separable result equals applying 1D twice.
-        let input = array![
-            [1.0_f32, -2.0, 0.5],
-            [0.25, 3.0, -1.5],
-            [-0.75, 0.5, 2.0]
-        ];
+        let input = array![[1.0_f32, -2.0, 0.5], [0.25, 3.0, -1.5], [-0.75, 0.5, 2.0]];
         let plan = DctDstWgpuPlan::new(3, RealTransformKind::DctII);
         let gpu_2d = backend
             .execute_forward_2d(&plan, &input)
@@ -513,11 +509,7 @@ mod tests {
             return;
         };
         use ndarray::array;
-        let input = array![
-            [1.0_f32, -2.0, 0.5],
-            [0.25, 3.0, -1.5],
-            [-0.75, 0.5, 2.0]
-        ];
+        let input = array![[1.0_f32, -2.0, 0.5], [0.25, 3.0, -1.5], [-0.75, 0.5, 2.0]];
         let plan = DctDstWgpuPlan::new(3, RealTransformKind::DctII);
         let spectrum = backend
             .execute_forward_2d(&plan, &input)
@@ -549,8 +541,8 @@ mod tests {
         let mut input = Array3::<f32>::zeros((3, 3, 3));
         // Fill with a known non-trivial signal.
         let flat: [f32; 27] = [
-            1.0, -2.0, 0.5, 0.25, 3.0, -1.5, -0.75, 0.5, 2.0, 0.1, -0.3, 1.2, -0.5, 2.1, -1.1,
-            0.7, -0.9, 0.3, 1.5, -0.2, 0.8, -1.4, 0.6, -0.1, 0.9, -2.5, 1.3,
+            1.0, -2.0, 0.5, 0.25, 3.0, -1.5, -0.75, 0.5, 2.0, 0.1, -0.3, 1.2, -0.5, 2.1, -1.1, 0.7,
+            -0.9, 0.3, 1.5, -0.2, 0.8, -1.4, 0.6, -0.1, 0.9, -2.5, 1.3,
         ];
         let mut idx = 0;
         for i in 0..3 {
@@ -621,8 +613,8 @@ mod tests {
         use ndarray::Array3;
         let mut input = Array3::<f32>::zeros((3, 3, 3));
         let flat: [f32; 27] = [
-            1.0, -2.0, 0.5, 0.25, 3.0, -1.5, -0.75, 0.5, 2.0, 0.1, -0.3, 1.2, -0.5, 2.1, -1.1,
-            0.7, -0.9, 0.3, 1.5, -0.2, 0.8, -1.4, 0.6, -0.1, 0.9, -2.5, 1.3,
+            1.0, -2.0, 0.5, 0.25, 3.0, -1.5, -0.75, 0.5, 2.0, 0.1, -0.3, 1.2, -0.5, 2.1, -1.1, 0.7,
+            -0.9, 0.3, 1.5, -0.2, 0.8, -1.4, 0.6, -0.1, 0.9, -2.5, 1.3,
         ];
         let mut idx = 0;
         for i in 0..3 {

@@ -41,15 +41,14 @@ impl NufftWgpuBackend {
     /// Create a backend by requesting a default WGPU adapter and device.
     pub fn try_default() -> NufftWgpuResult<Self> {
         let instance = wgpu::Instance::default();
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            }))
-                .map_err(|error| NufftWgpuError::AdapterUnavailable {
-                message: error.to_string(),
-            })?;
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        }))
+        .map_err(|error| NufftWgpuError::AdapterUnavailable {
+            message: error.to_string(),
+        })?;
         let descriptor = wgpu::DeviceDescriptor {
             label: Some("apollo-nufft-wgpu"),
             required_features: wgpu::Features::empty(),

@@ -185,7 +185,10 @@ mod tests {
             .zip(expected.iter())
             .map(|(a, b)| (a - b).abs())
             .fold(0.0_f64, f64::max);
-        assert!(err < 1.0e-10, "fast DHT mismatch vs direct kernel: err={err}");
+        assert!(
+            err < 1.0e-10,
+            "fast DHT mismatch vs direct kernel: err={err}"
+        );
     }
 
     #[test]
@@ -254,11 +257,7 @@ mod tests {
     #[test]
     fn forward_2d_involution_equals_n_squared_times_input() {
         use ndarray::array;
-        let input = array![
-            [1.0_f64, -2.0, 0.5],
-            [0.25, 3.0, -1.5],
-            [-0.75, 0.5, 2.0]
-        ];
+        let input = array![[1.0_f64, -2.0, 0.5], [0.25, 3.0, -1.5], [-0.75, 0.5, 2.0]];
         let plan = DhtPlan::new(3).expect("plan");
         let first = plan.forward_2d(&input).expect("first 2D forward");
         let second = plan.forward_2d(&first).expect("second 2D forward");
@@ -283,11 +282,7 @@ mod tests {
     #[test]
     fn inverse_2d_recovers_input() {
         use ndarray::array;
-        let input = array![
-            [1.0_f64, -2.0, 0.5],
-            [0.25, 3.0, -1.5],
-            [-0.75, 0.5, 2.0]
-        ];
+        let input = array![[1.0_f64, -2.0, 0.5], [0.25, 3.0, -1.5], [-0.75, 0.5, 2.0]];
         let plan = DhtPlan::new(3).expect("plan");
         let spectrum = plan.forward_2d(&input).expect("2D forward");
         let recovered = plan.inverse_2d(&spectrum).expect("2D inverse");
@@ -392,8 +387,8 @@ mod tests {
         use ndarray::Array3;
         let n = 3_usize;
         let flat: [f64; 27] = [
-            1.0, -2.0, 0.5, 0.25, 3.0, -1.5, -0.75, 0.5, 2.0, 0.1, -0.3, 1.2, -0.5, 2.1,
-            -1.1, 0.7, -0.9, 0.3, 1.5, -0.2, 0.8, -1.4, 0.6, -0.1, 0.9, -2.5, 1.3,
+            1.0, -2.0, 0.5, 0.25, 3.0, -1.5, -0.75, 0.5, 2.0, 0.1, -0.3, 1.2, -0.5, 2.1, -1.1, 0.7,
+            -0.9, 0.3, 1.5, -0.2, 0.8, -1.4, 0.6, -0.1, 0.9, -2.5, 1.3,
         ];
         let mut input = Array3::<f64>::zeros((n, n, n));
         let mut idx = 0;

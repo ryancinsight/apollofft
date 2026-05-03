@@ -175,7 +175,11 @@ pub fn inverse_log_frequency_spectrum(
     };
 
     // Divide spectrum by du to undo the du scaling from the forward DFT.
-    let inv_du = if du.abs() > f64::EPSILON { 1.0 / du } else { 1.0 };
+    let inv_du = if du.abs() > f64::EPSILON {
+        1.0 / du
+    } else {
+        1.0
+    };
     let factor = std::f64::consts::TAU / len as f64;
 
     let idft_coeff = |n: usize| -> f64 {
@@ -255,4 +259,3 @@ pub fn exp_resample(
         });
     }
 }
-

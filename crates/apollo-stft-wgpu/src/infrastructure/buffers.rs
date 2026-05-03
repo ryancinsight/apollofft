@@ -123,14 +123,18 @@ impl StftGpuBuffers {
         signal_len: usize,
         hop_len: usize,
     ) -> Self {
-        assert!(frame_len != 0, "frame_len must be non-zero; got {frame_len}");
-        
+        assert!(
+            frame_len != 0,
+            "frame_len must be non-zero; got {frame_len}"
+        );
+
         // Compute scratch element count: use padded length for non-PoT, original for PoT.
-        let scratch_elem_count = frame_count * if frame_len.is_power_of_two() {
-            frame_len
-        } else {
-            chirp_padded_len(frame_len)
-        };
+        let scratch_elem_count = frame_count
+            * if frame_len.is_power_of_two() {
+                frame_len
+            } else {
+                chirp_padded_len(frame_len)
+            };
         let log2_n = frame_len.trailing_zeros();
 
         let signal_size = (signal_len * std::mem::size_of::<f32>()) as u64;

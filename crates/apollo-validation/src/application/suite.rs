@@ -2153,10 +2153,7 @@ fn radon_fourier_slice_theorem_theta0_fixture() -> SuiteResult<PublishedFixtureR
     let sinogram = plan.forward(&image)?;
     let projection = sinogram.values().row(0).to_owned();
     let dft_of_projection = fft_1d_array(&projection);
-    let expected = [
-        Complex64::new(10.0, 0.0),
-        Complex64::new(-2.0, 0.0),
-    ];
+    let expected = [Complex64::new(10.0, 0.0), Complex64::new(-2.0, 0.0)];
     Ok(published_complex_fixture(
         "Radon",
         "DFT_1(R_\u{03b8}=0([[1,2],[3,4]]))-vs-2D-DFT-slice,N=2",
@@ -2286,15 +2283,9 @@ fn czt_off_unit_circle_z_transform_fixture() -> SuiteResult<PublishedFixtureRepo
     let a = Complex64::new(2.0, 0.0);
     let w = Complex64::from_polar(1.0, -std::f64::consts::PI);
     let plan = CztPlan::new(2, 2, a, w)?;
-    let input = Array1::from_vec(vec![
-        Complex64::new(1.0, 0.0),
-        Complex64::new(1.0, 0.0),
-    ]);
+    let input = Array1::from_vec(vec![Complex64::new(1.0, 0.0), Complex64::new(1.0, 0.0)]);
     let actual = plan.forward(&input)?;
-    let expected = [
-        Complex64::new(1.5, 0.0),
-        Complex64::new(0.5, 0.0),
-    ];
+    let expected = [Complex64::new(1.5, 0.0), Complex64::new(0.5, 0.0)];
     Ok(published_complex_fixture(
         "CZT",
         "CZT2(A=2,W=exp(-πi),[1,1]): Z{x}(2)=1.5,Z{x}(-2)=0.5",
@@ -2371,8 +2362,8 @@ fn hilbert_pure_cosine_envelope_is_unity_fixture() -> SuiteResult<PublishedFixtu
 ///
 /// Reference: Daubechies (1992), Ten Lectures on Wavelets, p.198 (db4 taps);
 ///            Mallat (1989), two-channel periodic filter-bank analysis.
-fn wavelet_daubechies4_one_level_known_coefficients_fixture(
-) -> SuiteResult<PublishedFixtureReport> {
+fn wavelet_daubechies4_one_level_known_coefficients_fixture() -> SuiteResult<PublishedFixtureReport>
+{
     let plan = DwtPlan::new(4, 1, DiscreteWavelet::Daubechies4)?;
     let coefficients = plan.forward(&[1.0_f64, 0.0, 0.0, 0.0])?;
     let mut actual = Vec::with_capacity(4);
@@ -2496,8 +2487,8 @@ fn cwt_ricker_scale_normalization_fixture() -> SuiteResult<PublishedFixtureRepor
     let plan = CwtPlan::new(7, vec![2.0], ContinuousWavelet::Ricker)?;
     let coeffs = plan.transform(&signal)?;
     let actual = [coeffs.values()[[0, 3]]]; // W(2, 3) = ψ(0)/√2
-    let psi0_over_sqrt2 = 2.0_f64
-        / (3.0_f64.sqrt() * std::f64::consts::PI.powf(0.25) * std::f64::consts::SQRT_2);
+    let psi0_over_sqrt2 =
+        2.0_f64 / (3.0_f64.sqrt() * std::f64::consts::PI.powf(0.25) * std::f64::consts::SQRT_2);
     let expected = [psi0_over_sqrt2];
     Ok(published_real_fixture_with_threshold(
         "CWT-Ricker",
@@ -2717,7 +2708,6 @@ mod tests {
         assert_eq!(report.external.rustfft.backend, "rustfft");
         assert_eq!(report.external.numpy.backend, "numpy");
     }
-
 
     #[test]
     fn published_reference_suite_checks_computed_fixture_values() {

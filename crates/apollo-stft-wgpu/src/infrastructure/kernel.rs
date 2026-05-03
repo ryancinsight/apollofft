@@ -27,7 +27,7 @@ use num_complex::Complex32;
 use wgpu::util::DeviceExt;
 
 use crate::domain::error::{WgpuError, WgpuResult};
-use crate::infrastructure::chirp::{StftChirpData, chirp_padded_len};
+use crate::infrastructure::chirp::{chirp_padded_len, StftChirpData};
 
 /// Workgroup size for the OLA reconstruction pass (matches `@workgroup_size(64)` in
 /// `stft_inverse.wgsl`).
@@ -400,7 +400,13 @@ impl StftGpuKernel {
         // Non-power-of-two frame_len: delegate to Bluestein/Chirp-Z path.
         if !frame_len.is_power_of_two() {
             return self.execute_inverse_chirp(
-                device, queue, spectrum, frame_len, hop_len, frame_count, signal_len,
+                device,
+                queue,
+                spectrum,
+                frame_len,
+                hop_len,
+                frame_count,
+                signal_len,
             );
         }
         let log2_n = frame_len.trailing_zeros();
@@ -689,7 +695,12 @@ impl StftGpuKernel {
         // Non-power-of-two frame_len: delegate to Bluestein/Chirp-Z path.
         if !frame_len.is_power_of_two() {
             return self.execute_forward_fft_chirp(
-                device, queue, signal, frame_len, hop_len, frame_count,
+                device,
+                queue,
+                signal,
+                frame_len,
+                hop_len,
+                frame_count,
             );
         }
         let log2_n = frame_len.trailing_zeros();
@@ -1189,11 +1200,11 @@ impl StftGpuKernel {
     /// Formal basis: Rabiner, Schafer & Rader (1969); Bluestein (1970).
     fn execute_forward_fft_chirp(
         &self,
-        device:      &wgpu::Device,
-        queue:       &wgpu::Queue,
-        signal:      &[f32],
-        frame_len:   usize,
-        hop_len:     usize,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        signal: &[f32],
+        frame_len: usize,
+        hop_len: usize,
         frame_count: usize,
     ) -> WgpuResult<Vec<Complex32>> {
         use wgpu::util::DeviceExt;
@@ -1232,8 +1243,14 @@ impl StftGpuKernel {
             label: Some("apollo-stft-wgpu chirp fwd IO BG"),
             layout: &chirp.io_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: signal_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: output_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: signal_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: output_buf.as_entire_binding(),
+                },
             ],
         });
 
@@ -1260,10 +1277,10 @@ impl StftGpuKernel {
         // Pass C: pointmul — pointwise multiply by precomputed H in DFT domain.
         {
             let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("stft_chirp_pointmul_fwd"),
+                label: Some("stft_chirp_pointmul_fwd"),
                 timestamp_writes: None,
             });
-                p.set_pipeline(&chirp.pointmul_fwd_pipeline);
+            p.set_pipeline(&chirp.pointmul_fwd_pipeline);
             p.set_bind_group(0, &chirp.chirp_data_bg, &[]);
             p.set_bind_group(1, &chirp.chirp_params_bg, &[]);
             p.dispatch_workgroups(fft_dispatch_count((frame_count * m) as u32), 1, 1);
@@ -1290,12 +1307,22 @@ impl StftGpuKernel {
 
         let slice = staging.slice(..out_size);
         let (tx, rx) = mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
         let _ = device.poll(wgpu::PollType::Wait);
         match rx.recv() {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(WgpuError::BufferMapFailed { message: e.to_string() }),
-            Err(e)     => return Err(WgpuError::BufferMapFailed { message: e.to_string() }),
+            Ok(Err(e)) => {
+                return Err(WgpuError::BufferMapFailed {
+                    message: e.to_string(),
+                })
+            }
+            Err(e) => {
+                return Err(WgpuError::BufferMapFailed {
+                    message: e.to_string(),
+                })
+            }
         }
         let output = {
             let mapped = slice.get_mapped_range();
@@ -1313,13 +1340,13 @@ impl StftGpuKernel {
     /// Dispatches: premul_inv → Radix-2 forward → pointmul → Radix-2 inverse → postmul_inv → OLA.
     fn execute_inverse_chirp(
         &self,
-        device:      &wgpu::Device,
-        queue:       &wgpu::Queue,
-        spectrum:    &[Complex32],
-        frame_len:   usize,
-        hop_len:     usize,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        spectrum: &[Complex32],
+        frame_len: usize,
+        hop_len: usize,
         frame_count: usize,
-        signal_len:  usize,
+        signal_len: usize,
     ) -> WgpuResult<Vec<f32>> {
         use wgpu::util::DeviceExt;
 
@@ -1365,8 +1392,14 @@ impl StftGpuKernel {
             label: Some("apollo-stft-wgpu chirp inv IO BG"),
             layout: &chirp.io_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: spectrum_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: frame_data_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: spectrum_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: frame_data_buf.as_entire_binding(),
+                },
             ],
         });
 
@@ -1375,9 +1408,9 @@ impl StftGpuKernel {
             &self.params_buffer,
             0,
             bytemuck::bytes_of(&StftParams {
-                signal_len:  signal_len as u32,
-                frame_len:   frame_len as u32,
-                hop_len:     hop_len as u32,
+                signal_len: signal_len as u32,
+                frame_len: frame_len as u32,
+                hop_len: hop_len as u32,
                 frame_count: frame_count as u32,
             }),
         );
@@ -1385,9 +1418,18 @@ impl StftGpuKernel {
             label: Some("apollo-stft-wgpu chirp inv OLA BG"),
             layout: &self.bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: frame_data_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: signal_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: self.params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: frame_data_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: signal_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -1455,12 +1497,22 @@ impl StftGpuKernel {
 
         let slice = staging.slice(..signal_size);
         let (tx, rx) = mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
         let _ = device.poll(wgpu::PollType::Wait);
         match rx.recv() {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(WgpuError::BufferMapFailed { message: e.to_string() }),
-            Err(e)     => return Err(WgpuError::BufferMapFailed { message: e.to_string() }),
+            Ok(Err(e)) => {
+                return Err(WgpuError::BufferMapFailed {
+                    message: e.to_string(),
+                })
+            }
+            Err(e) => {
+                return Err(WgpuError::BufferMapFailed {
+                    message: e.to_string(),
+                })
+            }
         }
         let output = {
             let mapped = slice.get_mapped_range();
@@ -1475,16 +1527,20 @@ impl StftGpuKernel {
     /// `forward = false` → inverse sub-FFT (IDFT twiddles + 1/M scale).
     fn dispatch_chirp_radix2(
         &self,
-        enc:         &mut wgpu::CommandEncoder,
-        chirp:       &StftChirpData,
+        enc: &mut wgpu::CommandEncoder,
+        chirp: &StftChirpData,
         frame_count: usize,
-        m:           usize,
-        log2_m:      u32,
-        inverse:     bool,
+        m: usize,
+        log2_m: u32,
+        inverse: bool,
     ) {
-        let bgs = if inverse { &chirp.radix2_inv_bgs } else { &chirp.radix2_fwd_bgs };
-        let bitrev_total     = (frame_count * m) as u32;
-        let butterfly_total  = (frame_count * m / 2) as u32;
+        let bgs = if inverse {
+            &chirp.radix2_inv_bgs
+        } else {
+            &chirp.radix2_fwd_bgs
+        };
+        let bitrev_total = (frame_count * m) as u32;
+        let butterfly_total = (frame_count * m / 2) as u32;
 
         // Bitrev pass (bgs[0]).
         {

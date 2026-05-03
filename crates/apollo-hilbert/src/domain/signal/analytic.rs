@@ -57,21 +57,21 @@ impl AnalyticSignal {
         self.values.iter().map(|value| value.arg()).collect()
     }
 
-        /// Return the instantaneous frequency in cycles per sample.
-        ///
-        /// Uses the complex-derivative formula
-        /// `f[n] = arg(conj(z[n]) · z[n+1]) / (2π)`,
-        /// which avoids explicit phase unwrapping and remains well-defined
-        /// whenever `|z[n]| > 0`. Returns a vector of length `len() - 1`.
-        /// The value `f[n]` is in `(−0.5, +0.5]` cycles per sample.
-        #[must_use]
-        pub fn instantaneous_frequency(&self) -> Vec<f64> {
-            use std::f64::consts::TAU;
-            self.values
-                .windows(2)
-                .map(|w| (w[0].conj() * w[1]).arg() / TAU)
-                .collect()
-        }
+    /// Return the instantaneous frequency in cycles per sample.
+    ///
+    /// Uses the complex-derivative formula
+    /// `f[n] = arg(conj(z[n]) · z[n+1]) / (2π)`,
+    /// which avoids explicit phase unwrapping and remains well-defined
+    /// whenever `|z[n]| > 0`. Returns a vector of length `len() - 1`.
+    /// The value `f[n]` is in `(−0.5, +0.5]` cycles per sample.
+    #[must_use]
+    pub fn instantaneous_frequency(&self) -> Vec<f64> {
+        use std::f64::consts::TAU;
+        self.values
+            .windows(2)
+            .map(|w| (w[0].conj() * w[1]).arg() / TAU)
+            .collect()
+    }
 
     /// Consume storage and return complex samples.
     #[must_use]

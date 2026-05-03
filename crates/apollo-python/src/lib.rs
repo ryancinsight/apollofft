@@ -8,10 +8,10 @@ pub mod infrastructure;
 use apollo_dctdst::{dct2, dct3, dst2, dst3};
 use apollo_dht::{DhtPlan, HartleySpectrum};
 use apollo_fft::{
-    f16, fft_1d_complex_inplace, fft_2d_complex_inplace, fft_3d_complex_inplace, fftfreq,
-    fftshift, ifft_1d_complex_inplace, ifft_2d_complex_inplace, ifft_3d_complex_inplace,
-    ifftshift, rfftfreq, Complex32, Complex64, CpuBackend, FftBackend, FftPlan1D, FftPlan2D,
-    FftPlan3D, PrecisionMode, PrecisionProfile, Shape1D, Shape2D, Shape3D, StoragePrecision,
+    f16, fft_1d_complex_inplace, fft_2d_complex_inplace, fft_3d_complex_inplace, fftfreq, fftshift,
+    ifft_1d_complex_inplace, ifft_2d_complex_inplace, ifft_3d_complex_inplace, ifftshift, rfftfreq,
+    Complex32, Complex64, CpuBackend, FftBackend, FftPlan1D, FftPlan2D, FftPlan3D, PrecisionMode,
+    PrecisionProfile, Shape1D, Shape2D, Shape3D, StoragePrecision,
 };
 use apollo_fwht::{FwhtPlan, FwhtPlan2D, FwhtPlan3D};
 use apollo_nufft::{

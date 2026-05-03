@@ -14,8 +14,8 @@
 pub mod bluestein;
 pub mod direct;
 pub mod mixed_radix;
-pub mod radix4;
 pub mod radix2;
+pub mod radix4;
 
 pub use direct::{
     dft_forward_32, dft_forward_64, dft_inverse_32, dft_inverse_64, forward_owned_64,

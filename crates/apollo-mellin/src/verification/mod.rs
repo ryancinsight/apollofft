@@ -235,7 +235,10 @@ mod inverse_tests {
             let r = min_scale + i as f64 * r_step;
             let expected = 2.0 * r + 0.5;
             let err = (v - expected).abs();
-            assert!(err < 0.1, "sample {i}: expected={expected:.4}, got={v:.4}, err={err:.4e}");
+            assert!(
+                err < 0.1,
+                "sample {i}: expected={expected:.4}, got={v:.4}, err={err:.4e}"
+            );
         }
     }
 
@@ -257,16 +260,16 @@ mod inverse_tests {
     fn inverse_spectrum_rejects_invalid_output_bounds() {
         let n = 8usize;
         let plan = MellinPlan::new(n, 1.0, 4.0).expect("plan");
-        let spectrum = crate::MellinSpectrum::new(
-            vec![num_complex::Complex64::ZERO; n],
-        );
+        let spectrum = crate::MellinSpectrum::new(vec![num_complex::Complex64::ZERO; n]);
         let mut out = vec![0.0_f64; n];
         assert_eq!(
-            plan.inverse_spectrum(&spectrum, 0.0, 4.0, &mut out).unwrap_err(),
+            plan.inverse_spectrum(&spectrum, 0.0, 4.0, &mut out)
+                .unwrap_err(),
             MellinError::InvalidSignalBound
         );
         assert_eq!(
-            plan.inverse_spectrum(&spectrum, 1.0, 1.0, &mut out).unwrap_err(),
+            plan.inverse_spectrum(&spectrum, 1.0, 1.0, &mut out)
+                .unwrap_err(),
             MellinError::InvalidSignalOrder
         );
     }

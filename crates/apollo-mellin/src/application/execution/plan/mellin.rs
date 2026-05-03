@@ -197,12 +197,11 @@ impl MellinPlan {
         let log_min = self.config.min_scale().ln();
         let log_max = self.config.max_scale().ln();
 
-        let log_samples =
-            crate::infrastructure::kernel::resample::inverse_log_frequency_spectrum(
-                spectrum.values(),
-                log_min,
-                log_max,
-            );
+        let log_samples = crate::infrastructure::kernel::resample::inverse_log_frequency_spectrum(
+            spectrum.values(),
+            log_min,
+            log_max,
+        );
 
         crate::infrastructure::kernel::resample::exp_resample(
             &log_samples,

@@ -373,9 +373,7 @@ impl CztGpuKernel {
         let output = {
             let mapped = slice.get_mapped_range();
             let pods: &[ComplexPod] = bytemuck::cast_slice(&mapped);
-            pods.iter()
-                .map(|v| Complex32::new(v.re, v.im))
-                .collect()
+            pods.iter().map(|v| Complex32::new(v.re, v.im)).collect()
         };
         staging.unmap();
         Ok(output)

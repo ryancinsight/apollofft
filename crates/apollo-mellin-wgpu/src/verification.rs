@@ -225,7 +225,10 @@ mod tests {
         assert_eq!(recovered.len(), n);
         for (i, &v) in recovered.iter().enumerate() {
             let err = (v - 2.5_f32).abs();
-            assert!(err < 5.0e-4, "sample {i}: expected=2.5, got={v:.6}, err={err:.3e}");
+            assert!(
+                err < 5.0e-4,
+                "sample {i}: expected=2.5, got={v:.6}, err={err:.3e}"
+            );
         }
     }
 

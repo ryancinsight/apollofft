@@ -38,15 +38,14 @@ impl FwhtWgpuBackend {
     /// Create a backend by requesting a default adapter and device.
     pub fn try_default() -> WgpuResult<Self> {
         let instance = wgpu::Instance::default();
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            }))
-                .map_err(|error| WgpuError::AdapterUnavailable {
-                message: error.to_string(),
-            })?;
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        }))
+        .map_err(|error| WgpuError::AdapterUnavailable {
+            message: error.to_string(),
+        })?;
         let descriptor = wgpu::DeviceDescriptor {
             label: Some("apollo-fwht-wgpu"),
             required_features: wgpu::Features::empty(),

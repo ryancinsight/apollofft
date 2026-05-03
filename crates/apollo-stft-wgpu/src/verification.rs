@@ -720,14 +720,14 @@ mod tests {
         use apollo_stft::StftPlan;
 
         const FRAME_LEN: usize = 400;
-        const HOP_LEN: usize   = 200;
+        const HOP_LEN: usize = 200;
         const SIGNAL_LEN: usize = 2000;
-            // Tolerance: 2e-2. For N=400 Bluestein on GPU f32, the chirp phase argument
-            // pi*n^2/N reaches ~1254 rad (n=399); GPU argument-reduction error at that
-            // magnitude yields ~1e-4 per trig eval, accumulating over premul + sub-FFT +
-            // pointmul + sub-IFFT + postmul to observed max ~1.24e-2.  2e-2 is the
-            // analytically derived safe bound for f32 GPU Bluestein at this problem size.
-            const TOL: f32 = 2e-2;
+        // Tolerance: 2e-2. For N=400 Bluestein on GPU f32, the chirp phase argument
+        // pi*n^2/N reaches ~1254 rad (n=399); GPU argument-reduction error at that
+        // magnitude yields ~1e-4 per trig eval, accumulating over premul + sub-FFT +
+        // pointmul + sub-IFFT + postmul to observed max ~1.24e-2.  2e-2 is the
+        // analytically derived safe bound for f32 GPU Bluestein at this problem size.
+        const TOL: f32 = 2e-2;
 
         let Ok(backend) = StftWgpuBackend::try_default() else {
             return;
@@ -749,8 +749,11 @@ mod tests {
         let cpu_out = cpu_plan.forward(&signal_f64).expect("CPU forward STFT");
 
         assert_eq!(
-            gpu_out.len(), cpu_out.len(),
-            "length mismatch: gpu={}, cpu={}", gpu_out.len(), cpu_out.len()
+            gpu_out.len(),
+            cpu_out.len(),
+            "length mismatch: gpu={}, cpu={}",
+            gpu_out.len(),
+            cpu_out.len()
         );
 
         let max_err = gpu_out
@@ -775,15 +778,14 @@ mod tests {
     /// Tolerance: 5e-2 (WOLA normalisation + f32 Chirp-Z accumulation).
     #[test]
     fn inverse_chirpz_non_pot_frame_len_400_when_device_exists() {
-
         const FRAME_LEN: usize = 400;
-        const HOP_LEN: usize   = 200;
+        const HOP_LEN: usize = 200;
         const SIGNAL_LEN: usize = 2000;
         const TOL: f32 = 5e-2;
         // Interior samples: skip the first frame_len and last frame_len samples
         // to avoid edge roll-off from WOLA boundary conditions.
         const INTERIOR_START: usize = FRAME_LEN;
-        const INTERIOR_END:   usize = SIGNAL_LEN - FRAME_LEN;
+        const INTERIOR_END: usize = SIGNAL_LEN - FRAME_LEN;
 
         let Ok(backend) = StftWgpuBackend::try_default() else {
             return;
@@ -816,7 +818,9 @@ mod tests {
             assert!(
                 err < TOL,
                 "sample {i}: recovered={:.6}, expected={:.6}, err={:.2e}",
-                recovered[i], signal_f32[i], err
+                recovered[i],
+                signal_f32[i],
+                err
             );
         }
     }
@@ -855,9 +859,9 @@ mod tests {
         const FRAME_LEN: usize = 400;
         const HOP_LEN: usize = 200;
         const SIGNAL_LEN: usize = 1000;
-            // Tolerance: 2e-2. Same analytical bound as forward_chirpz_non_pot_frame_len_400:
-            // f32 GPU argument-reduction at phases up to ~1254 rad for N=400.
-            const TOL: f32 = 2e-2;
+        // Tolerance: 2e-2. Same analytical bound as forward_chirpz_non_pot_frame_len_400:
+        // f32 GPU argument-reduction at phases up to ~1254 rad for N=400.
+        const TOL: f32 = 2e-2;
 
         let Ok(backend) = StftWgpuBackend::try_default() else {
             return;
@@ -949,9 +953,10 @@ mod tests {
             assert!(
                 err < TOL,
                 "sample {i}: recovered={:.6}, expected={:.6}, err={:.2e}",
-                recovered[i], signal_f32[i], err
+                recovered[i],
+                signal_f32[i],
+                err
             );
         }
     }
 }
-

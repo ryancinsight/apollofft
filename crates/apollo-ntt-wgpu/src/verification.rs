@@ -82,7 +82,9 @@ mod tests {
 
     #[test]
     fn backend_reports_forward_and_inverse_when_device_exists() {
-        let Ok(backend) = NttWgpuBackend::try_default() else { return; };
+        let Ok(backend) = NttWgpuBackend::try_default() else {
+            return;
+        };
         let cap = backend.capabilities();
         assert!(cap.device_available);
         assert!(cap.supports_forward);
@@ -98,7 +100,9 @@ mod tests {
     /// integer computations in the same residue field).
     #[test]
     fn forward_impulse_matches_cpu_reference_when_device_exists() {
-        let Ok(backend) = NttWgpuBackend::try_default() else { return; };
+        let Ok(backend) = NttWgpuBackend::try_default() else {
+            return;
+        };
         let input = vec![1_u64, 0, 0, 0, 0, 0, 0, 0];
         let plan = backend.plan(input.len());
         let gpu = backend
@@ -127,7 +131,9 @@ mod tests {
     /// the results are exact integers, so equality is the correct assertion.
     #[test]
     fn forward_fibonacci_matches_cpu_reference_when_device_exists() {
-        let Ok(backend) = NttWgpuBackend::try_default() else { return; };
+        let Ok(backend) = NttWgpuBackend::try_default() else {
+            return;
+        };
         let input = vec![1_u64, 1, 2, 3, 5, 8, 13, 21];
         let plan = backend.plan(input.len());
         let gpu = backend
@@ -153,7 +159,9 @@ mod tests {
     /// error, by the orthogonality of the DFT matrix over F_m (Pollard 1971).
     #[test]
     fn inverse_recovers_input_when_device_exists() {
-        let Ok(backend) = NttWgpuBackend::try_default() else { return; };
+        let Ok(backend) = NttWgpuBackend::try_default() else {
+            return;
+        };
         let input = vec![1_u64, 1, 2, 3, 5, 8, 13, 21];
         let plan = backend.plan(input.len());
         let spectrum = backend
@@ -176,7 +184,9 @@ mod tests {
     /// Quantized forward followed by quantized inverse must recover the input.
     #[test]
     fn quantized_u32_storage_matches_allocating_u64_execution_when_device_exists() {
-        let Ok(backend) = NttWgpuBackend::try_default() else { return; };
+        let Ok(backend) = NttWgpuBackend::try_default() else {
+            return;
+        };
         let input_u32 = vec![1_u32, 1, 2, 3, 5, 8, 13, 21];
         let input_u64: Vec<u64> = input_u32.iter().map(|&v| u64::from(v)).collect();
         let plan = backend.plan(input_u32.len());
@@ -212,7 +222,9 @@ mod tests {
     /// paths — the abstraction must be transparent.
     #[test]
     fn reusable_buffers_match_allocating_forward_and_inverse_when_device_exists() {
-        let Ok(backend) = NttWgpuBackend::try_default() else { return; };
+        let Ok(backend) = NttWgpuBackend::try_default() else {
+            return;
+        };
         let input = vec![1_u64, 4, 9, 16, 25, 36, 49, 64];
         let plan = backend.plan(input.len());
         let mut buffers = backend
@@ -256,7 +268,9 @@ mod tests {
     /// allocating quantized paths.
     #[test]
     fn quantized_u32_reusable_buffers_match_allocating_quantized_path_when_device_exists() {
-        let Ok(backend) = NttWgpuBackend::try_default() else { return; };
+        let Ok(backend) = NttWgpuBackend::try_default() else {
+            return;
+        };
         let input = vec![3_u32, 1, 4, 1, 5, 9, 2, 6];
         let plan = backend.plan(input.len());
         let mut buffers = backend.create_buffers(&plan).expect("reusable buffers");
@@ -298,7 +312,9 @@ mod tests {
 
     #[test]
     fn quantized_u32_storage_rejects_output_length_mismatch_when_device_exists() {
-        let Ok(backend) = NttWgpuBackend::try_default() else { return; };
+        let Ok(backend) = NttWgpuBackend::try_default() else {
+            return;
+        };
         let plan = backend.plan(8);
         let mut output = vec![0_u32; 4];
         let err = backend
@@ -316,7 +332,9 @@ mod tests {
 
     #[test]
     fn reusable_buffers_reject_plan_length_mismatch_when_device_exists() {
-        let Ok(backend) = NttWgpuBackend::try_default() else { return; };
+        let Ok(backend) = NttWgpuBackend::try_default() else {
+            return;
+        };
         let plan = backend.plan(8);
         let short_plan = backend.plan(4);
         let mut short_buffers = backend
@@ -337,7 +355,9 @@ mod tests {
 
     #[test]
     fn rejects_invalid_plan_and_length_before_dispatch() {
-        let Ok(backend) = NttWgpuBackend::try_default() else { return; };
+        let Ok(backend) = NttWgpuBackend::try_default() else {
+            return;
+        };
 
         // Empty plan.
         let empty_err = backend
@@ -518,5 +538,3 @@ mod tests {
         }
     }
 }
-
-

@@ -208,10 +208,7 @@ impl CztPlan {
     /// # Complexity
     ///
     /// O(N²) time, O(N) additional space.
-    pub fn inverse(
-        &self,
-        spectrum: &Array1<Complex64>,
-    ) -> Result<Array1<Complex64>, CztError> {
+    pub fn inverse(&self, spectrum: &Array1<Complex64>) -> Result<Array1<Complex64>, CztError> {
         if spectrum.len() != self.m {
             return Err(CztError::LengthMismatch);
         }
@@ -220,12 +217,11 @@ impl CztPlan {
                 reason: "inverse is only defined for square (M == N) CZT plans",
             });
         }
-        let result =
-            crate::application::execution::kernel::bluestein::czt_bjork_pereyra_inverse(
-                spectrum.as_slice().expect("spectrum must be contiguous"),
-                self.a,
-                self.w,
-            )?;
+        let result = crate::application::execution::kernel::bluestein::czt_bjork_pereyra_inverse(
+            spectrum.as_slice().expect("spectrum must be contiguous"),
+            self.a,
+            self.w,
+        )?;
         Ok(Array1::from_vec(result))
     }
 
@@ -801,8 +797,13 @@ mod inverse_tests {
     /// Rectangular CZT (M ≠ N) must return NotInvertible.
     #[test]
     fn rectangular_czt_is_not_invertible() {
-        let plan = CztPlan::new(4, 6, Complex64::new(1.0, 0.0),
-            Complex64::from_polar(1.0, -0.7)).expect("plan");
+        let plan = CztPlan::new(
+            4,
+            6,
+            Complex64::new(1.0, 0.0),
+            Complex64::from_polar(1.0, -0.7),
+        )
+        .expect("plan");
         let spectrum = Array1::zeros(6);
         assert!(matches!(
             plan.inverse(&spectrum),
@@ -814,8 +815,13 @@ mod inverse_tests {
     #[test]
     fn inverse_rejects_wrong_spectrum_length() {
         let n = 4usize;
-        let plan = CztPlan::new(n, n, Complex64::new(1.0, 0.0),
-            Complex64::from_polar(1.0, -std::f64::consts::TAU / n as f64)).expect("plan");
+        let plan = CztPlan::new(
+            n,
+            n,
+            Complex64::new(1.0, 0.0),
+            Complex64::from_polar(1.0, -std::f64::consts::TAU / n as f64),
+        )
+        .expect("plan");
         let bad_spectrum = Array1::zeros(n + 1);
         assert!(matches!(
             plan.inverse(&bad_spectrum),

@@ -44,15 +44,14 @@ impl StftWgpuBackend {
     /// Create a backend by requesting a default adapter and device.
     pub fn try_default() -> WgpuResult<Self> {
         let instance = wgpu::Instance::default();
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            }))
-                .map_err(|e| WgpuError::AdapterUnavailable {
-                message: e.to_string(),
-            })?;
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        }))
+        .map_err(|e| WgpuError::AdapterUnavailable {
+            message: e.to_string(),
+        })?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("apollo-stft-wgpu"),
             required_features: wgpu::Features::empty(),
@@ -358,13 +357,13 @@ impl StftWgpuBackend {
     /// Execute the inverse STFT using pre-allocated GPU buffers.
     ///
     /// Reuses GPU resources from buffers.
-        /// Pre-allocated GPU resources in `buffers` are reused to avoid per-call allocation.
-        /// Non-power-of-two `frame_len` plans delegate to the allocating Chirp-Z path and
-        /// copy the result into `buffers.inv_output_host`.
-        ///
-        /// # Errors
-        /// Returns `WgpuError::InvalidPlan` if `frame_len == 0` or `hop_len == 0`.
-        pub fn execute_inverse_with_buffers(
+    /// Pre-allocated GPU resources in `buffers` are reused to avoid per-call allocation.
+    /// Non-power-of-two `frame_len` plans delegate to the allocating Chirp-Z path and
+    /// copy the result into `buffers.inv_output_host`.
+    ///
+    /// # Errors
+    /// Returns `WgpuError::InvalidPlan` if `frame_len == 0` or `hop_len == 0`.
+    pub fn execute_inverse_with_buffers(
         &self,
         plan: &StftWgpuPlan,
         spectrum: &[Complex32],

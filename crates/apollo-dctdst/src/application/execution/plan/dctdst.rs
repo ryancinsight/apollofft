@@ -122,7 +122,11 @@ impl DctDstPlan {
     ///
     /// Returns `LengthMismatch` unless both `input` and `output` are square
     /// `N x N` arrays matching the plan length `N`.
-    pub fn forward_2d_into(&self, input: &Array2<f64>, output: &mut Array2<f64>) -> DctDstResult<()> {
+    pub fn forward_2d_into(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<f64>,
+    ) -> DctDstResult<()> {
         let n = self.len();
         if input.dim() != (n, n) || output.dim() != (n, n) {
             return Err(DctDstError::LengthMismatch);
@@ -175,7 +179,11 @@ impl DctDstPlan {
     ///
     /// Returns `LengthMismatch` unless both `input` and `output` are cubic
     /// `N x N x N` arrays matching the plan length `N`.
-    pub fn forward_3d_into(&self, input: &Array3<f64>, output: &mut Array3<f64>) -> DctDstResult<()> {
+    pub fn forward_3d_into(
+        &self,
+        input: &Array3<f64>,
+        output: &mut Array3<f64>,
+    ) -> DctDstResult<()> {
         let n = self.len();
         if input.dim() != (n, n, n) || output.dim() != (n, n, n) {
             return Err(DctDstError::LengthMismatch);
@@ -309,7 +317,11 @@ impl DctDstPlan {
     ///
     /// Returns `LengthMismatch` unless both `input` and `output` are square
     /// `N x N` arrays matching the plan length `N`.
-    pub fn inverse_2d_into(&self, input: &Array2<f64>, output: &mut Array2<f64>) -> DctDstResult<()> {
+    pub fn inverse_2d_into(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<f64>,
+    ) -> DctDstResult<()> {
         let n = self.len();
         if input.dim() != (n, n) || output.dim() != (n, n) {
             return Err(DctDstError::LengthMismatch);
@@ -359,7 +371,11 @@ impl DctDstPlan {
     ///
     /// Returns `LengthMismatch` unless both `input` and `output` are cubic
     /// `N x N x N` arrays matching the plan length `N`.
-    pub fn inverse_3d_into(&self, input: &Array3<f64>, output: &mut Array3<f64>) -> DctDstResult<()> {
+    pub fn inverse_3d_into(
+        &self,
+        input: &Array3<f64>,
+        output: &mut Array3<f64>,
+    ) -> DctDstResult<()> {
         let n = self.len();
         if input.dim() != (n, n, n) || output.dim() != (n, n, n) {
             return Err(DctDstError::LengthMismatch);

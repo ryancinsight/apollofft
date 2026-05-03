@@ -25,38 +25,38 @@ fn cmul32(a: Complex32, b: Complex32) -> Complex32 {
 }
 
 fn forward_pow2_recursive_64(input: &[Complex64]) -> Vec<Complex64> {
-    let n = input.len();
-    if n <= 1 {
+    let len = input.len();
+    if len <= 1 {
         return input.to_vec();
     }
-    if is_power_of_four(n) {
-        let mut v = input.to_vec();
-        radix4::forward_inplace_64(&mut v);
-        return v;
+    if is_power_of_four(len) {
+        let mut values = input.to_vec();
+        radix4::forward_inplace_64(&mut values);
+        return values;
     }
 
-    let m = n / 2;
-    let mut even = Vec::with_capacity(m);
-    let mut odd = Vec::with_capacity(m);
-    for t in 0..m {
-        even.push(input[2 * t]);
-        odd.push(input[2 * t + 1]);
+    let half = len / 2;
+    let mut even = Vec::with_capacity(half);
+    let mut odd = Vec::with_capacity(half);
+    for index in 0..half {
+        even.push(input[2 * index]);
+        odd.push(input[2 * index + 1]);
     }
 
-    let e = forward_pow2_recursive_64(&even);
-    let o = forward_pow2_recursive_64(&odd);
+    let even_fft = forward_pow2_recursive_64(&even);
+    let odd_fft = forward_pow2_recursive_64(&odd);
 
-    let mut out = vec![Complex64::new(0.0, 0.0); n];
-    let angle = -std::f64::consts::TAU / n as f64;
+    let mut output = vec![Complex64::new(0.0, 0.0); len];
+    let angle = -std::f64::consts::TAU / len as f64;
     let step = Complex64::new(angle.cos(), angle.sin());
-    let mut w = Complex64::new(1.0, 0.0);
-    for k in 0..m {
-        let tw = cmul64(w, o[k]);
-        out[k] = e[k] + tw;
-        out[k + m] = e[k] - tw;
-        w = cmul64(w, step);
+    let mut twiddle = Complex64::new(1.0, 0.0);
+    for index in 0..half {
+        let product = cmul64(twiddle, odd_fft[index]);
+        output[index] = even_fft[index] + product;
+        output[index + half] = even_fft[index] - product;
+        twiddle = cmul64(twiddle, step);
     }
-    out
+    output
 }
 
 fn inverse_pow2_recursive_unnorm_64(input: &[Complex64]) -> Vec<Complex64> {
@@ -72,38 +72,38 @@ fn inverse_pow2_recursive_unnorm_64(input: &[Complex64]) -> Vec<Complex64> {
 }
 
 fn forward_pow2_recursive_32(input: &[Complex32]) -> Vec<Complex32> {
-    let n = input.len();
-    if n <= 1 {
+    let len = input.len();
+    if len <= 1 {
         return input.to_vec();
     }
-    if is_power_of_four(n) {
-        let mut v = input.to_vec();
-        radix4::forward_inplace_32(&mut v);
-        return v;
+    if is_power_of_four(len) {
+        let mut values = input.to_vec();
+        radix4::forward_inplace_32(&mut values);
+        return values;
     }
 
-    let m = n / 2;
-    let mut even = Vec::with_capacity(m);
-    let mut odd = Vec::with_capacity(m);
-    for t in 0..m {
-        even.push(input[2 * t]);
-        odd.push(input[2 * t + 1]);
+    let half = len / 2;
+    let mut even = Vec::with_capacity(half);
+    let mut odd = Vec::with_capacity(half);
+    for index in 0..half {
+        even.push(input[2 * index]);
+        odd.push(input[2 * index + 1]);
     }
 
-    let e = forward_pow2_recursive_32(&even);
-    let o = forward_pow2_recursive_32(&odd);
+    let even_fft = forward_pow2_recursive_32(&even);
+    let odd_fft = forward_pow2_recursive_32(&odd);
 
-    let mut out = vec![Complex32::new(0.0, 0.0); n];
-    let angle = -std::f64::consts::TAU / n as f64;
+    let mut output = vec![Complex32::new(0.0, 0.0); len];
+    let angle = -std::f64::consts::TAU / len as f64;
     let step = Complex32::new(angle.cos() as f32, angle.sin() as f32);
-    let mut w = Complex32::new(1.0, 0.0);
-    for k in 0..m {
-        let tw = cmul32(w, o[k]);
-        out[k] = e[k] + tw;
-        out[k + m] = e[k] - tw;
-        w = cmul32(w, step);
+    let mut twiddle = Complex32::new(1.0, 0.0);
+    for index in 0..half {
+        let product = cmul32(twiddle, odd_fft[index]);
+        output[index] = even_fft[index] + product;
+        output[index + half] = even_fft[index] - product;
+        twiddle = cmul32(twiddle, step);
     }
-    out
+    output
 }
 
 fn inverse_pow2_recursive_unnorm_32(input: &[Complex32]) -> Vec<Complex32> {

@@ -226,7 +226,11 @@ mod tests {
         for i in 0..n {
             for j in 0..n {
                 for k in 0..n {
-                    assert_abs_diff_eq!(second[[i, j, k]], n3 * input[[i, j, k]], epsilon = 1.0e-10);
+                    assert_abs_diff_eq!(
+                        second[[i, j, k]],
+                        n3 * input[[i, j, k]],
+                        epsilon = 1.0e-10
+                    );
                 }
             }
         }
@@ -318,8 +322,16 @@ mod tests {
         for i in 0..n {
             for j in 0..n {
                 for k in 0..n {
-                    assert_abs_diff_eq!(recovered[[i, j, k]].re, input[[i, j, k]].re, epsilon = 1.0e-12);
-                    assert_abs_diff_eq!(recovered[[i, j, k]].im, input[[i, j, k]].im, epsilon = 1.0e-12);
+                    assert_abs_diff_eq!(
+                        recovered[[i, j, k]].re,
+                        input[[i, j, k]].re,
+                        epsilon = 1.0e-12
+                    );
+                    assert_abs_diff_eq!(
+                        recovered[[i, j, k]].im,
+                        input[[i, j, k]].im,
+                        epsilon = 1.0e-12
+                    );
                 }
             }
         }
