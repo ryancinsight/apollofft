@@ -88,7 +88,6 @@ impl DhtPlan {
 
         let mut lane_in = vec![0.0_f64; n];
         let mut lane_out = vec![0.0_f64; n];
-        let mut tmp = Array3::<f64>::zeros((n, n, n));
 
         for j in 0..n {
             for k in 0..n {
@@ -109,7 +108,7 @@ impl DhtPlan {
                 }
                 self.forward_into(&lane_in, &mut lane_out)?;
                 for j in 0..n {
-                    tmp[[i, j, k]] = lane_out[j];
+                    output[[i, j, k]] = lane_out[j];
                 }
             }
         }
@@ -117,7 +116,7 @@ impl DhtPlan {
         for i in 0..n {
             for j in 0..n {
                 for k in 0..n {
-                    lane_in[k] = tmp[[i, j, k]];
+                    lane_in[k] = output[[i, j, k]];
                 }
                 self.forward_into(&lane_in, &mut lane_out)?;
                 for k in 0..n {

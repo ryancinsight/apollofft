@@ -11,6 +11,27 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.23] — Closure LXII
+
+### Closure LXII — apollo-dht: remove remaining 3D separable temporary cube [patch]
+
+#### Changed
+- `apollo-dht` / `application/execution/plan/dht.rs`: `forward_3d_impl` no longer allocates any
+  full `Array3<f64>` temporary for axis staging.
+- Axis-1 and axis-2 passes now read each line into reusable lane buffers and write transformed values
+  back to the same line in the destination cube.
+
+#### Memory and performance impact
+- Eliminates the final full `N×N×N` temporary allocation in the 3D separable DHT path.
+- Keeps fixed-size lane buffers only, reducing peak memory footprint and copy pressure.
+
+#### Verification
+- `cargo test -p apollo-dht`: 23 passed, 0 failed.
+- Output comparison checks remain green for DHT-vs-DFT parity, fast-vs-direct Hartley parity,
+  and `_into` multidimensional APIs vs allocating variants.
+
+---
+
 ## [0.13.22] — Closure LXI
 
 ### Closure LXI — apollo-dht: reduce multidimensional separable temporary storage [patch]
