@@ -11,6 +11,29 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.25] — Closure LXIV
+
+### Closure LXIV — apollo-dht: reuse multidimensional lane buffers per plan [patch]
+
+#### Changed
+- `apollo-dht` / `application/execution/plan/dht.rs`: `DhtPlan` now owns reusable lane scratch
+  buffers (`lane_in`/`lane_out`) behind a mutex.
+- 2D/3D separable DHT execution paths now reuse plan-owned lane buffers instead of allocating
+  per-call lane vectors for each transform invocation.
+
+#### Memory and performance impact
+- Eliminates repeated `Vec<f64>` lane allocations on `forward_2d`/`inverse_2d` and
+  `forward_3d`/`inverse_3d` call paths.
+- Preserves the existing output contracts while reducing allocator traffic for repeated
+  multidimensional transforms.
+
+#### Verification
+- `cargo test -p apollo-dht`: 23 passed, 0 failed.
+- Existing output comparison checks remain green for DHT-vs-DFT parity, fast-vs-direct Hartley parity,
+  typed-path checks, and `_into` multidimensional API equivalence.
+
+---
+
 ## [0.13.24] — Closure LXIII
 
 ### Closure LXIII — apollo-dht: remove per-call typed conversion allocations [patch]

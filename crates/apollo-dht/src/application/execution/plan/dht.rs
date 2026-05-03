@@ -17,7 +17,14 @@ const FAST_KERNEL_THRESHOLD: usize = 512;
 pub struct DhtPlan {
     length: HartleyLength,
     fast_scratch: Option<Mutex<Vec<Complex64>>>,
+    lane_scratch: Mutex<LaneScratch>,
     typed_scratch: Mutex<TypedScratch>,
+}
+
+#[derive(Debug)]
+struct LaneScratch {
+    lane_in: Vec<f64>,
+    lane_out: Vec<f64>,
 }
 
 #[derive(Debug)]
@@ -46,14 +53,17 @@ impl DhtPlan {
             });
         }
 
-        let mut lane_in = vec![0.0_f64; n];
-        let mut lane_out = vec![0.0_f64; n];
+        let mut lane_scratch = self
+            .lane_scratch
+            .lock()
+            .expect("lane_scratch mutex poisoned");
+        let LaneScratch { lane_in, lane_out } = &mut *lane_scratch;
 
         for r in 0..n {
             for c in 0..n {
                 lane_in[c] = input[[r, c]];
             }
-            self.forward_into(&lane_in, &mut lane_out)?;
+            self.forward_into(lane_in, lane_out)?;
             for c in 0..n {
                 output[[r, c]] = lane_out[c];
             }
@@ -63,7 +73,7 @@ impl DhtPlan {
             for r in 0..n {
                 lane_in[r] = output[[r, c]];
             }
-            self.forward_into(&lane_in, &mut lane_out)?;
+            self.forward_into(lane_in, lane_out)?;
             for r in 0..n {
                 output[[r, c]] = lane_out[r];
             }
@@ -93,15 +103,18 @@ impl DhtPlan {
             });
         }
 
-        let mut lane_in = vec![0.0_f64; n];
-        let mut lane_out = vec![0.0_f64; n];
+        let mut lane_scratch = self
+            .lane_scratch
+            .lock()
+            .expect("lane_scratch mutex poisoned");
+        let LaneScratch { lane_in, lane_out } = &mut *lane_scratch;
 
         for j in 0..n {
             for k in 0..n {
                 for i in 0..n {
                     lane_in[i] = input[[i, j, k]];
                 }
-                self.forward_into(&lane_in, &mut lane_out)?;
+                self.forward_into(lane_in, lane_out)?;
                 for i in 0..n {
                     output[[i, j, k]] = lane_out[i];
                 }
@@ -113,7 +126,7 @@ impl DhtPlan {
                 for j in 0..n {
                     lane_in[j] = output[[i, j, k]];
                 }
-                self.forward_into(&lane_in, &mut lane_out)?;
+                self.forward_into(lane_in, lane_out)?;
                 for j in 0..n {
                     output[[i, j, k]] = lane_out[j];
                 }
@@ -125,7 +138,7 @@ impl DhtPlan {
                 for k in 0..n {
                     lane_in[k] = output[[i, j, k]];
                 }
-                self.forward_into(&lane_in, &mut lane_out)?;
+                self.forward_into(lane_in, lane_out)?;
                 for k in 0..n {
                     output[[i, j, k]] = lane_out[k];
                 }
@@ -146,6 +159,10 @@ impl DhtPlan {
         Ok(Self {
             length,
             fast_scratch,
+            lane_scratch: Mutex::new(LaneScratch {
+                lane_in: vec![0.0; length.get()],
+                lane_out: vec![0.0; length.get()],
+            }),
             typed_scratch: Mutex::new(TypedScratch {
                 input: vec![0.0; length.get()],
                 output: vec![0.0; length.get()],
