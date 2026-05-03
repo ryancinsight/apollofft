@@ -11,6 +11,24 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.22] — Closure LXI
+
+### Closure LXI — apollo-dht: reduce multidimensional separable temporary storage [patch]
+
+#### Changed
+- `apollo-dht` / `application/execution/plan/dht.rs`: `forward_2d_impl` now uses the caller-provided
+  output array as the row-pass workspace, eliminating the dedicated full `Array2<f64>` temporary.
+- `apollo-dht` / `application/execution/plan/dht.rs`: `forward_3d_impl` now uses the caller-provided
+  output cube for the axis-0 pass and retains only one intermediate `Array3<f64>` for the axis-1 pass,
+  reducing full-cube temporary storage from two allocations to one.
+
+#### Verification
+- Added explicit output-equality coverage for `forward_2d_into`, `inverse_2d_into`, `forward_3d_into`,
+  and `inverse_3d_into` against the corresponding allocating APIs.
+- `cargo test -p apollo-dht`: 23 passed, 0 failed.
+
+---
+
 ## [0.13.21] — Closure LX
 
 ### Closure LX — apollo-dht: remove redundant fast-wrapper scratch initialization [patch]

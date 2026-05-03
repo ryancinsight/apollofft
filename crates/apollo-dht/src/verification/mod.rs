@@ -304,6 +304,46 @@ mod tests {
         }
     }
 
+    #[test]
+    fn forward_and_inverse_2d_into_match_allocating_paths() {
+        use ndarray::array;
+
+        let input = array![
+            [1.25_f64, -0.5, 2.0],
+            [-1.0, 0.75, 3.5],
+            [0.125, -2.25, 1.5]
+        ];
+        let plan = DhtPlan::new(3).expect("plan");
+
+        let expected_forward = plan.forward_2d(&input).expect("forward 2D");
+        let mut forward_into = ndarray::Array2::<f64>::zeros((3, 3));
+        plan.forward_2d_into(&input, &mut forward_into)
+            .expect("forward_2d_into");
+        for r in 0..3 {
+            for c in 0..3 {
+                assert_abs_diff_eq!(
+                    forward_into[[r, c]],
+                    expected_forward[[r, c]],
+                    epsilon = 1.0e-12
+                );
+            }
+        }
+
+        let expected_inverse = plan.inverse_2d(&expected_forward).expect("inverse 2D");
+        let mut inverse_into = ndarray::Array2::<f64>::zeros((3, 3));
+        plan.inverse_2d_into(&expected_forward, &mut inverse_into)
+            .expect("inverse_2d_into");
+        for r in 0..3 {
+            for c in 0..3 {
+                assert_abs_diff_eq!(
+                    inverse_into[[r, c]],
+                    expected_inverse[[r, c]],
+                    epsilon = 1.0e-12
+                );
+            }
+        }
+    }
+
     /// 2D DHT of a 4×4 separable signal: the row-DHT of each row then column-DHT of each
     /// column matches manual computation using the known 1D DHT formula.
     #[test]
@@ -377,6 +417,54 @@ mod tests {
                         "3D inverse roundtrip mismatch at [{i},{j},{k}]: recovered={}, original={}",
                         recovered[[i, j, k]],
                         input[[i, j, k]]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn forward_and_inverse_3d_into_match_allocating_paths() {
+        use ndarray::Array3;
+
+        let n = 3_usize;
+        let mut input = Array3::<f64>::zeros((n, n, n));
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    input[[i, j, k]] = (i as f64 * 0.5) - (j as f64 * 1.25) + (k as f64 * 0.75);
+                }
+            }
+        }
+
+        let plan = DhtPlan::new(n).expect("plan");
+        let expected_forward = plan.forward_3d(&input).expect("forward 3D");
+        let mut forward_into = Array3::<f64>::zeros((n, n, n));
+        plan.forward_3d_into(&input, &mut forward_into)
+            .expect("forward_3d_into");
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    assert_abs_diff_eq!(
+                        forward_into[[i, j, k]],
+                        expected_forward[[i, j, k]],
+                        epsilon = 1.0e-12
+                    );
+                }
+            }
+        }
+
+        let expected_inverse = plan.inverse_3d(&expected_forward).expect("inverse 3D");
+        let mut inverse_into = Array3::<f64>::zeros((n, n, n));
+        plan.inverse_3d_into(&expected_forward, &mut inverse_into)
+            .expect("inverse_3d_into");
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    assert_abs_diff_eq!(
+                        inverse_into[[i, j, k]],
+                        expected_inverse[[i, j, k]],
+                        epsilon = 1.0e-12
                     );
                 }
             }

@@ -39,7 +39,6 @@ impl DhtPlan {
             });
         }
 
-        let mut tmp = Array2::<f64>::zeros((n, n));
         let mut lane_in = vec![0.0_f64; n];
         let mut lane_out = vec![0.0_f64; n];
 
@@ -49,13 +48,13 @@ impl DhtPlan {
             }
             self.forward_into(&lane_in, &mut lane_out)?;
             for c in 0..n {
-                tmp[[r, c]] = lane_out[c];
+                output[[r, c]] = lane_out[c];
             }
         }
 
         for c in 0..n {
             for r in 0..n {
-                lane_in[r] = tmp[[r, c]];
+                lane_in[r] = output[[r, c]];
             }
             self.forward_into(&lane_in, &mut lane_out)?;
             for r in 0..n {
@@ -89,8 +88,7 @@ impl DhtPlan {
 
         let mut lane_in = vec![0.0_f64; n];
         let mut lane_out = vec![0.0_f64; n];
-        let mut tmp0 = Array3::<f64>::zeros((n, n, n));
-        let mut tmp1 = Array3::<f64>::zeros((n, n, n));
+        let mut tmp = Array3::<f64>::zeros((n, n, n));
 
         for j in 0..n {
             for k in 0..n {
@@ -99,7 +97,7 @@ impl DhtPlan {
                 }
                 self.forward_into(&lane_in, &mut lane_out)?;
                 for i in 0..n {
-                    tmp0[[i, j, k]] = lane_out[i];
+                    output[[i, j, k]] = lane_out[i];
                 }
             }
         }
@@ -107,11 +105,11 @@ impl DhtPlan {
         for i in 0..n {
             for k in 0..n {
                 for j in 0..n {
-                    lane_in[j] = tmp0[[i, j, k]];
+                    lane_in[j] = output[[i, j, k]];
                 }
                 self.forward_into(&lane_in, &mut lane_out)?;
                 for j in 0..n {
-                    tmp1[[i, j, k]] = lane_out[j];
+                    tmp[[i, j, k]] = lane_out[j];
                 }
             }
         }
@@ -119,7 +117,7 @@ impl DhtPlan {
         for i in 0..n {
             for j in 0..n {
                 for k in 0..n {
-                    lane_in[k] = tmp1[[i, j, k]];
+                    lane_in[k] = tmp[[i, j, k]];
                 }
                 self.forward_into(&lane_in, &mut lane_out)?;
                 for k in 0..n {
