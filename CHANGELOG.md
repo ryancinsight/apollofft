@@ -11,6 +11,35 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.17] — Closure LVI
+
+### Closure LVI — apollo-fft: reduce mixed-radix/radix-4 twiddle overhead with iterative recurrence [patch]
+
+#### Changed
+- `apollo-fft` / `mixed_radix.rs`: removed per-bin `sin`/`cos` twiddle generation in
+  the recursive radix-2 combine stage. Each combine level now computes one complex
+  step root `exp(-2πi/N)` and advances twiddles by repeated complex multiplication.
+- `apollo-fft` / `radix4.rs`: removed per-bin `sin`/`cos` twiddle generation in the
+  radix-4 combine stage. Twiddles `W_N^k`, `W_N^{2k}`, and `W_N^{3k}` are now advanced
+  iteratively from a single stage root and its powers.
+- The temporary ad hoc comparison example used during profiling was removed after
+  validation to keep the tree clean.
+
+#### Performance
+- Standalone complex-kernel comparison in release mode improved substantially after
+  recurrence-based twiddle stepping:
+  - N=16384 mixed-radix vs radix-2: `4.43x` slower -> `3.23x` slower
+  - N=65536 mixed-radix vs radix-2: `4.03x` slower -> `2.73x` slower
+- Result: the latest kernels are materially cheaper than the initial implementation,
+  but still not competitive with the tuned iterative radix-2 production path, so
+  dispatch remains unchanged.
+
+#### Verification
+- `cargo test -p apollo-fft`: 67 passed, 0 failed.
+- Python benchmark output validation: 46/46 Apollo-vs-NumPy comparisons PASS.
+
+---
+
 ## [0.13.16] — Closure LV
 
 ### Closure LV — apollo-fft: add explicit radix-4 and mixed radix-2/radix-4 kernels with validation coverage [minor]

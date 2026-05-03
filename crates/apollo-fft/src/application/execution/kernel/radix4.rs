@@ -20,20 +20,6 @@ fn cmul32(a: Complex32, b: Complex32) -> Complex32 {
     Complex32::new(a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re)
 }
 
-#[inline]
-fn twiddle64(n: usize, k: usize, inverse: bool) -> Complex64 {
-    let s = if inverse { 1.0 } else { -1.0 };
-    let a = s * std::f64::consts::TAU * (k as f64) / (n as f64);
-    Complex64::new(a.cos(), a.sin())
-}
-
-#[inline]
-fn twiddle32(n: usize, k: usize, inverse: bool) -> Complex32 {
-    let s = if inverse { 1.0 } else { -1.0 };
-    let a = s * std::f64::consts::TAU * (k as f64) / (n as f64);
-    Complex32::new(a.cos() as f32, a.sin() as f32)
-}
-
 fn radix4_butterfly4_64(x: &[Complex64], inverse: bool) -> [Complex64; 4] {
     let i_mul = |v: Complex64| {
         if inverse {
@@ -135,12 +121,20 @@ fn fft_radix4_recursive_64(input: &[Complex64], inverse: bool) -> Vec<Complex64>
             Complex64::new(-v.im, v.re)
         }
     };
+    let sign = if inverse { 1.0 } else { -1.0 };
+    let angle = sign * std::f64::consts::TAU / n as f64;
+    let step1 = Complex64::new(angle.cos(), angle.sin());
+    let step2 = cmul64(step1, step1);
+    let step3 = cmul64(step2, step1);
+    let mut w1 = Complex64::new(1.0, 0.0);
+    let mut w2 = Complex64::new(1.0, 0.0);
+    let mut w3 = Complex64::new(1.0, 0.0);
 
     for k in 0..m {
         let a0 = y0[k];
-        let a1 = cmul64(twiddle64(n, k, inverse), y1[k]);
-        let a2 = cmul64(twiddle64(n, 2 * k, inverse), y2[k]);
-        let a3 = cmul64(twiddle64(n, 3 * k, inverse), y3[k]);
+        let a1 = cmul64(w1, y1[k]);
+        let a2 = cmul64(w2, y2[k]);
+        let a3 = cmul64(w3, y3[k]);
 
         let t0 = a0 + a2;
         let t1 = a0 - a2;
@@ -151,6 +145,10 @@ fn fft_radix4_recursive_64(input: &[Complex64], inverse: bool) -> Vec<Complex64>
         out[k + m] = t1 + i_mul(t3);
         out[k + 2 * m] = t0 - t2;
         out[k + 3 * m] = t1 + neg_i_mul(t3);
+
+        w1 = cmul64(w1, step1);
+        w2 = cmul64(w2, step2);
+        w3 = cmul64(w3, step3);
     }
 
     out
@@ -199,12 +197,20 @@ fn fft_radix4_recursive_32(input: &[Complex32], inverse: bool) -> Vec<Complex32>
             Complex32::new(-v.im, v.re)
         }
     };
+    let sign = if inverse { 1.0 } else { -1.0 };
+    let angle = sign * std::f64::consts::TAU / n as f64;
+    let step1 = Complex32::new(angle.cos() as f32, angle.sin() as f32);
+    let step2 = cmul32(step1, step1);
+    let step3 = cmul32(step2, step1);
+    let mut w1 = Complex32::new(1.0, 0.0);
+    let mut w2 = Complex32::new(1.0, 0.0);
+    let mut w3 = Complex32::new(1.0, 0.0);
 
     for k in 0..m {
         let a0 = y0[k];
-        let a1 = cmul32(twiddle32(n, k, inverse), y1[k]);
-        let a2 = cmul32(twiddle32(n, 2 * k, inverse), y2[k]);
-        let a3 = cmul32(twiddle32(n, 3 * k, inverse), y3[k]);
+        let a1 = cmul32(w1, y1[k]);
+        let a2 = cmul32(w2, y2[k]);
+        let a3 = cmul32(w3, y3[k]);
 
         let t0 = a0 + a2;
         let t1 = a0 - a2;
@@ -215,6 +221,10 @@ fn fft_radix4_recursive_32(input: &[Complex32], inverse: bool) -> Vec<Complex32>
         out[k + m] = t1 + i_mul(t3);
         out[k + 2 * m] = t0 - t2;
         out[k + 3 * m] = t1 + neg_i_mul(t3);
+
+        w1 = cmul32(w1, step1);
+        w2 = cmul32(w2, step2);
+        w3 = cmul32(w3, step3);
     }
 
     out

@@ -15,20 +15,6 @@ fn is_power_of_four(n: usize) -> bool {
 }
 
 #[inline]
-fn twiddle64(n: usize, k: usize, inverse: bool) -> Complex64 {
-    let s = if inverse { 1.0 } else { -1.0 };
-    let a = s * std::f64::consts::TAU * (k as f64) / (n as f64);
-    Complex64::new(a.cos(), a.sin())
-}
-
-#[inline]
-fn twiddle32(n: usize, k: usize, inverse: bool) -> Complex32 {
-    let s = if inverse { 1.0 } else { -1.0 };
-    let a = s * std::f64::consts::TAU * (k as f64) / (n as f64);
-    Complex32::new(a.cos() as f32, a.sin() as f32)
-}
-
-#[inline]
 fn cmul64(a: Complex64, b: Complex64) -> Complex64 {
     Complex64::new(a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re)
 }
@@ -61,10 +47,14 @@ fn forward_pow2_recursive_64(input: &[Complex64]) -> Vec<Complex64> {
     let o = forward_pow2_recursive_64(&odd);
 
     let mut out = vec![Complex64::new(0.0, 0.0); n];
+    let angle = -std::f64::consts::TAU / n as f64;
+    let step = Complex64::new(angle.cos(), angle.sin());
+    let mut w = Complex64::new(1.0, 0.0);
     for k in 0..m {
-        let tw = cmul64(twiddle64(n, k, false), o[k]);
+        let tw = cmul64(w, o[k]);
         out[k] = e[k] + tw;
         out[k + m] = e[k] - tw;
+        w = cmul64(w, step);
     }
     out
 }
@@ -104,10 +94,14 @@ fn forward_pow2_recursive_32(input: &[Complex32]) -> Vec<Complex32> {
     let o = forward_pow2_recursive_32(&odd);
 
     let mut out = vec![Complex32::new(0.0, 0.0); n];
+    let angle = -std::f64::consts::TAU / n as f64;
+    let step = Complex32::new(angle.cos() as f32, angle.sin() as f32);
+    let mut w = Complex32::new(1.0, 0.0);
     for k in 0..m {
-        let tw = cmul32(twiddle32(n, k, false), o[k]);
+        let tw = cmul32(w, o[k]);
         out[k] = e[k] + tw;
         out[k + m] = e[k] - tw;
+        w = cmul32(w, step);
     }
     out
 }
