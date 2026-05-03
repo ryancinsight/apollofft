@@ -11,6 +11,34 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.13] — Closure LII
+
+### Closure LII — apollo-fft: cache-sequential gather/scatter for 3D axis-1 and axis-0 passes [patch]
+
+#### Changed
+- `apollo-fft` / `dimension_3d.rs`: reorganized the tile-blocked gather and scatter loops
+  in `axis1_pass_complex` (f64), `axis0_pass_complex` (f64), `axis1_pass_complex_f32`,
+  and `axis0_pass_complex_f32`.  The previous code ordered tiles with k (or i) as the
+  innermost loop, producing strided loads from the source array with stride proportional
+  to `ny` or `ny*nz`. The new code promotes i (or j) to the outermost position and makes
+  k the innermost, so reads from `data_slice` are sequential (stride 1) and writes to
+  `scratch` carry the stride. Hardware write-combining buffers the non-sequential stores
+  without pipeline stalls; sequential loads are critical for prefetch and cache-line
+  utilization. This change does not alter the mathematical result or the scratch layout.
+- `dimension_3d.rs`: added `src_base = i * ny * nz` and `dst_base` precomputed index
+  variables in the axis-0 gather/scatter to hoist the multiply of `i` out of the inner
+  tile loops, eliminating one address multiplication per (j,k) iteration.
+- `dimension_2d.rs`: gather/scatter loop order unchanged (2D matrices fit in L2; the
+  col-outer order avoids write-allocation pressure on the smaller scratch arrays there).
+
+#### Performance
+- 3D 32³ real FFT: 1.62× → ~2.2× vs NumPy (confirmed across multiple runs, +36%)
+- 3D 128³ real FFT: 1.18× → ~1.22× vs NumPy
+- 2D benchmarks: no regression (within run-to-run variance)
+- 1D benchmarks: unaffected (no gather/scatter path)
+
+---
+
 ## [0.13.12] — Closure LI
 
 ### Closure LI — apollo-fft: stage-3 (len=8) butterfly specialization, compile-time W_8^j constants [patch]
