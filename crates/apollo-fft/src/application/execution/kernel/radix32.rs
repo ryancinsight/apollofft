@@ -1,5 +1,6 @@
 //! True radix-32 Cooley-Tukey kernels.
 
+use super::radix2;
 use num_complex::{Complex32, Complex64};
 
 #[inline]
@@ -14,8 +15,7 @@ pub fn forward_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
         return;
     }
     debug_assert!(is_power_of_thirty_two(data.len()));
-    let _ = twiddles;
-    radix_r_inplace_64::<32>(data, false);
+    radix_r_inplace_64::<32>(data, false, Some(twiddles));
 }
 
 #[inline]
@@ -25,8 +25,7 @@ pub fn inverse_inplace_unnorm_64_with_twiddles(data: &mut [Complex64], twiddles:
         return;
     }
     debug_assert!(is_power_of_thirty_two(data.len()));
-    let _ = twiddles;
-    radix_r_inplace_64::<32>(data, true);
+    radix_r_inplace_64::<32>(data, true, Some(twiddles));
 }
 
 #[inline]
@@ -36,8 +35,7 @@ pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
         return;
     }
     debug_assert!(is_power_of_thirty_two(data.len()));
-    let _ = twiddles;
-    radix_r_inplace_64::<32>(data, true);
+    radix_r_inplace_64::<32>(data, true, Some(twiddles));
     let inv_n = 1.0 / data.len() as f64;
     for value in data.iter_mut() {
         *value *= inv_n;
@@ -50,7 +48,8 @@ pub fn forward_inplace_64(data: &mut [Complex64]) {
         return;
     }
     debug_assert!(is_power_of_thirty_two(data.len()));
-    radix_r_inplace_64::<32>(data, false);
+    let twiddles = radix2::build_forward_twiddle_table_64(data.len());
+    radix_r_inplace_64::<32>(data, false, Some(&twiddles));
 }
 
 /// Inverse FFT (unnormalized) for power-of-thirty-two lengths.
@@ -59,7 +58,8 @@ pub fn inverse_inplace_unnorm_64(data: &mut [Complex64]) {
         return;
     }
     debug_assert!(is_power_of_thirty_two(data.len()));
-    radix_r_inplace_64::<32>(data, true);
+    let twiddles = radix2::build_inverse_twiddle_table_64(data.len());
+    radix_r_inplace_64::<32>(data, true, Some(&twiddles));
 }
 
 /// Inverse FFT normalized by 1/N for power-of-thirty-two lengths.
@@ -68,7 +68,8 @@ pub fn inverse_inplace_64(data: &mut [Complex64]) {
         return;
     }
     debug_assert!(is_power_of_thirty_two(data.len()));
-    radix_r_inplace_64::<32>(data, true);
+    let twiddles = radix2::build_inverse_twiddle_table_64(data.len());
+    radix_r_inplace_64::<32>(data, true, Some(&twiddles));
     let inv_n = 1.0 / data.len() as f64;
     for value in data.iter_mut() {
         *value *= inv_n;
@@ -82,8 +83,7 @@ pub fn forward_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
         return;
     }
     debug_assert!(is_power_of_thirty_two(data.len()));
-    let _ = twiddles;
-    radix_r_inplace_32::<32>(data, false);
+    radix_r_inplace_32::<32>(data, false, Some(twiddles));
 }
 
 #[inline]
@@ -93,8 +93,7 @@ pub fn inverse_inplace_unnorm_32_with_twiddles(data: &mut [Complex32], twiddles:
         return;
     }
     debug_assert!(is_power_of_thirty_two(data.len()));
-    let _ = twiddles;
-    radix_r_inplace_32::<32>(data, true);
+    radix_r_inplace_32::<32>(data, true, Some(twiddles));
 }
 
 #[inline]
@@ -104,8 +103,7 @@ pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
         return;
     }
     debug_assert!(is_power_of_thirty_two(data.len()));
-    let _ = twiddles;
-    radix_r_inplace_32::<32>(data, true);
+    radix_r_inplace_32::<32>(data, true, Some(twiddles));
     let inv_n = 1.0f32 / data.len() as f32;
     for value in data.iter_mut() {
         *value *= inv_n;
@@ -118,7 +116,8 @@ pub fn forward_inplace_32(data: &mut [Complex32]) {
         return;
     }
     debug_assert!(is_power_of_thirty_two(data.len()));
-    radix_r_inplace_32::<32>(data, false);
+    let twiddles = radix2::build_forward_twiddle_table_32(data.len());
+    radix_r_inplace_32::<32>(data, false, Some(&twiddles));
 }
 
 /// Inverse FFT (unnormalized, f32) for power-of-thirty-two lengths.
@@ -127,7 +126,8 @@ pub fn inverse_inplace_unnorm_32(data: &mut [Complex32]) {
         return;
     }
     debug_assert!(is_power_of_thirty_two(data.len()));
-    radix_r_inplace_32::<32>(data, true);
+    let twiddles = radix2::build_inverse_twiddle_table_32(data.len());
+    radix_r_inplace_32::<32>(data, true, Some(&twiddles));
 }
 
 /// Inverse FFT normalized by 1/N (f32) for power-of-thirty-two lengths.
@@ -136,7 +136,8 @@ pub fn inverse_inplace_32(data: &mut [Complex32]) {
         return;
     }
     debug_assert!(is_power_of_thirty_two(data.len()));
-    radix_r_inplace_32::<32>(data, true);
+    let twiddles = radix2::build_inverse_twiddle_table_32(data.len());
+    radix_r_inplace_32::<32>(data, true, Some(&twiddles));
     let inv_n = 1.0f32 / data.len() as f32;
     for value in data.iter_mut() {
         *value *= inv_n;
@@ -182,7 +183,29 @@ fn cmul_32(a: Complex32, b: Complex32) -> Complex32 {
     Complex32::new(a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re)
 }
 
-fn radix_r_inplace_64<const RADIX: usize>(data: &mut [Complex64], inverse: bool) {
+fn dft_matrix_64<const RADIX: usize>(sign: f64) -> [[Complex64; RADIX]; RADIX] {
+    core::array::from_fn(|q| {
+        core::array::from_fn(|p| {
+            let angle = sign * std::f64::consts::TAU * (p * q) as f64 / RADIX as f64;
+            Complex64::new(angle.cos(), angle.sin())
+        })
+    })
+}
+
+fn dft_matrix_32<const RADIX: usize>(sign: f64) -> [[Complex32; RADIX]; RADIX] {
+    core::array::from_fn(|q| {
+        core::array::from_fn(|p| {
+            let angle = sign * std::f64::consts::TAU * (p * q) as f64 / RADIX as f64;
+            Complex32::new(angle.cos() as f32, angle.sin() as f32)
+        })
+    })
+}
+
+fn radix_r_inplace_64<const RADIX: usize>(
+    data: &mut [Complex64],
+    inverse: bool,
+    twiddles: Option<&[Complex64]>,
+) {
     debug_assert!(data.len().is_power_of_two());
     debug_assert!((data.len().trailing_zeros() as usize) % RADIX.trailing_zeros() as usize == 0);
     if data.len() <= 1 {
@@ -191,30 +214,34 @@ fn radix_r_inplace_64<const RADIX: usize>(data: &mut [Complex64], inverse: bool)
 
     digit_reverse_permute_64::<RADIX>(data);
     let sign = if inverse { 1.0 } else { -1.0 };
+    let dft = dft_matrix_64::<RADIX>(sign);
     let mut m = 1usize;
-    let mut scratch = vec![Complex64::new(0.0, 0.0); RADIX];
-    let mut output = vec![Complex64::new(0.0, 0.0); RADIX];
+    let mut scratch = [Complex64::new(0.0, 0.0); RADIX];
+    let mut output = [Complex64::new(0.0, 0.0); RADIX];
 
     while m < data.len() {
         let len = m * RADIX;
+        let half = len >> 1;
+        let stage_twiddles = twiddles.map(|table| &table[(half - 1)..(half - 1 + half)]);
         for chunk in data.chunks_exact_mut(len) {
             for j in 0..m {
+                let step = if let Some(stage) = stage_twiddles {
+                    stage[j]
+                } else {
+                    let angle = sign * std::f64::consts::TAU * j as f64 / len as f64;
+                    Complex64::new(angle.cos(), angle.sin())
+                };
+                let mut tw = Complex64::new(1.0, 0.0);
                 for p in 0..RADIX {
-                    let mut value = chunk[j + p * m];
-                    if p != 0 {
-                        let angle = sign * std::f64::consts::TAU * (p * j) as f64 / len as f64;
-                        let tw = Complex64::new(angle.cos(), angle.sin());
-                        value = cmul_64(value, tw);
-                    }
+                    let value = cmul_64(chunk[j + p * m], tw);
                     scratch[p] = value;
+                    tw = cmul_64(tw, step);
                 }
 
                 for (q, out) in output.iter_mut().enumerate() {
                     let mut sum = Complex64::new(0.0, 0.0);
                     for (p, value) in scratch.iter().enumerate() {
-                        let angle = sign * std::f64::consts::TAU * (p * q) as f64 / RADIX as f64;
-                        let w = Complex64::new(angle.cos(), angle.sin());
-                        sum += cmul_64(*value, w);
+                        sum += cmul_64(*value, dft[q][p]);
                     }
                     *out = sum;
                 }
@@ -228,7 +255,11 @@ fn radix_r_inplace_64<const RADIX: usize>(data: &mut [Complex64], inverse: bool)
     }
 }
 
-fn radix_r_inplace_32<const RADIX: usize>(data: &mut [Complex32], inverse: bool) {
+fn radix_r_inplace_32<const RADIX: usize>(
+    data: &mut [Complex32],
+    inverse: bool,
+    twiddles: Option<&[Complex32]>,
+) {
     debug_assert!(data.len().is_power_of_two());
     debug_assert!((data.len().trailing_zeros() as usize) % RADIX.trailing_zeros() as usize == 0);
     if data.len() <= 1 {
@@ -237,30 +268,34 @@ fn radix_r_inplace_32<const RADIX: usize>(data: &mut [Complex32], inverse: bool)
 
     digit_reverse_permute_32::<RADIX>(data);
     let sign = if inverse { 1.0 } else { -1.0 };
+    let dft = dft_matrix_32::<RADIX>(sign);
     let mut m = 1usize;
-    let mut scratch = vec![Complex32::new(0.0, 0.0); RADIX];
-    let mut output = vec![Complex32::new(0.0, 0.0); RADIX];
+    let mut scratch = [Complex32::new(0.0, 0.0); RADIX];
+    let mut output = [Complex32::new(0.0, 0.0); RADIX];
 
     while m < data.len() {
         let len = m * RADIX;
+        let half = len >> 1;
+        let stage_twiddles = twiddles.map(|table| &table[(half - 1)..(half - 1 + half)]);
         for chunk in data.chunks_exact_mut(len) {
             for j in 0..m {
+                let step = if let Some(stage) = stage_twiddles {
+                    stage[j]
+                } else {
+                    let angle = sign * std::f64::consts::TAU * j as f64 / len as f64;
+                    Complex32::new(angle.cos() as f32, angle.sin() as f32)
+                };
+                let mut tw = Complex32::new(1.0, 0.0);
                 for p in 0..RADIX {
-                    let mut value = chunk[j + p * m];
-                    if p != 0 {
-                        let angle = sign * std::f64::consts::TAU * (p * j) as f64 / len as f64;
-                        let tw = Complex32::new(angle.cos() as f32, angle.sin() as f32);
-                        value = cmul_32(value, tw);
-                    }
+                    let value = cmul_32(chunk[j + p * m], tw);
                     scratch[p] = value;
+                    tw = cmul_32(tw, step);
                 }
 
                 for (q, out) in output.iter_mut().enumerate() {
                     let mut sum = Complex32::new(0.0, 0.0);
                     for (p, value) in scratch.iter().enumerate() {
-                        let angle = sign * std::f64::consts::TAU * (p * q) as f64 / RADIX as f64;
-                        let w = Complex32::new(angle.cos() as f32, angle.sin() as f32);
-                        sum += cmul_32(*value, w);
+                        sum += cmul_32(*value, dft[q][p]);
                     }
                     *out = sum;
                 }

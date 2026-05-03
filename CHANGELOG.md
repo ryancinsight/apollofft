@@ -7,7 +7,30 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 ---
 
 ## [Unreleased]
-*(no unreleased changes)*
+### Changed
+- `apollo-fft` / `application/execution/kernel/radix16.rs`:
+  - Removed per-call heap allocation in true radix-16 kernels by replacing dynamic scratch/output
+    vectors with fixed-size stack arrays.
+  - Reduced twiddle overhead by consuming stage twiddles from caller-provided tables and using
+    iterative twiddle recurrence inside butterfly loops.
+  - Precomputed radix-16 intra-butterfly DFT matrix once per call to eliminate repeated
+    trigonometric evaluation in inner loops.
+- `apollo-fft` / `application/execution/kernel/radix32.rs`:
+  - Applied the same zero-extra-allocation stack scratch strategy, twiddle-table stage reuse,
+    and precomputed DFT-matrix butterfly optimization for true radix-32 execution.
+- `apollo-fft` / `application/execution/kernel/radix64.rs`:
+  - Applied the same zero-extra-allocation stack scratch strategy, twiddle-table stage reuse,
+    and precomputed DFT-matrix butterfly optimization for true radix-64 execution.
+
+### Verification
+- `cargo test -p apollo-fft radix16 -- --nocapture`: passed.
+- `cargo test -p apollo-fft radix32 -- --nocapture`: passed.
+- `cargo test -p apollo-fft radix64 -- --nocapture`: passed.
+- `cargo bench -p apollo-fft --bench kernel_strategy`: completed; high-radix kernels improved
+  materially from previous baselines (for example, `radix64_inplace/64` improved by ~34%).
+- `cargo run -p apollo-validation --release`: passed, including external rustfft/numpy checks.
+- `D:/miniforge3/python.exe D:/apollofft/crates/apollo-python/tests/benchmark_vs_numpy.py`:
+  all Apollo-vs-NumPy output comparisons passed.
 
 ---
 
