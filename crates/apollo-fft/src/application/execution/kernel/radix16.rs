@@ -1,6 +1,18 @@
-//! True radix-16 Cooley-Tukey kernels.
+//! True radix-16 Cooley-Tukey kernels using Winograd DFT-16 inner butterflies.
+//!
+//! ## Algorithm
+//!
+//! Each stage processes groups of 16 elements using the Winograd DFT-16
+//! kernel, which recursively decomposes via 2×DFT-8 (each 2×DFT-4 with
+//! ±√2/2 twiddles) to reduce the inner butterfly from 256 generic
+//! multiplications to 8 real multiplications per group.
+//!
+//! ## References
+//!
+//! - Winograd, S. (1978). On computing the discrete Fourier transform.
+//!   *Mathematics of Computation*, 32(141), 175–199.
 
-use super::radix2;
+use super::{radix2, winograd};
 use num_complex::{Complex32, Complex64};
 
 #[inline]
@@ -15,7 +27,7 @@ pub fn forward_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
         return;
     }
     debug_assert!(is_power_of_sixteen(data.len()));
-    radix_r_inplace_64::<16>(data, false, Some(twiddles));
+    radix16_inplace_64(data, false, Some(twiddles));
 }
 
 #[inline]
@@ -25,7 +37,7 @@ pub fn inverse_inplace_unnorm_64_with_twiddles(data: &mut [Complex64], twiddles:
         return;
     }
     debug_assert!(is_power_of_sixteen(data.len()));
-    radix_r_inplace_64::<16>(data, true, Some(twiddles));
+    radix16_inplace_64(data, true, Some(twiddles));
 }
 
 #[inline]
@@ -35,7 +47,7 @@ pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
         return;
     }
     debug_assert!(is_power_of_sixteen(data.len()));
-    radix_r_inplace_64::<16>(data, true, Some(twiddles));
+    radix16_inplace_64(data, true, Some(twiddles));
     let inv_n = 1.0 / data.len() as f64;
     for value in data.iter_mut() {
         *value *= inv_n;
@@ -49,7 +61,7 @@ pub fn forward_inplace_64(data: &mut [Complex64]) {
     }
     debug_assert!(is_power_of_sixteen(data.len()));
     let twiddles = radix2::build_forward_twiddle_table_64(data.len());
-    radix_r_inplace_64::<16>(data, false, Some(&twiddles));
+    radix16_inplace_64(data, false, Some(&twiddles));
 }
 
 /// Inverse FFT (unnormalized) for power-of-sixteen lengths.
@@ -59,7 +71,7 @@ pub fn inverse_inplace_unnorm_64(data: &mut [Complex64]) {
     }
     debug_assert!(is_power_of_sixteen(data.len()));
     let twiddles = radix2::build_inverse_twiddle_table_64(data.len());
-    radix_r_inplace_64::<16>(data, true, Some(&twiddles));
+    radix16_inplace_64(data, true, Some(&twiddles));
 }
 
 /// Inverse FFT normalized by 1/N for power-of-sixteen lengths.
@@ -69,7 +81,7 @@ pub fn inverse_inplace_64(data: &mut [Complex64]) {
     }
     debug_assert!(is_power_of_sixteen(data.len()));
     let twiddles = radix2::build_inverse_twiddle_table_64(data.len());
-    radix_r_inplace_64::<16>(data, true, Some(&twiddles));
+    radix16_inplace_64(data, true, Some(&twiddles));
     let inv_n = 1.0 / data.len() as f64;
     for value in data.iter_mut() {
         *value *= inv_n;
@@ -83,7 +95,7 @@ pub fn forward_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
         return;
     }
     debug_assert!(is_power_of_sixteen(data.len()));
-    radix_r_inplace_32::<16>(data, false, Some(twiddles));
+    radix16_inplace_32(data, false, Some(twiddles));
 }
 
 #[inline]
@@ -93,7 +105,7 @@ pub fn inverse_inplace_unnorm_32_with_twiddles(data: &mut [Complex32], twiddles:
         return;
     }
     debug_assert!(is_power_of_sixteen(data.len()));
-    radix_r_inplace_32::<16>(data, true, Some(twiddles));
+    radix16_inplace_32(data, true, Some(twiddles));
 }
 
 #[inline]
@@ -103,7 +115,7 @@ pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
         return;
     }
     debug_assert!(is_power_of_sixteen(data.len()));
-    radix_r_inplace_32::<16>(data, true, Some(twiddles));
+    radix16_inplace_32(data, true, Some(twiddles));
     let inv_n = 1.0f32 / data.len() as f32;
     for value in data.iter_mut() {
         *value *= inv_n;
@@ -117,7 +129,7 @@ pub fn forward_inplace_32(data: &mut [Complex32]) {
     }
     debug_assert!(is_power_of_sixteen(data.len()));
     let twiddles = radix2::build_forward_twiddle_table_32(data.len());
-    radix_r_inplace_32::<16>(data, false, Some(&twiddles));
+    radix16_inplace_32(data, false, Some(&twiddles));
 }
 
 /// Inverse FFT (unnormalized, f32) for power-of-sixteen lengths.
@@ -127,7 +139,7 @@ pub fn inverse_inplace_unnorm_32(data: &mut [Complex32]) {
     }
     debug_assert!(is_power_of_sixteen(data.len()));
     let twiddles = radix2::build_inverse_twiddle_table_32(data.len());
-    radix_r_inplace_32::<16>(data, true, Some(&twiddles));
+    radix16_inplace_32(data, true, Some(&twiddles));
 }
 
 /// Inverse FFT normalized by 1/N (f32) for power-of-sixteen lengths.
@@ -137,7 +149,7 @@ pub fn inverse_inplace_32(data: &mut [Complex32]) {
     }
     debug_assert!(is_power_of_sixteen(data.len()));
     let twiddles = radix2::build_inverse_twiddle_table_32(data.len());
-    radix_r_inplace_32::<16>(data, true, Some(&twiddles));
+    radix16_inplace_32(data, true, Some(&twiddles));
     let inv_n = 1.0f32 / data.len() as f32;
     for value in data.iter_mut() {
         *value *= inv_n;
@@ -173,81 +185,41 @@ fn digit_reverse_permute_32<const RADIX: usize>(data: &mut [Complex32]) {
     }
 }
 
-#[inline]
-fn cmul_64(a: Complex64, b: Complex64) -> Complex64 {
-    Complex64::new(a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re)
-}
-
-#[inline]
-fn cmul_32(a: Complex32, b: Complex32) -> Complex32 {
-    Complex32::new(a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re)
-}
-
-fn dft_matrix_64<const RADIX: usize>(sign: f64) -> [[Complex64; RADIX]; RADIX] {
-    core::array::from_fn(|q| {
-        core::array::from_fn(|p| {
-            let angle = sign * std::f64::consts::TAU * (p * q) as f64 / RADIX as f64;
-            Complex64::new(angle.cos(), angle.sin())
-        })
-    })
-}
-
-fn dft_matrix_32<const RADIX: usize>(sign: f64) -> [[Complex32; RADIX]; RADIX] {
-    core::array::from_fn(|q| {
-        core::array::from_fn(|p| {
-            let angle = sign * std::f64::consts::TAU * (p * q) as f64 / RADIX as f64;
-            Complex32::new(angle.cos() as f32, angle.sin() as f32)
-        })
-    })
-}
-
-fn radix_r_inplace_64<const RADIX: usize>(
+fn radix16_inplace_64(
     data: &mut [Complex64],
     inverse: bool,
     twiddles: Option<&[Complex64]>,
 ) {
+    const RADIX: usize = 16;
     debug_assert!(data.len().is_power_of_two());
-    debug_assert!((data.len().trailing_zeros() as usize) % RADIX.trailing_zeros() as usize == 0);
+    debug_assert!((data.len().trailing_zeros() as usize) % 4 == 0);
     if data.len() <= 1 {
         return;
     }
-
     digit_reverse_permute_64::<RADIX>(data);
-    let sign = if inverse { 1.0 } else { -1.0 };
-    let dft = dft_matrix_64::<RADIX>(sign);
+    let sign = if inverse { 1.0_f64 } else { -1.0_f64 };
     let mut m = 1usize;
-    let mut scratch = [Complex64::new(0.0, 0.0); RADIX];
-    let mut output = [Complex64::new(0.0, 0.0); RADIX];
-
     while m < data.len() {
         let len = m * RADIX;
         let half = len >> 1;
-        let stage_twiddles = twiddles.map(|table| &table[(half - 1)..(half - 1 + half)]);
+        let stage_twiddles = twiddles.map(|t| &t[(half - 1)..(half - 1 + half)]);
         for chunk in data.chunks_exact_mut(len) {
             for j in 0..m {
-                let step = if let Some(stage) = stage_twiddles {
-                    stage[j]
+                let step = if let Some(st) = stage_twiddles {
+                    st[j]
                 } else {
-                    let angle = sign * std::f64::consts::TAU * j as f64 / len as f64;
-                    Complex64::new(angle.cos(), angle.sin())
+                    let a = sign * std::f64::consts::TAU * j as f64 / len as f64;
+                    Complex64::new(a.cos(), a.sin())
                 };
                 let mut tw = Complex64::new(1.0, 0.0);
+                let mut buf = [Complex64::new(0.0, 0.0); RADIX];
                 for p in 0..RADIX {
-                    let value = cmul_64(chunk[j + p * m], tw);
-                    scratch[p] = value;
-                    tw = cmul_64(tw, step);
+                    buf[p] = winograd::apply_twiddle_64(chunk[j + p * m], tw);
+                    tw = winograd::apply_twiddle_64(tw, step);
                 }
-
-                for (q, out) in output.iter_mut().enumerate() {
-                    let mut sum = Complex64::new(0.0, 0.0);
-                    for (p, value) in scratch.iter().enumerate() {
-                        sum += cmul_64(*value, dft[q][p]);
-                    }
-                    *out = sum;
-                }
-
-                for q in 0..RADIX {
-                    chunk[j + q * m] = output[q];
+                winograd::dft16_64(&mut buf, inverse);
+                for p in 0..RADIX {
+                    chunk[j + p * m] = buf[p];
                 }
             }
         }
@@ -255,53 +227,41 @@ fn radix_r_inplace_64<const RADIX: usize>(
     }
 }
 
-fn radix_r_inplace_32<const RADIX: usize>(
+fn radix16_inplace_32(
     data: &mut [Complex32],
     inverse: bool,
     twiddles: Option<&[Complex32]>,
 ) {
+    const RADIX: usize = 16;
     debug_assert!(data.len().is_power_of_two());
-    debug_assert!((data.len().trailing_zeros() as usize) % RADIX.trailing_zeros() as usize == 0);
+    debug_assert!((data.len().trailing_zeros() as usize) % 4 == 0);
     if data.len() <= 1 {
         return;
     }
-
     digit_reverse_permute_32::<RADIX>(data);
-    let sign = if inverse { 1.0 } else { -1.0 };
-    let dft = dft_matrix_32::<RADIX>(sign);
+    let sign = if inverse { 1.0_f64 } else { -1.0_f64 };
     let mut m = 1usize;
-    let mut scratch = [Complex32::new(0.0, 0.0); RADIX];
-    let mut output = [Complex32::new(0.0, 0.0); RADIX];
-
     while m < data.len() {
         let len = m * RADIX;
         let half = len >> 1;
-        let stage_twiddles = twiddles.map(|table| &table[(half - 1)..(half - 1 + half)]);
+        let stage_twiddles = twiddles.map(|t| &t[(half - 1)..(half - 1 + half)]);
         for chunk in data.chunks_exact_mut(len) {
             for j in 0..m {
-                let step = if let Some(stage) = stage_twiddles {
-                    stage[j]
+                let step = if let Some(st) = stage_twiddles {
+                    st[j]
                 } else {
-                    let angle = sign * std::f64::consts::TAU * j as f64 / len as f64;
-                    Complex32::new(angle.cos() as f32, angle.sin() as f32)
+                    let a = sign * std::f64::consts::TAU * j as f64 / len as f64;
+                    Complex32::new(a.cos() as f32, a.sin() as f32)
                 };
                 let mut tw = Complex32::new(1.0, 0.0);
+                let mut buf = [Complex32::new(0.0, 0.0); RADIX];
                 for p in 0..RADIX {
-                    let value = cmul_32(chunk[j + p * m], tw);
-                    scratch[p] = value;
-                    tw = cmul_32(tw, step);
+                    buf[p] = winograd::apply_twiddle_32(chunk[j + p * m], tw);
+                    tw = winograd::apply_twiddle_32(tw, step);
                 }
-
-                for (q, out) in output.iter_mut().enumerate() {
-                    let mut sum = Complex32::new(0.0, 0.0);
-                    for (p, value) in scratch.iter().enumerate() {
-                        sum += cmul_32(*value, dft[q][p]);
-                    }
-                    *out = sum;
-                }
-
-                for q in 0..RADIX {
-                    chunk[j + q * m] = output[q];
+                winograd::dft16_32(&mut buf, inverse);
+                for p in 0..RADIX {
+                    chunk[j + p * m] = buf[p];
                 }
             }
         }

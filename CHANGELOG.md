@@ -7,6 +7,53 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 ---
 
 ## [Unreleased]
+### Added
+- `apollo-fft` / `application/execution/kernel/winograd.rs` (new module):
+  - Algebraic Winograd short-DFT kernels for sizes 2, 4, 8, 16, 32, and 64 (f64 and f32).
+  - DFT-2: 0 multiplications (pure add/subtract butterfly).
+  - DFT-4: 0 multiplications (±i rotation via swap-and-negate, no trig).
+  - DFT-8: 4 real multiplications using W_8^k exact algebraic twiddles
+    (W_8^1 = SQ2O2·(1−i), W_8^2 = −i, W_8^3 = −SQ2O2·(1+i)).
+  - DFT-16: 2×DFT-8 + 8 exact nested-square-root 16th-root twiddles.
+  - DFT-32: 2×DFT-16 + 16 trigonometric 32nd-root twiddles.
+  - DFT-64: 2×DFT-32 + 32 trigonometric 64th-root twiddles.
+  - `apply_twiddle_64` / `apply_twiddle_32` helpers for complex multiply.
+  - 23 unit tests covering forward, inverse, roundtrip, and boundary cases for all sizes.
+
+### Changed
+- `apollo-fft` / `application/execution/kernel/mod.rs`:
+  - Registered `pub mod winograd;` in the kernel module tree.
+- `apollo-fft` / `application/execution/kernel/radix8.rs`:
+  - Completely rewritten as a true Winograd-radix-8 DIT FFT replacing the former radix-2 delegate.
+  - Implements base-8 digit-reverse permutation (`digit_reverse_64/32`) and an iterative DIT loop
+    that calls `winograd::dft8_64/32` as the inner butterfly.
+- `apollo-fft` / `application/execution/kernel/radix16.rs`:
+  - Replaced the O(R²) DFT-matrix inner butterfly with `winograd::dft16_64/32`.
+  - Removed dead code: `cmul_64`, `cmul_32`, `dft_matrix_64`, `dft_matrix_32`,
+    `radix_r_inplace_64`, `radix_r_inplace_32`.
+  - Inner butterfly now costs ~8 real multiplications (Winograd DFT-16) vs. O(R²) previously.
+- `apollo-fft` / `application/execution/kernel/radix32.rs`:
+  - Replaced the O(R²) DFT-matrix inner butterfly with `winograd::dft32_64/32`.
+  - Removed same dead code categories as radix16.
+- `apollo-fft` / `application/execution/kernel/radix64.rs`:
+  - Replaced the O(R²) DFT-matrix inner butterfly with `winograd::dft64_64/32`.
+  - Removed same dead code categories as radix16.
+
+### Verification
+- `cargo test -p apollo-fft`: **101/101 tests pass** (includes all new radix-8 tests and
+  existing radix-16/32/64 tests).
+- `cargo test -p apollo-fft -- winograd`: 23/23 Winograd unit tests pass.
+- `cargo run -p apollo-validation --release`: all 59 published-reference fixtures pass;
+  roundtrip max-abs-error ≤ 2.2e-16 (f64), RustFFT delta = 0.
+- `cargo bench -p apollo-fft --bench kernel_strategy` (selected results vs previous baseline):
+  - `radix16_inplace/16`: 227 ns  (−27%,  **improved**)
+  - `radix64_inplace/64`: 1.22 µs (within noise, stable)
+  - `auto_selector/64`:   1.02 µs (−11%,  **improved** — auto-selector now routes to faster kernel)
+  - `radix32_inplace/32`: 505 ns  (+6%,   within noise for single-stage transform at N=32)
+
+---
+
+## Previous [Unreleased] — twiddle-table stack-array optimisation (commit c85b301)
 ### Changed
 - `apollo-fft` / `application/execution/kernel/radix16.rs`:
   - Removed per-call heap allocation in true radix-16 kernels by replacing dynamic scratch/output
