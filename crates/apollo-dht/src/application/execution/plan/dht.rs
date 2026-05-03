@@ -20,6 +20,117 @@ pub struct DhtPlan {
 }
 
 impl DhtPlan {
+    fn forward_2d_impl(&self, input: &Array2<f64>, output: &mut Array2<f64>) -> DhtResult<()> {
+        let n = self.len();
+        let (rows, cols) = input.dim();
+        let (out_rows, out_cols) = output.dim();
+        if rows != n || cols != n {
+            return Err(DhtError::ShapeMismatch2d {
+                expected: n,
+                rows,
+                cols,
+            });
+        }
+        if out_rows != n || out_cols != n {
+            return Err(DhtError::ShapeMismatch2d {
+                expected: n,
+                rows: out_rows,
+                cols: out_cols,
+            });
+        }
+
+        let mut tmp = Array2::<f64>::zeros((n, n));
+        let mut lane_in = vec![0.0_f64; n];
+        let mut lane_out = vec![0.0_f64; n];
+
+        for r in 0..n {
+            for c in 0..n {
+                lane_in[c] = input[[r, c]];
+            }
+            self.forward_into(&lane_in, &mut lane_out)?;
+            for c in 0..n {
+                tmp[[r, c]] = lane_out[c];
+            }
+        }
+
+        for c in 0..n {
+            for r in 0..n {
+                lane_in[r] = tmp[[r, c]];
+            }
+            self.forward_into(&lane_in, &mut lane_out)?;
+            for r in 0..n {
+                output[[r, c]] = lane_out[r];
+            }
+        }
+
+        Ok(())
+    }
+
+    fn forward_3d_impl(&self, input: &Array3<f64>, output: &mut Array3<f64>) -> DhtResult<()> {
+        let n = self.len();
+        let (d0, d1, d2) = input.dim();
+        let (o0, o1, o2) = output.dim();
+        if d0 != n || d1 != n || d2 != n {
+            return Err(DhtError::ShapeMismatch3d {
+                expected: n,
+                d0,
+                d1,
+                d2,
+            });
+        }
+        if o0 != n || o1 != n || o2 != n {
+            return Err(DhtError::ShapeMismatch3d {
+                expected: n,
+                d0: o0,
+                d1: o1,
+                d2: o2,
+            });
+        }
+
+        let mut lane_in = vec![0.0_f64; n];
+        let mut lane_out = vec![0.0_f64; n];
+        let mut tmp0 = Array3::<f64>::zeros((n, n, n));
+        let mut tmp1 = Array3::<f64>::zeros((n, n, n));
+
+        for j in 0..n {
+            for k in 0..n {
+                for i in 0..n {
+                    lane_in[i] = input[[i, j, k]];
+                }
+                self.forward_into(&lane_in, &mut lane_out)?;
+                for i in 0..n {
+                    tmp0[[i, j, k]] = lane_out[i];
+                }
+            }
+        }
+
+        for i in 0..n {
+            for k in 0..n {
+                for j in 0..n {
+                    lane_in[j] = tmp0[[i, j, k]];
+                }
+                self.forward_into(&lane_in, &mut lane_out)?;
+                for j in 0..n {
+                    tmp1[[i, j, k]] = lane_out[j];
+                }
+            }
+        }
+
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    lane_in[k] = tmp1[[i, j, k]];
+                }
+                self.forward_into(&lane_in, &mut lane_out)?;
+                for k in 0..n {
+                    output[[i, j, k]] = lane_out[k];
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Create a DHT plan for a non-empty signal length.
     pub fn new(len: usize) -> DhtResult<Self> {
         let length = HartleyLength::new(len)?;
@@ -107,46 +218,14 @@ impl DhtPlan {
     /// Requires a square `N×N` input where `N == self.len()`.
     pub fn forward_2d(&self, input: &Array2<f64>) -> DhtResult<Array2<f64>> {
         let n = self.len();
-        let (rows, cols) = input.dim();
-        if rows != n || cols != n {
-            return Err(DhtError::ShapeMismatch2d {
-                expected: n,
-                rows,
-                cols,
-            });
-        }
-        // Row pass.
-        let mut tmp = Array2::<f64>::zeros((n, n));
-        let mut lane_in = vec![0.0_f64; n];
-        let mut lane_out = vec![0.0_f64; n];
-        for r in 0..n {
-            for c in 0..n {
-                lane_in[c] = input[[r, c]];
-            }
-            self.forward_into(&lane_in, &mut lane_out)?;
-            for c in 0..n {
-                tmp[[r, c]] = lane_out[c];
-            }
-        }
-        // Column pass.
         let mut result = Array2::<f64>::zeros((n, n));
-        for c in 0..n {
-            for r in 0..n {
-                lane_in[r] = tmp[[r, c]];
-            }
-            self.forward_into(&lane_in, &mut lane_out)?;
-            for r in 0..n {
-                result[[r, c]] = lane_out[r];
-            }
-        }
+        self.forward_2d_impl(input, &mut result)?;
         Ok(result)
     }
 
     /// Execute the unnormalized separable 2D forward DHT into a caller-owned buffer.
     pub fn forward_2d_into(&self, input: &Array2<f64>, output: &mut Array2<f64>) -> DhtResult<()> {
-        let result = self.forward_2d(input)?;
-        output.assign(&result);
-        Ok(())
+        self.forward_2d_impl(input, output)
     }
 
     /// Execute the normalized separable 2D inverse DHT on an N×N spectrum.
@@ -156,7 +235,8 @@ impl DhtPlan {
     /// additional kernel required.
     pub fn inverse_2d(&self, input: &Array2<f64>) -> DhtResult<Array2<f64>> {
         let n = self.len();
-        let mut result = self.forward_2d(input)?;
+        let mut result = Array2::<f64>::zeros((n, n));
+        self.forward_2d_impl(input, &mut result)?;
         let scale = 1.0 / (n * n) as f64;
         result.mapv_inplace(|v| v * scale);
         Ok(result)
@@ -164,8 +244,9 @@ impl DhtPlan {
 
     /// Execute the normalized separable 2D inverse DHT into a caller-owned buffer.
     pub fn inverse_2d_into(&self, input: &Array2<f64>, output: &mut Array2<f64>) -> DhtResult<()> {
-        let result = self.inverse_2d(input)?;
-        output.assign(&result);
+        self.forward_2d_impl(input, output)?;
+        let scale = 1.0 / (self.len() * self.len()) as f64;
+        output.mapv_inplace(|v| v * scale);
         Ok(())
     }
 
@@ -175,64 +256,14 @@ impl DhtPlan {
     /// Requires a cubic `N×N×N` input where `N == self.len()`.
     pub fn forward_3d(&self, input: &Array3<f64>) -> DhtResult<Array3<f64>> {
         let n = self.len();
-        let (d0, d1, d2) = input.dim();
-        if d0 != n || d1 != n || d2 != n {
-            return Err(DhtError::ShapeMismatch3d {
-                expected: n,
-                d0,
-                d1,
-                d2,
-            });
-        }
-        let mut lane_in = vec![0.0_f64; n];
-        let mut lane_out = vec![0.0_f64; n];
-        // Axis-0 pass.
-        let mut tmp0 = Array3::<f64>::zeros((n, n, n));
-        for j in 0..n {
-            for k in 0..n {
-                for i in 0..n {
-                    lane_in[i] = input[[i, j, k]];
-                }
-                self.forward_into(&lane_in, &mut lane_out)?;
-                for i in 0..n {
-                    tmp0[[i, j, k]] = lane_out[i];
-                }
-            }
-        }
-        // Axis-1 pass.
-        let mut tmp1 = Array3::<f64>::zeros((n, n, n));
-        for i in 0..n {
-            for k in 0..n {
-                for j in 0..n {
-                    lane_in[j] = tmp0[[i, j, k]];
-                }
-                self.forward_into(&lane_in, &mut lane_out)?;
-                for j in 0..n {
-                    tmp1[[i, j, k]] = lane_out[j];
-                }
-            }
-        }
-        // Axis-2 pass.
         let mut result = Array3::<f64>::zeros((n, n, n));
-        for i in 0..n {
-            for j in 0..n {
-                for k in 0..n {
-                    lane_in[k] = tmp1[[i, j, k]];
-                }
-                self.forward_into(&lane_in, &mut lane_out)?;
-                for k in 0..n {
-                    result[[i, j, k]] = lane_out[k];
-                }
-            }
-        }
+        self.forward_3d_impl(input, &mut result)?;
         Ok(result)
     }
 
     /// Execute the unnormalized separable 3D forward DHT into a caller-owned buffer.
     pub fn forward_3d_into(&self, input: &Array3<f64>, output: &mut Array3<f64>) -> DhtResult<()> {
-        let result = self.forward_3d(input)?;
-        output.assign(&result);
-        Ok(())
+        self.forward_3d_impl(input, output)
     }
 
     /// Execute the normalized separable 3D inverse DHT on an N×N×N spectrum.
@@ -240,7 +271,8 @@ impl DhtPlan {
     /// `inverse_3d = (1/N³) · forward_3d` by DHT involutory property.
     pub fn inverse_3d(&self, input: &Array3<f64>) -> DhtResult<Array3<f64>> {
         let n = self.len();
-        let mut result = self.forward_3d(input)?;
+        let mut result = Array3::<f64>::zeros((n, n, n));
+        self.forward_3d_impl(input, &mut result)?;
         let scale = 1.0 / (n * n * n) as f64;
         result.mapv_inplace(|v| v * scale);
         Ok(result)
@@ -248,8 +280,10 @@ impl DhtPlan {
 
     /// Execute the normalized separable 3D inverse DHT into a caller-owned buffer.
     pub fn inverse_3d_into(&self, input: &Array3<f64>, output: &mut Array3<f64>) -> DhtResult<()> {
-        let result = self.inverse_3d(input)?;
-        output.assign(&result);
+        self.forward_3d_impl(input, output)?;
+        let n = self.len();
+        let scale = 1.0 / (n * n * n) as f64;
+        output.mapv_inplace(|v| v * scale);
         Ok(())
     }
 

@@ -11,6 +11,34 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.20] — Closure LIX
+
+### Closure LIX — apollo-dht: remove full-result allocation from caller-owned 2D/3D APIs [patch]
+
+#### Changed
+- `apollo-dht` / `application/execution/plan/dht.rs`: added private direct-writer helpers
+  for separable 2D and 3D DHT execution.
+- `forward_2d_into` and `forward_3d_into` now execute directly into the caller-owned
+  output arrays instead of allocating a full result array and copying it afterward.
+- `inverse_2d_into` and `inverse_3d_into` now reuse the same direct-writer path and apply
+  normalization in-place on the caller-owned output buffer.
+- Allocating variants (`forward_2d`, `inverse_2d`, `forward_3d`, `inverse_3d`) now build the
+  result buffer once and dispatch through the same writer helpers, keeping a single authoritative
+  implementation.
+
+#### Memory and performance impact
+- Eliminates one full `Array2<f64>` allocation + copy in `forward_2d_into` and `inverse_2d_into`.
+- Eliminates one full `Array3<f64>` allocation + copy in `forward_3d_into` and `inverse_3d_into`.
+- Reduces peak memory footprint for caller-owned multidimensional DHT execution while preserving
+  the same lane-buffer reuse and fast-kernel scratch reuse from the previous closures.
+
+#### Verification
+- `cargo test -p apollo-dht`: 20 passed, 0 failed.
+- Existing output comparison coverage remains green, including direct Hartley parity at the fast
+  threshold and 2D/3D inverse roundtrip recovery.
+
+---
+
 ## [0.13.19] — Closure LVIII
 
 ### Closure LVIII — apollo-dht: reuse 2D/3D lane buffers in separable plan passes [patch]
