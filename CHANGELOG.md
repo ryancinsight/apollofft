@@ -11,6 +11,34 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.13.18] — Closure LVII
+
+### Closure LVII — apollo-dht: reuse FFT scratch in fast Hartley plan path [patch]
+
+#### Changed
+- `apollo-dht` / `application/execution/plan/dht.rs`: `DhtPlan` now owns an optional
+  reusable `Mutex<Vec<Complex64>>` scratch buffer for lengths at or above
+  `FAST_KERNEL_THRESHOLD`.
+- `apollo-dht` / `infrastructure/kernel/fast.rs`: added `dht_fast_with_scratch`, a
+  caller-owned-scratch entry point for the FFT-mapped Hartley kernel.
+- `DhtPlan::forward_into` now locks and reuses plan-owned scratch for the fast path
+  instead of allocating a fresh complex buffer on every call.
+
+#### Memory and performance impact
+- Eliminates one `Vec<Complex64>` allocation per fast 1D DHT call.
+- This also removes repeated fast-kernel scratch allocation inside 2D and 3D separable
+  DHT passes, because those paths route every row/column/fiber transform through the same
+  `DhtPlan::forward_into` entry point.
+
+#### Verification
+- Added explicit fast-path parity test at the threshold: the FFT-mapped DHT at `N=512`
+  matches the independent direct Hartley kernel within `1e-10`.
+- `cargo test -p apollo-dht`: 20 passed, 0 failed.
+- Workspace Python output-comparison benchmark remains clean: 46/46 Apollo-vs-NumPy
+  FFT output comparisons PASS.
+
+---
+
 ## [0.13.17] — Closure LVI
 
 ### Closure LVI — apollo-fft: reduce mixed-radix/radix-4 twiddle overhead with iterative recurrence [patch]

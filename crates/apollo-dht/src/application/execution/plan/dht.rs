@@ -4,41 +4,51 @@ use crate::domain::contracts::error::{DhtError, DhtResult};
 use crate::domain::metadata::length::HartleyLength;
 use crate::domain::spectrum::coefficients::HartleySpectrum;
 use crate::infrastructure::kernel::direct::transform_real;
-use crate::infrastructure::kernel::fast::dht_fast;
+use crate::infrastructure::kernel::fast::dht_fast_with_scratch;
 use apollo_fft::{f16, PrecisionProfile};
 use ndarray::{Array2, Array3};
+use num_complex::Complex64;
+use std::sync::Mutex;
 
 const FAST_KERNEL_THRESHOLD: usize = 512;
 
 /// Reusable 1D real-to-real DHT plan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct DhtPlan {
     length: HartleyLength,
+    fast_scratch: Option<Mutex<Vec<Complex64>>>,
 }
 
 impl DhtPlan {
     /// Create a DHT plan for a non-empty signal length.
     pub fn new(len: usize) -> DhtResult<Self> {
+        let length = HartleyLength::new(len)?;
+        let fast_scratch = if length.get() >= FAST_KERNEL_THRESHOLD {
+            Some(Mutex::new(vec![Complex64::new(0.0, 0.0); length.get()]))
+        } else {
+            None
+        };
         Ok(Self {
-            length: HartleyLength::new(len)?,
+            length,
+            fast_scratch,
         })
     }
 
     /// Return validated transform length.
     #[must_use]
-    pub const fn length(self) -> HartleyLength {
+    pub const fn length(&self) -> HartleyLength {
         self.length
     }
 
     /// Return transform length.
     #[must_use]
-    pub const fn len(self) -> usize {
+    pub const fn len(&self) -> usize {
         self.length.get()
     }
 
     /// Return true when transform length is zero.
     #[must_use]
-    pub const fn is_empty(self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.length.is_empty()
     }
 
@@ -54,8 +64,9 @@ impl DhtPlan {
         if signal.len() != self.len() || output.len() != self.len() {
             return Err(DhtError::LengthMismatch);
         }
-        if self.len() >= FAST_KERNEL_THRESHOLD {
-            dht_fast(signal, output);
+        if let Some(scratch_mu) = &self.fast_scratch {
+            let mut scratch = scratch_mu.lock().expect("fast_scratch mutex poisoned");
+            dht_fast_with_scratch(signal, output, &mut scratch);
             Ok(())
         } else {
             transform_real(signal, output)

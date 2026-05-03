@@ -163,6 +163,31 @@ mod tests {
         }
     }
 
+    /// Fast-path correctness: at and above FAST_KERNEL_THRESHOLD the FFT-mapped DHT
+    /// must match the independent direct Hartley kernel value-for-value within f64 error.
+    #[test]
+    fn fast_kernel_matches_direct_hartley_at_threshold() {
+        use crate::infrastructure::kernel::direct::transform_real;
+
+        let n = 512usize;
+        let signal: Vec<f64> = (0..n)
+            .map(|i| (i as f64 * 0.173).sin() + 0.25 * (i as f64 * 0.071).cos())
+            .collect();
+        let plan = crate::DhtPlan::new(n).expect("plan");
+
+        let got = plan.forward(&signal).expect("fast forward");
+        let mut expected = vec![0.0; n];
+        transform_real(&signal, &mut expected).expect("direct hartley");
+
+        let err = got
+            .values()
+            .iter()
+            .zip(expected.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f64, f64::max);
+        assert!(err < 1.0e-10, "fast DHT mismatch vs direct kernel: err={err}");
+    }
+
     proptest! {
         /// Serial-range roundtrip: for n in [2,16], DHT inverse recovers the signal.
         #[test]

@@ -4,6 +4,29 @@
 use apollo_fft::application::execution::kernel::fft_forward_64;
 use num_complex::Complex64;
 
+/// Computes the unnormalized DHT via an O(N log N) FFT mapped path using caller-owned scratch.
+///
+/// `scratch.len()` must equal `signal.len()`.
+pub fn dht_fast_with_scratch(signal: &[f64], output: &mut [f64], scratch: &mut [Complex64]) {
+    let n = signal.len();
+    if n == 0 {
+        return;
+    }
+
+    debug_assert_eq!(output.len(), n);
+    debug_assert_eq!(scratch.len(), n);
+
+    for (slot, &x) in scratch.iter_mut().zip(signal.iter()) {
+        *slot = Complex64::new(x, 0.0);
+    }
+
+    fft_forward_64(scratch);
+
+    for (out, x_k) in output.iter_mut().zip(scratch.iter()) {
+        *out = x_k.re - x_k.im;
+    }
+}
+
 /// Computes the unnormalized DHT via an \(O(N \log N)\) FFT mapped path.
 ///
 /// Ensures exact mathematical equivalence:
@@ -14,14 +37,9 @@ pub fn dht_fast(signal: &[f64], output: &mut [f64]) {
         return;
     }
 
-    let mut scratch = vec![Complex64::new(0.0, 0.0); n];
-    for (i, &x) in signal.iter().enumerate() {
-        scratch[i] = Complex64::new(x, 0.0);
-    }
-
-    fft_forward_64(&mut scratch);
-
-    for (out, x_k) in output.iter_mut().zip(scratch.iter()) {
-        *out = x_k.re - x_k.im;
-    }
+    let mut scratch: Vec<Complex64> = signal
+        .iter()
+        .map(|&x| Complex64::new(x, 0.0))
+        .collect();
+    dht_fast_with_scratch(signal, output, &mut scratch);
 }
