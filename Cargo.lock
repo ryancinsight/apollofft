@@ -135,7 +135,6 @@ dependencies = [
  "proptest",
  "rand 0.8.6",
  "rayon",
- "rustfft",
  "serde",
  "thiserror 1.0.69",
 ]
@@ -551,6 +550,7 @@ dependencies = [
  "apollo-sht",
  "apollo-stft",
  "apollo-wavelet",
+ "criterion",
  "nalgebra",
  "ndarray",
  "num-complex",

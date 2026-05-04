@@ -11,6 +11,49 @@
 use super::radix2;
 use super::radix_stage::normalize_inplace;
 use num_complex::{Complex32, Complex64};
+use once_cell::sync::Lazy;
+use parking_lot::RwLock;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+static BLUESTEIN_PLAN_CACHE_64: Lazy<RwLock<HashMap<usize, Arc<BluesteinPlan64>>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
+thread_local! {
+    static BLUESTEIN_SCRATCH_64: RefCell<HashMap<usize, Vec<Complex64>>> =
+        RefCell::new(HashMap::new());
+}
+
+#[inline]
+fn cached_plan64(n: usize) -> Arc<BluesteinPlan64> {
+    if let Some(plan) = BLUESTEIN_PLAN_CACHE_64.read().get(&n).cloned() {
+        return plan;
+    }
+    let plan = Arc::new(BluesteinPlan64::new(n));
+    BLUESTEIN_PLAN_CACHE_64
+        .write()
+        .entry(n)
+        .or_insert_with(|| Arc::clone(&plan))
+        .clone()
+}
+
+#[inline]
+fn with_scratch64<R, F>(m: usize, f: F) -> R
+where
+    F: FnOnce(&mut [Complex64]) -> R,
+{
+    BLUESTEIN_SCRATCH_64.with(|map_cell| {
+        let mut map = map_cell.borrow_mut();
+        let mut scratch = map.remove(&m).unwrap_or_else(|| vec![Complex64::new(0.0, 0.0); m]);
+        if scratch.len() != m {
+            scratch.resize(m, Complex64::new(0.0, 0.0));
+        }
+        let out = f(&mut scratch);
+        map.insert(m, scratch);
+        out
+    })
+}
 
 /// Precomputed context for arbitrary-length Bluestein chirp-Z transform.
 /// Eliminates `O(N)` dynamic memory allocations per kernel evaluation.
@@ -131,9 +174,8 @@ pub fn forward_inplace_64(data: &mut [Complex64]) {
         radix2::forward_inplace_64(data);
         return;
     }
-    let plan = BluesteinPlan64::new(n);
-    let mut a_m = vec![Complex64::new(0.0, 0.0); plan.m];
-    plan.forward_with_scratch(data, &mut a_m);
+    let plan = cached_plan64(n);
+    with_scratch64(plan.m(), |a_m| plan.forward_with_scratch(data, a_m));
 }
 
 /// In-place unnormalized inverse Bluestein chirp-Z transform for `Complex64`.
@@ -149,9 +191,8 @@ pub fn inverse_inplace_unnorm_64(data: &mut [Complex64]) {
         radix2::inverse_inplace_unnorm_64(data);
         return;
     }
-    let plan = BluesteinPlan64::new(n);
-    let mut a_m = vec![Complex64::new(0.0, 0.0); plan.m];
-    plan.inverse_unnorm_with_scratch(data, &mut a_m);
+    let plan = cached_plan64(n);
+    with_scratch64(plan.m(), |a_m| plan.inverse_unnorm_with_scratch(data, a_m));
 }
 
 /// In-place normalized inverse Bluestein chirp-Z transform for `Complex64`.
@@ -222,8 +263,8 @@ fn bluestein_via_f64<F: Fn(&mut [Complex64])>(data: &mut [Complex32], op: F) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::execution::kernel::direct::{dft_forward_64, dft_inverse_64};
     use super::super::test_utils::max_abs_err_64 as max_abs_err;
+    use crate::application::execution::kernel::direct::{dft_forward_64, dft_inverse_64};
 
     fn sig(n: usize) -> Vec<Complex64> {
         (0..n)
@@ -313,6 +354,17 @@ mod tests {
             let err = max_abs_err(&data, &input);
             assert!(err < 1e-11, "roundtrip n={n} err={err:.2e}");
         }
+    }
+
+    #[test]
+    fn repeated_forward_same_input_same_output() {
+        let input = sig(45);
+        let mut a = input.clone();
+        let mut b = input;
+        forward_inplace_64(&mut a);
+        forward_inplace_64(&mut b);
+        let err = max_abs_err(&a, &b);
+        assert!(err < 1e-12, "repeat determinism err={err:.2e}");
     }
 
     #[test]

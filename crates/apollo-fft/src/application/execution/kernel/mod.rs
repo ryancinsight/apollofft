@@ -64,6 +64,24 @@ pub trait FftPrecision: Sized {
     fn fft_inverse_unnorm(data: &mut [Self]);
 }
 
+/// Unified auto-selecting forward FFT entry point across all supported precisions.
+#[inline]
+pub fn fft_forward<C: FftPrecision>(data: &mut [C]) {
+    C::fft_forward(data);
+}
+
+/// Unified auto-selecting inverse FFT entry point (normalized by 1/N).
+#[inline]
+pub fn fft_inverse<C: FftPrecision>(data: &mut [C]) {
+    C::fft_inverse(data);
+}
+
+/// Unified auto-selecting inverse FFT entry point (unnormalized).
+#[inline]
+pub fn fft_inverse_unnorm<C: FftPrecision>(data: &mut [C]) {
+    C::fft_inverse_unnorm(data);
+}
+
 // ── Free-function entry points (backward-compatible) ─────────────────────────
 //
 // Each function is a thin shim over `mixed_radix`, which already handles the
@@ -156,4 +174,91 @@ impl FftPrecision for Cf16 {
     fn fft_inverse(data: &mut [Self]) { fft_inverse_f16(data); }
     #[inline]
     fn fft_inverse_unnorm(data: &mut [Self]) { fft_inverse_unnorm_f16(data); }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::execution::kernel::direct::{dft_forward_32, dft_forward_64};
+    use crate::application::execution::kernel::test_utils::{max_abs_err_32, max_abs_err_64};
+
+    fn sig64(n: usize) -> Vec<Complex64> {
+        (0..n)
+            .map(|k| {
+                let t = k as f64;
+                Complex64::new((0.27 * t).sin(), 0.35 * (0.11 * t).cos())
+            })
+            .collect()
+    }
+
+    fn sig32(n: usize) -> Vec<Complex32> {
+        (0..n)
+            .map(|k| {
+                let t = k as f32;
+                Complex32::new((0.27_f32 * t).sin(), 0.35_f32 * (0.11_f32 * t).cos())
+            })
+            .collect()
+    }
+
+    fn max_abs_err_f16(got: &[Cf16], expected: &[Cf16]) -> f32 {
+        got.iter()
+            .zip(expected.iter())
+            .map(|(x, y)| {
+                let (xr, xi) = x.to_f32_pair();
+                let (yr, yi) = y.to_f32_pair();
+                let dr = xr - yr;
+                let di = xi - yi;
+                (dr * dr + di * di).sqrt()
+            })
+            .fold(0.0f32, f32::max)
+    }
+
+    #[test]
+    fn unified_api_forward_64_matches_direct_and_typed() {
+        let n = 45usize;
+        let input = sig64(n);
+
+        let mut generic = input.clone();
+        fft_forward(&mut generic);
+
+        let mut typed = input.clone();
+        fft_forward_64(&mut typed);
+
+        let direct = dft_forward_64(&input);
+        assert!(max_abs_err_64(&generic, &typed) < 1e-12);
+        assert!(max_abs_err_64(&generic, &direct) < 1e-10);
+    }
+
+    #[test]
+    fn unified_api_forward_32_matches_direct_and_typed() {
+        let n = 45usize;
+        let input = sig32(n);
+
+        let mut generic = input.clone();
+        fft_forward(&mut generic);
+
+        let mut typed = input.clone();
+        fft_forward_32(&mut typed);
+
+        let direct = dft_forward_32(&input);
+        assert!(max_abs_err_32(&generic, &typed) < 1e-6);
+        assert!(max_abs_err_32(&generic, &direct) < 5e-4);
+    }
+
+    #[test]
+    fn unified_api_forward_f16_matches_typed() {
+        let n = 45usize;
+        let input: Vec<Cf16> = sig32(n)
+            .into_iter()
+            .map(|c| Cf16::from_f32_pair(c.re, c.im))
+            .collect();
+
+        let mut generic = input.clone();
+        fft_forward(&mut generic);
+
+        let mut typed = input;
+        fft_forward_f16(&mut typed);
+
+        assert!(max_abs_err_f16(&generic, &typed) < 2e-3);
+    }
 }
