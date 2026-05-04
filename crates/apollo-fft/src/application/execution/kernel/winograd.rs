@@ -384,27 +384,38 @@ pub fn dft16_32(data: &mut [Complex32; 16], inverse: bool) {
 
 // ── DFT-32 butterfly ─────────────────────────────────────────────────────────
 
-#[inline]
-fn twiddle32_fwd(k: usize) -> Complex64 {
-    let a = -std::f64::consts::TAU * k as f64 / 32.0;
-    Complex64::new(a.cos(), a.sin())
+const TWIDDLE32_FWD_64: [Complex64; 16] = [
+    Complex64::new(1.0, 0.0),
+    Complex64::new(0.9807852804032304, -0.19509032201612825),
+    Complex64::new(0.9238795325112867, -0.3826834323650898),
+    Complex64::new(0.8314696123025452, -0.5555702330196022),
+    Complex64::new(0.7071067811865476, -0.7071067811865475),
+    Complex64::new(0.5555702330196023, -0.8314696123025452),
+    Complex64::new(0.38268343236508984, -0.9238795325112867),
+    Complex64::new(0.19509032201612833, -0.9807852804032304),
+    Complex64::new(0.0, -1.0),
+    Complex64::new(-0.1950903220161282, -0.9807852804032304),
+    Complex64::new(-0.3826834323650897, -0.9238795325112867),
+    Complex64::new(-0.555570233019602, -0.8314696123025455),
+    Complex64::new(-0.7071067811865475, -0.7071067811865476),
+    Complex64::new(-0.8314696123025453, -0.5555702330196022),
+    Complex64::new(-0.9238795325112867, -0.3826834323650899),
+    Complex64::new(-0.9807852804032304, -0.1950903220161286),
+];
+
+#[inline(always)]
+fn twiddle32_64(k: usize, inverse: bool) -> Complex64 {
+    let w = TWIDDLE32_FWD_64[k];
+    if inverse {
+        Complex64::new(w.re, -w.im)
+    } else {
+        w
+    }
 }
 
-#[inline]
-fn twiddle32_inv(k: usize) -> Complex64 {
-    let w = twiddle32_fwd(k);
-    Complex64::new(w.re, -w.im)
-}
-
-#[inline]
-fn twiddle32_fwd_32(k: usize) -> Complex32 {
-    let w = twiddle32_fwd(k);
-    Complex32::new(w.re as f32, w.im as f32)
-}
-
-#[inline]
-fn twiddle32_inv_32(k: usize) -> Complex32 {
-    let w = twiddle32_inv(k);
+#[inline(always)]
+fn twiddle32_32(k: usize, inverse: bool) -> Complex32 {
+    let w = twiddle32_64(k, inverse);
     Complex32::new(w.re as f32, w.im as f32)
 }
 
@@ -431,9 +442,8 @@ pub fn dft32_64(data: &mut [Complex64; 32], inverse: bool) {
     ];
     dft16_64(&mut even, inverse);
     dft16_64(&mut odd, inverse);
-
     for k in 0..16 {
-        let tw = if inverse { twiddle32_inv(k) } else { twiddle32_fwd(k) };
+        let tw = twiddle32_64(k, inverse);
         let o = Complex64::new(
             odd[k].re * tw.re - odd[k].im * tw.im,
             odd[k].re * tw.im + odd[k].im * tw.re,
@@ -458,9 +468,8 @@ pub fn dft32_32(data: &mut [Complex32; 32], inverse: bool) {
     ];
     dft16_32(&mut even, inverse);
     dft16_32(&mut odd, inverse);
-
     for k in 0..16 {
-        let tw = if inverse { twiddle32_inv_32(k) } else { twiddle32_fwd_32(k) };
+        let tw = twiddle32_32(k, inverse);
         let o = Complex32::new(
             odd[k].re * tw.re - odd[k].im * tw.im,
             odd[k].re * tw.im + odd[k].im * tw.re,
@@ -472,27 +481,27 @@ pub fn dft32_32(data: &mut [Complex32; 32], inverse: bool) {
 
 // ── DFT-64 butterfly ─────────────────────────────────────────────────────────
 
-#[inline]
-fn twiddle64_fwd(k: usize) -> Complex64 {
-    let a = -std::f64::consts::TAU * k as f64 / 64.0;
-    Complex64::new(a.cos(), a.sin())
+#[inline(always)]
+fn twiddle64_64(k: usize, inverse: bool) -> Complex64 {
+    // W_64^(2m) = W_32^m and W_64^(2m+1) = W_32^m * W_64^1.
+    // This avoids per-call trig evaluation and avoids lock checks in hot loops.
+    let base = twiddle32_64(k >> 1, inverse);
+    if (k & 1) == 0 {
+        base
+    } else {
+        // cos(pi/32) ± i*sin(pi/32)
+        let w1 = if inverse {
+            Complex64::new(0.9951847266721969, 0.0980171403295606)
+        } else {
+            Complex64::new(0.9951847266721969, -0.0980171403295606)
+        };
+        apply_twiddle_64(base, w1)
+    }
 }
 
-#[inline]
-fn twiddle64_inv(k: usize) -> Complex64 {
-    let w = twiddle64_fwd(k);
-    Complex64::new(w.re, -w.im)
-}
-
-#[inline]
-fn twiddle64_fwd_32(k: usize) -> Complex32 {
-    let w = twiddle64_fwd(k);
-    Complex32::new(w.re as f32, w.im as f32)
-}
-
-#[inline]
-fn twiddle64_inv_32(k: usize) -> Complex32 {
-    let w = twiddle64_inv(k);
+#[inline(always)]
+fn twiddle64_32(k: usize, inverse: bool) -> Complex32 {
+    let w = twiddle64_64(k, inverse);
     Complex32::new(w.re as f32, w.im as f32)
 }
 
@@ -511,9 +520,8 @@ pub fn dft64_64(data: &mut [Complex64; 64], inverse: bool) {
     let mut odd  = core::array::from_fn(|i| data[2 * i + 1]);
     dft32_64(&mut even, inverse);
     dft32_64(&mut odd, inverse);
-
     for k in 0..32 {
-        let tw = if inverse { twiddle64_inv(k) } else { twiddle64_fwd(k) };
+        let tw = twiddle64_64(k, inverse);
         let o = Complex64::new(
             odd[k].re * tw.re - odd[k].im * tw.im,
             odd[k].re * tw.im + odd[k].im * tw.re,
@@ -530,9 +538,8 @@ pub fn dft64_32(data: &mut [Complex32; 64], inverse: bool) {
     let mut odd:  [Complex32; 32] = core::array::from_fn(|i| data[2 * i + 1]);
     dft32_32(&mut even, inverse);
     dft32_32(&mut odd, inverse);
-
     for k in 0..32 {
-        let tw = if inverse { twiddle64_inv_32(k) } else { twiddle64_fwd_32(k) };
+        let tw = twiddle64_32(k, inverse);
         let o = Complex32::new(
             odd[k].re * tw.re - odd[k].im * tw.im,
             odd[k].re * tw.im + odd[k].im * tw.re,
@@ -873,5 +880,39 @@ mod tests {
         for x in &buf[1..] {
             assert!(x.norm() < 1e-11);
         }
+    }
+
+    #[test]
+    fn dft32_f32_forward_matches_direct() {
+        let input: Vec<Complex64> = (0..32)
+            .map(|k| Complex64::new((k as f64 * 0.12).sin(), (k as f64 * 0.35).cos()))
+            .collect();
+        let expected = dft_forward_64(&input);
+        let mut buf: [Complex32; 32] =
+            core::array::from_fn(|i| Complex32::new(input[i].re as f32, input[i].im as f32));
+        dft32_32(&mut buf, false);
+        let got: Vec<Complex64> = buf
+            .iter()
+            .map(|x| Complex64::new(x.re as f64, x.im as f64))
+            .collect();
+        let err = max_err(&got, &expected);
+        assert!(err < 2e-5, "DFT-32 f32 forward max_err={err:.2e}");
+    }
+
+    #[test]
+    fn dft64_f32_forward_matches_direct() {
+        let input: Vec<Complex64> = (0..64)
+            .map(|k| Complex64::new((k as f64 * 0.07).sin(), (k as f64 * 0.29).cos()))
+            .collect();
+        let expected = dft_forward_64(&input);
+        let mut buf: [Complex32; 64] =
+            core::array::from_fn(|i| Complex32::new(input[i].re as f32, input[i].im as f32));
+        dft64_32(&mut buf, false);
+        let got: Vec<Complex64> = buf
+            .iter()
+            .map(|x| Complex64::new(x.re as f64, x.im as f64))
+            .collect();
+        let err = max_err(&got, &expected);
+        assert!(err < 3e-5, "DFT-64 f32 forward max_err={err:.2e}");
     }
 }

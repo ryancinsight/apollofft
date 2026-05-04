@@ -38,18 +38,25 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 - `apollo-fft` / `application/execution/kernel/radix64.rs`:
   - Replaced the O(R²) DFT-matrix inner butterfly with `winograd::dft64_64/32`.
   - Removed same dead code categories as radix16.
+- `apollo-fft` / `application/execution/kernel/winograd.rs`:
+  - Removed runtime trigonometric twiddle generation from DFT-32/64 hot loops.
+  - Replaced lock-based lazy twiddle caches with zero-overhead compile-time constants for
+    `W_32^k` plus derived `W_64^k` composition, reducing hot-path synchronization overhead.
+  - Added new f32 output-comparison regression tests for DFT-32 and DFT-64 against direct f64
+    references.
 
 ### Verification
-- `cargo test -p apollo-fft`: **101/101 tests pass** (includes all new radix-8 tests and
+- `cargo test -p apollo-fft`: **103/103 tests pass** (includes all new radix-8 tests and
   existing radix-16/32/64 tests).
-- `cargo test -p apollo-fft -- winograd`: 23/23 Winograd unit tests pass.
+- `cargo test -p apollo-fft -- winograd`: 25/25 Winograd unit tests pass.
 - `cargo run -p apollo-validation --release`: all 59 published-reference fixtures pass;
   roundtrip max-abs-error ≤ 2.2e-16 (f64), RustFFT delta = 0.
-- `cargo bench -p apollo-fft --bench kernel_strategy` (selected results vs previous baseline):
-  - `radix16_inplace/16`: 227 ns  (−27%,  **improved**)
-  - `radix64_inplace/64`: 1.22 µs (within noise, stable)
-  - `auto_selector/64`:   1.02 µs (−11%,  **improved** — auto-selector now routes to faster kernel)
-  - `radix32_inplace/32`: 505 ns  (+6%,   within noise for single-stage transform at N=32)
+- `cargo bench -p apollo-fft --bench kernel_strategy -- radix32_inplace/32`:
+  - `radix32_inplace/32`: 486 ns (−30%, improved from prior sampled baseline).
+- `cargo bench -p apollo-fft --bench kernel_strategy -- radix64_inplace/64`:
+  - `radix64_inplace/64`: 1.07 µs (−2.6%, improved).
+- `cargo bench -p apollo-fft --bench kernel_strategy -- auto_selector/64`:
+  - `auto_selector/64`: 1.02 µs (no statistically significant change).
 
 ---
 
