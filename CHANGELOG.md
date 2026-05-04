@@ -54,6 +54,12 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 - `apollo-fft` / `application/execution/kernel/radix64.rs`:
   - Eliminated redundant p=0 twiddle multiplication in radix-64 stage butterflies.
   - Added chunk-level Rayon MIMD execution path for large stage groups.
+- `apollo-fft` / `application/execution/kernel/radix2_f16.rs`:
+  - Added stage-level Rayon MIMD chunk execution for large f16 transforms in both
+    scalar and AVX+F16C+FMA paths (`par_chunks_exact_mut` over independent stage groups).
+  - Refactored stage kernels into chunk-local helpers to preserve Cooley-Tukey ordering
+    while enabling safe parallel chunk execution.
+  - Kept scalar fallback and SIMD dispatch semantics unchanged; no API changes.
 - `apollo-fft` / `application/execution/kernel/mod.rs`:
   - Upgraded mixed-precision f16 auto-selector to unified runtime dispatch:
     - power-of-two lengths use the native `radix2_f16` SIMD/scalar kernel,
@@ -87,6 +93,9 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
   - `radix64_inplace/64`: 1.07 µs (−2.6%, improved).
 - `cargo bench -p apollo-fft --bench kernel_strategy -- auto_selector/64`:
   - `auto_selector/64`: 1.02 µs (no statistically significant change).
+- `cargo bench -p apollo-fft --bench kernel_strategy -- mixed_precision_f16_auto`:
+  - `mixed_precision_f16_auto/64`: 1.34 µs (−28%, improved).
+  - `mixed_precision_f16_auto/96`: 18.19 µs (−51%, improved).
 - `cargo bench -p apollo-fft --bench kernel_strategy -- "radix8_inplace/64|radix16_inplace/16|radix32_inplace/32|radix64_inplace/64"`:
   - sample run after hot-loop update reported: `radix8_inplace/64` improved, `radix64_inplace/64`
     improved, `radix16_inplace/16` and `radix32_inplace/32` within noise.

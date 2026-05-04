@@ -23,6 +23,9 @@
 //! - `_mm256_cvtps_ph`: round 8 f32 back to 8 f16 (nearest-even, IEEE 754 mode 0).
 //!
 //! Throughput: 4 butterfly pairs per SIMD lane group (128-bit F16 load → 256-bit F32 compute).
+//! For large N, stages are additionally split into independent chunk groups and
+//! executed with Rayon MIMD (`par_chunks_exact_mut`) while preserving per-stage
+//! Cooley–Tukey ordering.
 //!
 //! ## Memory benefit
 //!
@@ -32,6 +35,12 @@
 //! is 32 KiB (vs 64 KiB), fitting in typical L1D caches.
 
 use half::f16;
+use rayon::prelude::*;
+
+/// Minimum transform size for enabling stage-level Rayon MIMD chunking.
+///
+/// Below this threshold, task scheduling overhead can dominate execution time.
+const RAYON_THRESHOLD: usize = 1 << 14;
 
 // ── Cf16 ──────────────────────────────────────────────────────────────────────
 
@@ -164,16 +173,38 @@ fn butterfly_slice_scalar(lo: &mut [Cf16], hi: &mut [Cf16], tw: &[Cf16]) {
     }
 }
 
+#[inline]
+fn stage1_chunk_f16(chunk: &mut [Cf16]) {
+    let (lr, li) = chunk[0].to_f32_pair();
+    let (hr, hi) = chunk[1].to_f32_pair();
+    chunk[0] = Cf16::from_f32_pair(lr + hr, li + hi);
+    chunk[1] = Cf16::from_f32_pair(lr - hr, li - hi);
+}
+
+#[inline]
+fn process_stage_chunk_scalar(chunk: &mut [Cf16], stage_tw: &[Cf16]) {
+    let half = chunk.len() >> 1;
+    let (lo, hi) = chunk.split_at_mut(half);
+    // j=0: W_L^0 = 1 (twiddle is unity) — skip the complex multiply.
+    {
+        let (lr, li) = lo[0].to_f32_pair();
+        let (hr, hi_val) = hi[0].to_f32_pair();
+        lo[0] = Cf16::from_f32_pair(lr + hr, li + hi_val);
+        hi[0] = Cf16::from_f32_pair(lr - hr, li - hi_val);
+    }
+    // j = 1..half: general butterfly with twiddles stage_tw[1..].
+    butterfly_slice_scalar(&mut lo[1..], &mut hi[1..], &stage_tw[1..]);
+}
+
 fn run_butterfly_stages_f16_scalar(data: &mut [Cf16], twiddles: &[Cf16]) {
     let n = data.len();
     bit_reverse_permutation_f16(data);
 
     // Stage 1 (len=2): W_2^0 = 1 for every butterfly — pure add/sub.
-    for chunk in data.chunks_exact_mut(2) {
-        let (lr, li) = chunk[0].to_f32_pair();
-        let (hr, hi) = chunk[1].to_f32_pair();
-        chunk[0] = Cf16::from_f32_pair(lr + hr, li + hi);
-        chunk[1] = Cf16::from_f32_pair(lr - hr, li - hi);
+    if n >= RAYON_THRESHOLD {
+        data.par_chunks_exact_mut(2).for_each(stage1_chunk_f16);
+    } else {
+        data.chunks_exact_mut(2).for_each(stage1_chunk_f16);
     }
 
     // General stages: len = 4, 8, 16, …, N.
@@ -183,17 +214,13 @@ fn run_butterfly_stages_f16_scalar(data: &mut [Cf16], twiddles: &[Cf16]) {
     while len <= n {
         let half = len >> 1;
         let stage_tw = &twiddles[base..base + half];
-        for chunk in data.chunks_exact_mut(len) {
-            let (lo, hi) = chunk.split_at_mut(half);
-            // j=0: W_L^0 = 1 (twiddle is unity) — skip the complex multiply.
-            {
-                let (lr, li) = lo[0].to_f32_pair();
-                let (hr, hi_val) = hi[0].to_f32_pair();
-                lo[0] = Cf16::from_f32_pair(lr + hr, li + hi_val);
-                hi[0] = Cf16::from_f32_pair(lr - hr, li - hi_val);
-            }
-            // j = 1..half: general butterfly with twiddles stage_tw[1..].
-            butterfly_slice_scalar(&mut lo[1..], &mut hi[1..], &stage_tw[1..]);
+        let groups = n / len;
+        if n >= RAYON_THRESHOLD && groups >= 4 {
+            data.par_chunks_exact_mut(len)
+                .for_each(|chunk| process_stage_chunk_scalar(chunk, stage_tw));
+        } else {
+            data.chunks_exact_mut(len)
+                .for_each(|chunk| process_stage_chunk_scalar(chunk, stage_tw));
         }
         base += half;
         len <<= 1;
@@ -271,17 +298,33 @@ unsafe fn butterfly_slice_avx2(lo: &mut [Cf16], hi: &mut [Cf16], tw: &[Cf16]) {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[inline]
+#[target_feature(enable = "avx,f16c,fma")]
+unsafe fn process_stage_chunk_avx2(chunk: &mut [Cf16], stage_tw: &[Cf16]) {
+    let half = chunk.len() >> 1;
+    let (lo, hi) = chunk.split_at_mut(half);
+    // j=0: unity twiddle, no multiply.
+    {
+        let (lr, li) = lo[0].to_f32_pair();
+        let (hr, hi_val) = hi[0].to_f32_pair();
+        lo[0] = Cf16::from_f32_pair(lr + hr, li + hi_val);
+        hi[0] = Cf16::from_f32_pair(lr - hr, li - hi_val);
+    }
+    // j=1..half: SIMD butterfly with 4-pair batches, scalar tail.
+    butterfly_slice_avx2(&mut lo[1..], &mut hi[1..], &stage_tw[1..]);
+}
+
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx,f16c,fma")]
 unsafe fn run_butterfly_stages_f16_avx2(data: &mut [Cf16], twiddles: &[Cf16]) {
     let n = data.len();
     bit_reverse_permutation_f16(data);
 
     // Stage 1 (len=2): W_2^0 = 1, scalar (2 elements per chunk, SIMD overhead not worth it).
-    for chunk in data.chunks_exact_mut(2) {
-        let (lr, li) = chunk[0].to_f32_pair();
-        let (hr, hi) = chunk[1].to_f32_pair();
-        chunk[0] = Cf16::from_f32_pair(lr + hr, li + hi);
-        chunk[1] = Cf16::from_f32_pair(lr - hr, li - hi);
+    if n >= RAYON_THRESHOLD {
+        data.par_chunks_exact_mut(2).for_each(stage1_chunk_f16);
+    } else {
+        data.chunks_exact_mut(2).for_each(stage1_chunk_f16);
     }
 
     let mut len = 4usize;
@@ -289,17 +332,18 @@ unsafe fn run_butterfly_stages_f16_avx2(data: &mut [Cf16], twiddles: &[Cf16]) {
     while len <= n {
         let half = len >> 1;
         let stage_tw = &twiddles[base..base + half];
-        for chunk in data.chunks_exact_mut(len) {
-            let (lo, hi) = chunk.split_at_mut(half);
-            // j=0: unity twiddle, no multiply.
-            {
-                let (lr, li) = lo[0].to_f32_pair();
-                let (hr, hi_val) = hi[0].to_f32_pair();
-                lo[0] = Cf16::from_f32_pair(lr + hr, li + hi_val);
-                hi[0] = Cf16::from_f32_pair(lr - hr, li - hi_val);
-            }
-            // j=1..half: SIMD butterfly with 4-pair batches, scalar tail.
-            butterfly_slice_avx2(&mut lo[1..], &mut hi[1..], &stage_tw[1..]);
+        let groups = n / len;
+        if n >= RAYON_THRESHOLD && groups >= 4 {
+            data.par_chunks_exact_mut(len).for_each(|chunk| {
+                // SAFETY: run_butterfly_stages_f16_avx2 is only entered after runtime
+                // feature detection; chunk-local processing preserves non-aliasing.
+                unsafe { process_stage_chunk_avx2(chunk, stage_tw) }
+            });
+        } else {
+            data.chunks_exact_mut(len).for_each(|chunk| {
+                // SAFETY: same as above; sequential branch keeps semantics identical.
+                unsafe { process_stage_chunk_avx2(chunk, stage_tw) }
+            });
         }
         base += half;
         len <<= 1;
