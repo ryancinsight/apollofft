@@ -464,23 +464,30 @@ impl FftPlan1D {
 
     /// Forward transform of a real signal stored as `f16`.
     ///
-    /// For `MIXED_PRECISION_F16_F32`: packs input into a `Cf16` working buffer
-    /// (N × 4 bytes, half the footprint of `Complex32`), runs the native f16
-    /// FFT kernel (AVX + F16C + FMA SIMD when available), then converts the
-    /// output to `Complex32` at the output boundary.
+    /// For `MIXED_PRECISION_F16_F32`:
+    /// - power-of-two lengths use a `Cf16` working buffer (N × 4 bytes) with
+    ///   the native f16 SIMD kernel,
+    /// - non-power-of-two lengths use the f32 auto-kernel path to preserve
+    ///   unified runtime kernel selection (including Bluestein).
     #[must_use]
     pub(crate) fn forward_f16(&self, input: &Array1<f16>) -> Array1<Complex32> {
         if self.precision == PrecisionProfile::MIXED_PRECISION_F16_F32 {
-            // Pack real f16 input as complex Cf16 (imaginary = 0).
-            let mut buf: Vec<Cf16> =
-                input.iter().map(|&v| Cf16::new(v, f16::ZERO)).collect();
-            fft_forward_f16(&mut buf);
-            // Convert Cf16 spectrum to Complex32 at the output boundary.
-            Array1::from_vec(
-                buf.into_iter()
-                    .map(|cf| Complex32::new(cf.re.to_f32(), cf.im.to_f32()))
-                    .collect(),
-            )
+            if input.len().is_power_of_two() {
+                // Pack real f16 input as complex Cf16 (imaginary = 0).
+                let mut buf: Vec<Cf16> =
+                    input.iter().map(|&v| Cf16::new(v, f16::ZERO)).collect();
+                fft_forward_f16(&mut buf);
+                // Convert Cf16 spectrum to Complex32 at the output boundary.
+                Array1::from_vec(
+                    buf.into_iter()
+                        .map(|cf| Complex32::new(cf.re.to_f32(), cf.im.to_f32()))
+                        .collect(),
+                )
+            } else {
+                let mut data = input.mapv(|value| Complex32::new(value.to_f32(), 0.0));
+                fft_forward_32(data.as_slice_mut().expect("Array must be contiguous"));
+                data
+            }
         } else {
             let promoted = input.mapv(|value| f64::from(value.to_f32()));
             self.forward_real_to_complex(&promoted)
@@ -490,20 +497,27 @@ impl FftPlan1D {
 
     /// Inverse transform of a complex spectrum to `f16` storage.
     ///
-    /// For `MIXED_PRECISION_F16_F32`: converts the `Complex32` spectrum to a `Cf16`
-    /// working buffer (N × 4 bytes), runs the native f16 inverse FFT kernel, then
-    /// extracts real parts as `f16` (imaginary parts are ~0 for real-input signals).
+    /// For `MIXED_PRECISION_F16_F32`:
+    /// - power-of-two lengths use a `Cf16` working buffer with native f16 inverse,
+    /// - non-power-of-two lengths use f32 auto-kernel inverse then quantize once
+    ///   at the real-output boundary.
     #[must_use]
     pub(crate) fn inverse_f16(&self, input: &Array1<Complex32>) -> Array1<f16> {
         if self.precision == PrecisionProfile::MIXED_PRECISION_F16_F32 {
-            // Convert Complex32 spectrum to Cf16 working buffer.
-            let mut buf: Vec<Cf16> = input
-                .iter()
-                .map(|&v| Cf16::new(f16::from_f32(v.re), f16::from_f32(v.im)))
-                .collect();
-            fft_inverse_f16(&mut buf);
-            // Extract real parts as f16 (imaginary parts are ~0 by Hermitian symmetry).
-            Array1::from_vec(buf.into_iter().map(|cf| cf.re).collect())
+            if input.len().is_power_of_two() {
+                // Convert Complex32 spectrum to Cf16 working buffer.
+                let mut buf: Vec<Cf16> = input
+                    .iter()
+                    .map(|&v| Cf16::new(f16::from_f32(v.re), f16::from_f32(v.im)))
+                    .collect();
+                fft_inverse_f16(&mut buf);
+                // Extract real parts as f16 (imaginary parts are ~0 by Hermitian symmetry).
+                Array1::from_vec(buf.into_iter().map(|cf| cf.re).collect())
+            } else {
+                let mut data = input.clone();
+                fft_inverse_32(data.as_slice_mut().expect("Array must be contiguous"));
+                data.mapv(|value| f16::from_f32(value.re))
+            }
         } else {
             let promoted =
                 input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
@@ -670,6 +684,52 @@ mod tests {
             mixed_error <= 5e-1,
             "f16 round-trip error {mixed_error:.4e} exceeds f16 precision budget 5e-1"
         );
+    }
+
+    #[test]
+    fn mixed_precision_non_power_of_two_roundtrip_stays_bounded() {
+        let shape = Shape1D::new(30).expect("shape");
+        let mixed_plan = FftPlan1D::with_precision(shape, PrecisionProfile::MIXED_PRECISION_F16_F32);
+
+        let signal = Array1::from_iter((0..30).map(|i| {
+            let x = i as f32;
+            f16::from_f32((0.21 * x).sin() + 0.2 * (0.47 * x).cos())
+        }));
+
+        let recovered: Array1<f16> = mixed_plan.inverse_typed(&mixed_plan.forward_typed(&signal));
+        let max_err = signal
+            .iter()
+            .zip(recovered.iter())
+            .map(|(expected, actual)| (expected.to_f32() - actual.to_f32()).abs())
+            .fold(0.0f32, f32::max);
+
+        // Non-PoT mixed path executes via f32 auto-kernel and quantizes at boundaries.
+        assert!(max_err <= 2e-2, "non-PoT mixed roundtrip max error {max_err:.4e}");
+    }
+
+    #[test]
+    fn mixed_precision_non_power_of_two_forward_tracks_low_precision_outputs() {
+        let shape = Shape1D::new(30).expect("shape");
+        let low_plan = FftPlan1D::with_precision(shape, PrecisionProfile::LOW_PRECISION_F32);
+        let mixed_plan = FftPlan1D::with_precision(shape, PrecisionProfile::MIXED_PRECISION_F16_F32);
+
+        let mixed_input = Array1::from_iter((0..30).map(|i| {
+            let x = i as f32;
+            f16::from_f32((0.13 * x).sin() - 0.15 * (0.61 * x).cos())
+        }));
+        let low_input = mixed_input.mapv(|value| value.to_f32());
+
+        let low_spec: Array1<Complex32> = low_plan.forward_typed(&low_input);
+        let mixed_spec: Array1<Complex32> = mixed_plan.forward_typed(&mixed_input);
+
+        let max_diff = low_spec
+            .iter()
+            .zip(mixed_spec.iter())
+            .map(|(low, mixed)| (*low - *mixed).norm())
+            .fold(0.0f32, f32::max);
+
+        // Mixed path should remain close to low-precision spectrum on identical quantized input.
+        assert!(max_diff <= 2e-2, "non-PoT forward spectrum max diff {max_diff:.4e}");
     }
 
     proptest! {

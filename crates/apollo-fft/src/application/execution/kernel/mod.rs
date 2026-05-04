@@ -131,23 +131,63 @@ pub fn fft_inverse_unnorm_32(data: &mut [Complex32]) {
     }
 }
 
-/// Auto-selecting forward FFT over `Cf16` (f16 storage, f32 butterfly arithmetic).
+/// Auto-selecting forward FFT over `Cf16` (f16 storage, mixed-precision arithmetic).
 ///
-/// Requires power-of-two length. Uses the AVX + F16C + FMA SIMD path when available,
-/// falling back to scalar otherwise.
+/// - Power-of-two lengths use the native f16 radix-2 SIMD/scalar kernel.
+/// - Non-power-of-two lengths fall back to the f32 auto-selector
+///   (radix/mixed-radix/Bluestein as appropriate), then quantize back to f16.
 #[inline]
 pub fn fft_forward_f16(data: &mut [Cf16]) {
-    radix2_f16::forward_inplace_f16(data);
+    if data.len().is_power_of_two() {
+        radix2_f16::forward_inplace_f16(data);
+        return;
+    }
+
+    let mut promoted: Vec<Complex32> = data
+        .iter()
+        .map(|value| Complex32::new(value.re.to_f32(), value.im.to_f32()))
+        .collect();
+    fft_forward_32(&mut promoted);
+    for (dst, src) in data.iter_mut().zip(promoted.into_iter()) {
+        dst.re = half::f16::from_f32(src.re);
+        dst.im = half::f16::from_f32(src.im);
+    }
 }
 
 /// Auto-selecting inverse FFT over `Cf16`, normalized by 1/N.
 #[inline]
 pub fn fft_inverse_f16(data: &mut [Cf16]) {
-    radix2_f16::inverse_inplace_f16(data);
+    if data.len().is_power_of_two() {
+        radix2_f16::inverse_inplace_f16(data);
+        return;
+    }
+
+    let mut promoted: Vec<Complex32> = data
+        .iter()
+        .map(|value| Complex32::new(value.re.to_f32(), value.im.to_f32()))
+        .collect();
+    fft_inverse_32(&mut promoted);
+    for (dst, src) in data.iter_mut().zip(promoted.into_iter()) {
+        dst.re = half::f16::from_f32(src.re);
+        dst.im = half::f16::from_f32(src.im);
+    }
 }
 
 /// Auto-selecting inverse FFT over `Cf16`, unnormalized.
 #[inline]
 pub fn fft_inverse_unnorm_f16(data: &mut [Cf16]) {
-    radix2_f16::inverse_inplace_unnorm_f16(data);
+    if data.len().is_power_of_two() {
+        radix2_f16::inverse_inplace_unnorm_f16(data);
+        return;
+    }
+
+    let mut promoted: Vec<Complex32> = data
+        .iter()
+        .map(|value| Complex32::new(value.re.to_f32(), value.im.to_f32()))
+        .collect();
+    fft_inverse_unnorm_32(&mut promoted);
+    for (dst, src) in data.iter_mut().zip(promoted.into_iter()) {
+        dst.re = half::f16::from_f32(src.re);
+        dst.im = half::f16::from_f32(src.im);
+    }
 }

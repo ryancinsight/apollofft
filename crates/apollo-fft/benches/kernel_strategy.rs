@@ -3,8 +3,8 @@
 #![allow(missing_docs)]
 
 use apollo_fft::application::execution::kernel::{
-    bluestein, direct, fft_forward_64, mixed_radix, radix16, radix2, radix32, radix4, radix64,
-    radix8,
+    bluestein, direct, fft_forward_64, fft_forward_f16, mixed_radix, radix16, radix2, radix32,
+    radix4, radix64, radix8, Cf16,
 };
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
@@ -15,6 +15,16 @@ fn signal(len: usize) -> Vec<Complex64> {
         .map(|index| {
             let x = index as f64;
             Complex64::new((0.017 * x).sin(), 0.25 * (0.031 * x).cos())
+        })
+        .collect()
+}
+
+/// Deterministic f16-complex signal used by mixed-precision selector benchmarks.
+fn signal_f16(len: usize) -> Vec<Cf16> {
+    (0..len)
+        .map(|index| {
+            let x = index as f32;
+            Cf16::from_f32_pair((0.017 * x).sin(), 0.25 * (0.031 * x).cos())
         })
         .collect()
 }
@@ -150,6 +160,21 @@ fn bench_fft_kernels(c: &mut Criterion) {
                 bench.iter(|| {
                     let mut data = input.clone();
                     bluestein::forward_inplace_64(black_box(&mut data));
+                    black_box(data);
+                });
+            },
+        );
+    }
+
+    for len in [64usize, 96] {
+        let input = signal_f16(len);
+        group.bench_with_input(
+            BenchmarkId::new("mixed_precision_f16_auto", len),
+            &input,
+            |bench, input| {
+                bench.iter(|| {
+                    let mut data = input.clone();
+                    fft_forward_f16(black_box(&mut data));
                     black_box(data);
                 });
             },

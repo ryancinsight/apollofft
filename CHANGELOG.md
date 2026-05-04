@@ -54,10 +54,26 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 - `apollo-fft` / `application/execution/kernel/radix64.rs`:
   - Eliminated redundant p=0 twiddle multiplication in radix-64 stage butterflies.
   - Added chunk-level Rayon MIMD execution path for large stage groups.
+- `apollo-fft` / `application/execution/kernel/mod.rs`:
+  - Upgraded mixed-precision f16 auto-selector to unified runtime dispatch:
+    - power-of-two lengths use the native `radix2_f16` SIMD/scalar kernel,
+    - non-power-of-two lengths transparently fall back to f32 auto-kernel routing
+      (`radix`, `mixed_radix`, or `bluestein`) with output quantization back to f16 storage.
+  - Removed radix2-only assumption for mixed precision, preventing non-power-of-two
+    runtime failures in normal API usage.
+- `apollo-fft` / `application/execution/plan/fft/dimension_1d.rs`:
+  - Mixed-precision typed 1D path now selects:
+    - `Cf16` native SIMD kernel for power-of-two lengths,
+    - f32 auto-kernel path for non-power-of-two lengths.
+  - Added output-comparison regression tests for non-power-of-two mixed precision against
+    low-precision f32 spectra plus bounded roundtrip error checks.
+- `apollo-fft` / `benches/kernel_strategy.rs`:
+  - Added `mixed_precision_f16_auto/{64,96}` benchmark cases to measure unified f16
+    auto-selector throughput on both power-of-two and non-power-of-two lengths.
 
 ### Verification
-- `cargo test -p apollo-fft`: **103/103 tests pass** (includes all new radix-8 tests and
-  existing radix-16/32/64 tests).
+- `cargo test -p apollo-fft`: **112/112 tests pass** (includes mixed-precision non-power-of-two
+  output-comparison and roundtrip regressions).
 - `cargo test -p apollo-fft -- winograd`: 25/25 Winograd unit tests pass.
 - `cargo run -p apollo-validation --release`: all 59 published-reference fixtures pass;
   roundtrip max-abs-error ≤ 2.2e-16 (f64), RustFFT delta = 0.
