@@ -8,7 +8,7 @@ repository = "https://github.com/ryancinsight/kwavers"
 description = "Reusable FFT planning, execution, and cache abstractions for Apollo"
 
 [dependencies]
-half = { version = "2.4", features = ["serde"] }
+half = { version = "2.4", features = ["serde", "use-intrinsics"] }
 nalgebra = { workspace = true }
 ndarray = { version = "0.16", features = ["rayon"] }
 num-complex = "0.4"

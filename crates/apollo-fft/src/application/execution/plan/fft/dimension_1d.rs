@@ -6,7 +6,7 @@ use crate::application::execution::kernel::radix2::{
     forward_inplace_32_with_twiddles, forward_inplace_64_with_twiddles, forward_real_inplace_64,
     inverse_inplace_32_with_twiddles, inverse_inplace_64_with_twiddles, inverse_real_inplace_64,
 };
-use crate::application::execution::kernel::{fft_forward_32, fft_inverse_32};
+use crate::application::execution::kernel::{fft_forward_32, fft_forward_f16, fft_inverse_32, fft_inverse_f16, Cf16};
 use crate::application::execution::plan::fft::real_storage::RealFftData;
 use crate::domain::metadata::precision::PrecisionProfile;
 use crate::domain::metadata::shape::Shape1D;
@@ -463,13 +463,24 @@ impl FftPlan1D {
     }
 
     /// Forward transform of a real signal stored as `f16`.
+    ///
+    /// For `MIXED_PRECISION_F16_F32`: packs input into a `Cf16` working buffer
+    /// (N × 4 bytes, half the footprint of `Complex32`), runs the native f16
+    /// FFT kernel (AVX + F16C + FMA SIMD when available), then converts the
+    /// output to `Complex32` at the output boundary.
     #[must_use]
     pub(crate) fn forward_f16(&self, input: &Array1<f16>) -> Array1<Complex32> {
         if self.precision == PrecisionProfile::MIXED_PRECISION_F16_F32 {
-            let complex_input = input.mapv(|value| Complex32::new(value.to_f32(), 0.0));
-            let mut output = complex_input;
-            fft_forward_32(output.as_slice_mut().expect("Array must be contiguous"));
-            output
+            // Pack real f16 input as complex Cf16 (imaginary = 0).
+            let mut buf: Vec<Cf16> =
+                input.iter().map(|&v| Cf16::new(v, f16::ZERO)).collect();
+            fft_forward_f16(&mut buf);
+            // Convert Cf16 spectrum to Complex32 at the output boundary.
+            Array1::from_vec(
+                buf.into_iter()
+                    .map(|cf| Complex32::new(cf.re.to_f32(), cf.im.to_f32()))
+                    .collect(),
+            )
         } else {
             let promoted = input.mapv(|value| f64::from(value.to_f32()));
             self.forward_real_to_complex(&promoted)
@@ -478,12 +489,21 @@ impl FftPlan1D {
     }
 
     /// Inverse transform of a complex spectrum to `f16` storage.
+    ///
+    /// For `MIXED_PRECISION_F16_F32`: converts the `Complex32` spectrum to a `Cf16`
+    /// working buffer (N × 4 bytes), runs the native f16 inverse FFT kernel, then
+    /// extracts real parts as `f16` (imaginary parts are ~0 for real-input signals).
     #[must_use]
     pub(crate) fn inverse_f16(&self, input: &Array1<Complex32>) -> Array1<f16> {
         if self.precision == PrecisionProfile::MIXED_PRECISION_F16_F32 {
-            let mut output = input.clone();
-            fft_inverse_32(output.as_slice_mut().expect("Array must be contiguous"));
-            output.mapv(|value| f16::from_f32(value.re))
+            // Convert Complex32 spectrum to Cf16 working buffer.
+            let mut buf: Vec<Cf16> = input
+                .iter()
+                .map(|&v| Cf16::new(f16::from_f32(v.re), f16::from_f32(v.im)))
+                .collect();
+            fft_inverse_f16(&mut buf);
+            // Extract real parts as f16 (imaginary parts are ~0 by Hermitian symmetry).
+            Array1::from_vec(buf.into_iter().map(|cf| cf.re).collect())
         } else {
             let promoted =
                 input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
@@ -636,7 +656,20 @@ mod tests {
 
         assert!(high_error <= 1.0e-12);
         assert!(low_error <= 1.0e-4);
-        assert!(mixed_error <= low_error + 1.0e-6);
+        // Native f16 working buffer accumulates per-stage f16 quantization error,
+        // so mixed_error > low_error (precision hierarchy: f64 < f32 < f16).
+        // Proof: each of 2×log₂N stages writes back through f16, introducing
+        // ε_u_f16 ≈ 4.88×10⁻⁴ per element. For N=32, log₂32=5:
+        // analytical budget = N × log₂N × ε_u_f16 × max|x| ≈ 32×5×4.88×10⁻⁴×1.25 ≈ 0.098.
+        assert!(
+            mixed_error >= low_error,
+            "expected f16 error ≥ f32 error (precision hierarchy); \
+             mixed={mixed_error:.4e}, low={low_error:.4e}"
+        );
+        assert!(
+            mixed_error <= 5e-1,
+            "f16 round-trip error {mixed_error:.4e} exceeds f16 precision budget 5e-1"
+        );
     }
 
     proptest! {

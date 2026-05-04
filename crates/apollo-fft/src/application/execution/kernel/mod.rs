@@ -19,6 +19,7 @@ pub mod bluestein;
 pub mod direct;
 pub mod mixed_radix;
 pub mod radix2;
+pub mod radix2_f16;
 pub mod radix16;
 pub mod radix32;
 pub mod radix4;
@@ -30,6 +31,7 @@ pub use direct::{
     dft_forward_32, dft_forward_64, dft_inverse_32, dft_inverse_64, forward_owned_64,
     inverse_owned_64, KernelScalar,
 };
+pub use radix2_f16::Cf16;
 
 use num_complex::{Complex32, Complex64};
 
@@ -127,4 +129,25 @@ pub fn fft_inverse_unnorm_32(data: &mut [Complex32]) {
     } else {
         bluestein::inverse_inplace_unnorm_32(data);
     }
+}
+
+/// Auto-selecting forward FFT over `Cf16` (f16 storage, f32 butterfly arithmetic).
+///
+/// Requires power-of-two length. Uses the AVX + F16C + FMA SIMD path when available,
+/// falling back to scalar otherwise.
+#[inline]
+pub fn fft_forward_f16(data: &mut [Cf16]) {
+    radix2_f16::forward_inplace_f16(data);
+}
+
+/// Auto-selecting inverse FFT over `Cf16`, normalized by 1/N.
+#[inline]
+pub fn fft_inverse_f16(data: &mut [Cf16]) {
+    radix2_f16::inverse_inplace_f16(data);
+}
+
+/// Auto-selecting inverse FFT over `Cf16`, unnormalized.
+#[inline]
+pub fn fft_inverse_unnorm_f16(data: &mut [Cf16]) {
+    radix2_f16::inverse_inplace_unnorm_f16(data);
 }
