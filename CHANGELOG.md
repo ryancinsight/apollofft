@@ -44,6 +44,16 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
     `W_32^k` plus derived `W_64^k` composition, reducing hot-path synchronization overhead.
   - Added new f32 output-comparison regression tests for DFT-32 and DFT-64 against direct f64
     references.
+- `apollo-fft` / `application/execution/kernel/radix8.rs`:
+  - Eliminated redundant p=0 twiddle multiplication in radix-8 stage butterflies.
+- `apollo-fft` / `application/execution/kernel/radix16.rs`:
+  - Eliminated redundant p=0 twiddle multiplication in radix-16 stage butterflies.
+- `apollo-fft` / `application/execution/kernel/radix32.rs`:
+  - Eliminated redundant p=0 twiddle multiplication in radix-32 stage butterflies.
+  - Added chunk-level Rayon MIMD execution path for large stage groups.
+- `apollo-fft` / `application/execution/kernel/radix64.rs`:
+  - Eliminated redundant p=0 twiddle multiplication in radix-64 stage butterflies.
+  - Added chunk-level Rayon MIMD execution path for large stage groups.
 
 ### Verification
 - `cargo test -p apollo-fft`: **103/103 tests pass** (includes all new radix-8 tests and
@@ -51,12 +61,19 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 - `cargo test -p apollo-fft -- winograd`: 25/25 Winograd unit tests pass.
 - `cargo run -p apollo-validation --release`: all 59 published-reference fixtures pass;
   roundtrip max-abs-error ≤ 2.2e-16 (f64), RustFFT delta = 0.
+- `cargo test -p apollo-fft -- radix8 --nocapture`: passed.
+- `cargo test -p apollo-fft -- radix16 --nocapture`: passed.
+- `cargo test -p apollo-fft -- radix32 --nocapture`: passed.
+- `cargo test -p apollo-fft -- radix64 --nocapture`: passed.
 - `cargo bench -p apollo-fft --bench kernel_strategy -- radix32_inplace/32`:
   - `radix32_inplace/32`: 486 ns (−30%, improved from prior sampled baseline).
 - `cargo bench -p apollo-fft --bench kernel_strategy -- radix64_inplace/64`:
   - `radix64_inplace/64`: 1.07 µs (−2.6%, improved).
 - `cargo bench -p apollo-fft --bench kernel_strategy -- auto_selector/64`:
   - `auto_selector/64`: 1.02 µs (no statistically significant change).
+- `cargo bench -p apollo-fft --bench kernel_strategy -- "radix8_inplace/64|radix16_inplace/16|radix32_inplace/32|radix64_inplace/64"`:
+  - sample run after hot-loop update reported: `radix8_inplace/64` improved, `radix64_inplace/64`
+    improved, `radix16_inplace/16` and `radix32_inplace/32` within noise.
 
 ---
 

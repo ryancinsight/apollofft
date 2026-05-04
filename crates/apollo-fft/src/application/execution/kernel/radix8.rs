@@ -92,9 +92,11 @@ fn winograd_r8_inplace_64(data: &mut [Complex64], twiddles: Option<&[Complex64]>
                     };
                     Complex64::new(a.cos(), a.sin())
                 };
-                let mut tw = Complex64::new(1.0, 0.0);
                 let mut buf = [Complex64::new(0.0, 0.0); 8];
-                for p in 0..8 {
+                // p=0 has twiddle factor 1, so avoid an unnecessary complex multiply.
+                buf[0] = chunk[j];
+                let mut tw = step;
+                for p in 1..8 {
                     buf[p] = winograd::apply_twiddle_64(chunk[j + p * eighth], tw);
                     tw = winograd::apply_twiddle_64(tw, step);
                 }
@@ -134,9 +136,10 @@ fn winograd_r8_inplace_32(data: &mut [Complex32], twiddles: Option<&[Complex32]>
                     };
                     Complex32::new(a.cos() as f32, a.sin() as f32)
                 };
-                let mut tw = Complex32::new(1.0, 0.0);
                 let mut buf = [Complex32::new(0.0, 0.0); 8];
-                for p in 0..8 {
+                buf[0] = chunk[j];
+                let mut tw = step;
+                for p in 1..8 {
                     buf[p] = winograd::apply_twiddle_32(chunk[j + p * eighth], tw);
                     tw = winograd::apply_twiddle_32(tw, step);
                 }

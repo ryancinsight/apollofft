@@ -211,9 +211,10 @@ fn radix16_inplace_64(
                     let a = sign * std::f64::consts::TAU * j as f64 / len as f64;
                     Complex64::new(a.cos(), a.sin())
                 };
-                let mut tw = Complex64::new(1.0, 0.0);
                 let mut buf = [Complex64::new(0.0, 0.0); RADIX];
-                for p in 0..RADIX {
+                buf[0] = chunk[j];
+                let mut tw = step;
+                for p in 1..RADIX {
                     buf[p] = winograd::apply_twiddle_64(chunk[j + p * m], tw);
                     tw = winograd::apply_twiddle_64(tw, step);
                 }
@@ -253,9 +254,10 @@ fn radix16_inplace_32(
                     let a = sign * std::f64::consts::TAU * j as f64 / len as f64;
                     Complex32::new(a.cos() as f32, a.sin() as f32)
                 };
-                let mut tw = Complex32::new(1.0, 0.0);
                 let mut buf = [Complex32::new(0.0, 0.0); RADIX];
-                for p in 0..RADIX {
+                buf[0] = chunk[j];
+                let mut tw = step;
+                for p in 1..RADIX {
                     buf[p] = winograd::apply_twiddle_32(chunk[j + p * m], tw);
                     tw = winograd::apply_twiddle_32(tw, step);
                 }

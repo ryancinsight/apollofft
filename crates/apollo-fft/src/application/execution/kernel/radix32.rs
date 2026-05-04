@@ -14,6 +14,9 @@
 
 use super::{radix2, winograd};
 use num_complex::{Complex32, Complex64};
+use rayon::prelude::*;
+
+const PARALLEL_CHUNK_THRESHOLD: usize = 32768;
 
 #[inline]
 fn is_power_of_thirty_two(n: usize) -> bool {
@@ -185,6 +188,68 @@ fn digit_reverse_permute_32<const RADIX: usize>(data: &mut [Complex32]) {
     }
 }
 
+#[inline(always)]
+fn process_radix32_chunk_64(
+    chunk: &mut [Complex64],
+    m: usize,
+    len: usize,
+    inverse: bool,
+    stage_twiddles: Option<&[Complex64]>,
+    sign: f64,
+) {
+    const RADIX: usize = 32;
+    for j in 0..m {
+        let step = if let Some(st) = stage_twiddles {
+            st[j]
+        } else {
+            let a = sign * std::f64::consts::TAU * j as f64 / len as f64;
+            Complex64::new(a.cos(), a.sin())
+        };
+        let mut buf = [Complex64::new(0.0, 0.0); RADIX];
+        buf[0] = chunk[j];
+        let mut tw = step;
+        for p in 1..RADIX {
+            buf[p] = winograd::apply_twiddle_64(chunk[j + p * m], tw);
+            tw = winograd::apply_twiddle_64(tw, step);
+        }
+        winograd::dft32_64(&mut buf, inverse);
+        for p in 0..RADIX {
+            chunk[j + p * m] = buf[p];
+        }
+    }
+}
+
+#[inline(always)]
+fn process_radix32_chunk_32(
+    chunk: &mut [Complex32],
+    m: usize,
+    len: usize,
+    inverse: bool,
+    stage_twiddles: Option<&[Complex32]>,
+    sign: f64,
+) {
+    const RADIX: usize = 32;
+    for j in 0..m {
+        let step = if let Some(st) = stage_twiddles {
+            st[j]
+        } else {
+            let a = sign * std::f64::consts::TAU * j as f64 / len as f64;
+            Complex32::new(a.cos() as f32, a.sin() as f32)
+        };
+        let mut buf = [Complex32::new(0.0, 0.0); RADIX];
+        buf[0] = chunk[j];
+        let mut tw = step;
+        for p in 1..RADIX {
+            buf[p] = winograd::apply_twiddle_32(chunk[j + p * m], tw);
+            tw = winograd::apply_twiddle_32(tw, step);
+        }
+        winograd::dft32_32(&mut buf, inverse);
+        for p in 0..RADIX {
+            chunk[j + p * m] = buf[p];
+        }
+    }
+}
+
 fn radix32_inplace_64(
     data: &mut [Complex64],
     inverse: bool,
@@ -201,24 +266,15 @@ fn radix32_inplace_64(
         let len = m * RADIX;
         let half = len >> 1;
         let stage_twiddles = twiddles.map(|t| &t[(half - 1)..(half - 1 + half)]);
-        for chunk in data.chunks_exact_mut(len) {
-            for j in 0..m {
-                let step = if let Some(st) = stage_twiddles {
-                    st[j]
-                } else {
-                    let a = sign * std::f64::consts::TAU * j as f64 / len as f64;
-                    Complex64::new(a.cos(), a.sin())
-                };
-                let mut tw = Complex64::new(1.0, 0.0);
-                let mut buf = [Complex64::new(0.0, 0.0); RADIX];
-                for p in 0..RADIX {
-                    buf[p] = winograd::apply_twiddle_64(chunk[j + p * m], tw);
-                    tw = winograd::apply_twiddle_64(tw, step);
-                }
-                winograd::dft32_64(&mut buf, inverse);
-                for p in 0..RADIX {
-                    chunk[j + p * m] = buf[p];
-                }
+        let chunk_count = data.len() / len;
+        let use_parallel = data.len() >= PARALLEL_CHUNK_THRESHOLD && chunk_count > 1;
+        if use_parallel {
+            data.par_chunks_exact_mut(len).for_each(|chunk| {
+                process_radix32_chunk_64(chunk, m, len, inverse, stage_twiddles, sign);
+            });
+        } else {
+            for chunk in data.chunks_exact_mut(len) {
+                process_radix32_chunk_64(chunk, m, len, inverse, stage_twiddles, sign);
             }
         }
         m = len;
@@ -241,24 +297,15 @@ fn radix32_inplace_32(
         let len = m * RADIX;
         let half = len >> 1;
         let stage_twiddles = twiddles.map(|t| &t[(half - 1)..(half - 1 + half)]);
-        for chunk in data.chunks_exact_mut(len) {
-            for j in 0..m {
-                let step = if let Some(st) = stage_twiddles {
-                    st[j]
-                } else {
-                    let a = sign * std::f64::consts::TAU * j as f64 / len as f64;
-                    Complex32::new(a.cos() as f32, a.sin() as f32)
-                };
-                let mut tw = Complex32::new(1.0, 0.0);
-                let mut buf = [Complex32::new(0.0, 0.0); RADIX];
-                for p in 0..RADIX {
-                    buf[p] = winograd::apply_twiddle_32(chunk[j + p * m], tw);
-                    tw = winograd::apply_twiddle_32(tw, step);
-                }
-                winograd::dft32_32(&mut buf, inverse);
-                for p in 0..RADIX {
-                    chunk[j + p * m] = buf[p];
-                }
+        let chunk_count = data.len() / len;
+        let use_parallel = data.len() >= PARALLEL_CHUNK_THRESHOLD && chunk_count > 1;
+        if use_parallel {
+            data.par_chunks_exact_mut(len).for_each(|chunk| {
+                process_radix32_chunk_32(chunk, m, len, inverse, stage_twiddles, sign);
+            });
+        } else {
+            for chunk in data.chunks_exact_mut(len) {
+                process_radix32_chunk_32(chunk, m, len, inverse, stage_twiddles, sign);
             }
         }
         m = len;
