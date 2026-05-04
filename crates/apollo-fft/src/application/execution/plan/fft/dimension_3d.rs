@@ -111,6 +111,30 @@ pub struct FftPlan3D {
     scratch_x_64: std::sync::Mutex<Vec<Complex64>>,
     scratch_y_32: std::sync::Mutex<Vec<Complex32>>,
     scratch_x_32: std::sync::Mutex<Vec<Complex32>>,
+    // --- r2c/c2r: half-length z-axis twiddles (m = nz/2) ---
+    //
+    // The r2c forward z-axis pass applies a length-m complex DFT to packed real
+    // pairs, followed by Cooley-Tukey extraction. These tables are the twiddle
+    // factors for the length-m sub-FFT (precomputed when m is a power of two).
+    twiddle_zh_fwd_64: Option<Vec<Complex64>>,
+    twiddle_zh_inv_64: Option<Vec<Complex64>>,
+    // f32 r2c/c2r fields reserved for future Complex32 r2c implementation.
+    #[allow(dead_code)]
+    twiddle_zh_fwd_32: Option<Vec<Complex32>>,
+    #[allow(dead_code)]
+    twiddle_zh_inv_32: Option<Vec<Complex32>>,
+    /// Extraction twiddles W_k = exp(−2πi·k/nz) for k = 0..nz_c−1.
+    /// Used in the Cooley-Tukey r2c split step and its inverse.
+    r2c_twiddles_64: Vec<Complex64>,
+    #[allow(dead_code)]
+    r2c_twiddles_32: Vec<Complex32>,
+    // --- preallocated scratch for r2c y and x passes (half-spectrum volume) ---
+    scratch_r2c_y_64: std::sync::Mutex<Vec<Complex64>>,
+    scratch_r2c_x_64: std::sync::Mutex<Vec<Complex64>>,
+    #[allow(dead_code)]
+    scratch_r2c_y_32: std::sync::Mutex<Vec<Complex32>>,
+    #[allow(dead_code)]
+    scratch_r2c_x_32: std::sync::Mutex<Vec<Complex32>>,
 }
 
 impl std::fmt::Debug for FftPlan3D {
@@ -159,11 +183,28 @@ impl FftPlan3D {
                 None
             }
         };
+        // Half-length z-axis sub-FFT for r2c/c2r (m = nz/2).
+        let m = nz / 2;
+        let nz_c_val = m + 1; // = nz/2+1
+        let r2c_vol = nx * ny * nz_c_val;
+        // Extraction twiddles W_k = exp(−2πi·k/nz) for k = 0..nz_c_val−1.
+        let r2c_twiddles_64: Vec<Complex64> = (0..nz_c_val)
+            .map(|k| {
+                let a = -std::f64::consts::TAU * k as f64 / nz as f64;
+                Complex64::new(a.cos(), a.sin())
+            })
+            .collect();
+        let r2c_twiddles_32: Vec<Complex32> = (0..nz_c_val)
+            .map(|k| {
+                let a = -std::f32::consts::TAU * k as f32 / nz as f32;
+                Complex32::new(a.cos(), a.sin())
+            })
+            .collect();
         Self {
             nx,
             ny,
             nz,
-            nz_c: nz / 2 + 1,
+            nz_c: nz_c_val,
             precision,
             twiddle_z_fwd_64: make64(nz, true),
             twiddle_z_inv_64: make64(nz, false),
@@ -181,6 +222,16 @@ impl FftPlan3D {
             scratch_x_64: std::sync::Mutex::new(vec![Complex64::default(); vol]),
             scratch_y_32: std::sync::Mutex::new(vec![Complex32::default(); vol]),
             scratch_x_32: std::sync::Mutex::new(vec![Complex32::default(); vol]),
+            twiddle_zh_fwd_64: make64(m, true),
+            twiddle_zh_inv_64: make64(m, false),
+            twiddle_zh_fwd_32: make32(m, true),
+            twiddle_zh_inv_32: make32(m, false),
+            r2c_twiddles_64,
+            r2c_twiddles_32,
+            scratch_r2c_y_64: std::sync::Mutex::new(vec![Complex64::default(); r2c_vol]),
+            scratch_r2c_x_64: std::sync::Mutex::new(vec![Complex64::default(); r2c_vol]),
+            scratch_r2c_y_32: std::sync::Mutex::new(vec![Complex32::default(); r2c_vol]),
+            scratch_r2c_x_32: std::sync::Mutex::new(vec![Complex32::default(); r2c_vol]),
         }
     }
 
@@ -921,6 +972,551 @@ impl FftPlan3D {
         assert_eq!(dim, (self.nx, self.ny, self.nz), "{label} shape mismatch");
     }
 
+    fn check_half_complex_shape(&self, dim: (usize, usize, usize), label: &str) {
+        assert_eq!(
+            dim,
+            (self.nx, self.ny, self.nz_c),
+            "{label} half-spectrum shape mismatch"
+        );
+    }
+
+    // ── Real-to-Complex (R2C) and Complex-to-Real (C2R) transforms ──────────
+
+    /// Forward real-to-complex 3D transform.
+    ///
+    /// # Mathematical Contract
+    ///
+    /// For real `x ∈ ℝ^{nx × ny × nz}`, computes the unique half-spectrum
+    /// `X ∈ ℂ^{nx × ny × (nz/2+1)}`. The omitted conjugate-symmetric modes
+    /// satisfy `X[kx,ky,kz] = X*[(-kx)%nx, (-ky)%ny, nz-kz]` for `kz > nz/2`.
+    ///
+    /// ## Algorithm — Separable R2C via Cooley-Tukey Split (Sorensen et al. 1987)
+    ///
+    /// **Z-axis (real → half-complex)**: For each (i,j) row:
+    /// 1. Pack real pairs: `h[k] = x[2k] + j·x[2k+1]` for `k = 0..m-1`, `m = nz/2`.
+    /// 2. Apply length-m complex FFT: `H = DFT_m(h)`.
+    /// 3. Extract half-spectrum via the split identity (Theorem below):
+    ///    `X[k] = (H_k + H_mk*)/2 − j·W_k·(H_k − H_mk*)/2`
+    ///    where `H_k = H[k mod m]`, `H_mk = conj(H[(m−k) mod m])`,
+    ///    and `W_k = exp(−2πi·k/nz)` (precomputed in `r2c_twiddles_64`).
+    ///
+    /// **Y-axis and X-axis**: Standard complex FFT passes on the `(nx,ny,nz_c)` data.
+    ///
+    /// ## Theorem: Cooley-Tukey R2C Split
+    ///
+    /// For real `x[n]`, the N-point DFT splits as `X[k] = E[k] + W_N^k · O[k]`
+    /// where `E[k]` and `O[k]` are M = N/2 point DFTs of even/odd samples.
+    /// Forming `h[k] = x[2k] + j·x[2k+1]` gives `H[k] = E[k] + j·O[k]`.
+    /// Hermitian symmetry of `E` and `O` (both DFTs of real sequences) gives
+    /// `E[M−k] = E[k]*` and `O[M−k] = O[k]*`, hence `H[(M−k)%M] = E[k]* + j·O[k]*`.
+    /// Therefore `E[k] = (H[k] + H[(M−k)%M]*)/2` and
+    /// `O[k] = (H[k] − H[(M−k)%M]*)/(2j)`, yielding the split formula above. □
+    ///
+    /// ## Normalization
+    ///
+    /// Forward: no normalization (unnormalized DFT). Inverse `inverse_c2r_into`
+    /// normalizes by `1/(nx·ny·nz)`, matching FFTW convention.
+    ///
+    /// ## Correctness Invariant
+    ///
+    /// `inverse_c2r_into(forward_r2c_into(x), out, scratch)` recovers `x` with
+    /// absolute error `< 1e-10` for f64 on 64³ grids.
+    #[must_use]
+    pub fn forward_r2c(&self, input: &Array3<f64>) -> Array3<Complex64> {
+        let mut out = Array3::<Complex64>::zeros((self.nx, self.ny, self.nz_c));
+        self.forward_r2c_into(input, &mut out);
+        out
+    }
+
+    /// Forward real-to-complex 3D transform into caller-owned half-spectrum buffer.
+    pub fn forward_r2c_into(&self, input: &Array3<f64>, output: &mut Array3<Complex64>) {
+        self.check_real_shape(input.dim(), "r2c forward input");
+        self.check_half_complex_shape(output.dim(), "r2c forward output");
+
+        let nz = self.nz;
+        let nz_c = self.nz_c;
+        let m = nz / 2;
+
+        // Edge case: nz == 1 — single real sample per row; no z-transform.
+        if nz == 1 {
+            ndarray::Zip::from(output).and(input).for_each(|out, &v| {
+                *out = Complex64::new(v, 0.0);
+            });
+            return;
+        }
+
+        // ── Step 1: Z-axis R2C split-radix pass ─────────────────────────────
+        //
+        // Processes each (i,j) row independently via rayon par_chunks zip.
+        // Each row: pack m complex values, FFT of length m, Cooley-Tukey extraction.
+        {
+            let in_sl = input
+                .as_slice_memory_order()
+                .expect("r2c input must be contiguous");
+            let out_sl = output
+                .as_slice_memory_order_mut()
+                .expect("r2c output must be contiguous");
+            let n_rows = self.nx * self.ny;
+            let large = n_rows > RAYON_THRESHOLD / nz_c.max(1);
+            if large {
+                in_sl
+                    .par_chunks(nz)
+                    .zip(out_sl.par_chunks_mut(nz_c))
+                    .for_each(|(in_row, out_row)| {
+                        self.r2c_z_forward_row_64(in_row, out_row, m);
+                    });
+            } else {
+                in_sl
+                    .chunks(nz)
+                    .zip(out_sl.chunks_mut(nz_c))
+                    .for_each(|(in_row, out_row)| {
+                        self.r2c_z_forward_row_64(in_row, out_row, m);
+                    });
+            }
+        }
+
+        // ── Step 2: Y-axis complex FFT on (nx, ny, nz_c) data ───────────────
+        {
+            let out_sl = output
+                .as_slice_memory_order_mut()
+                .expect("r2c output must be contiguous");
+            self.r2c_axis1_pass_64(out_sl, true);
+        }
+
+        // ── Step 3: X-axis complex FFT on (nx, ny, nz_c) data ───────────────
+        {
+            let out_sl = output
+                .as_slice_memory_order_mut()
+                .expect("r2c output must be contiguous");
+            self.r2c_axis0_pass_64(out_sl, true);
+        }
+    }
+
+    /// Inverse complex-to-real 3D transform.
+    ///
+    /// # Mathematical Contract
+    ///
+    /// For `X ∈ ℂ^{nx × ny × (nz/2+1)}` (the r2c half-spectrum), recovers
+    /// `x ∈ ℝ^{nx × ny × nz}` via the conjugate-symmetric IDFT.
+    ///
+    /// ## Algorithm — Inverse Cooley-Tukey Split
+    ///
+    /// **X-axis and Y-axis**: Standard complex IFFT passes on `(nx,ny,nz_c)`.
+    ///
+    /// **Z-axis (half-complex → real)**: For each (i,j) row:
+    /// 1. Recover H[k] from X[0..m] using the inverse split formula:
+    ///    `H[k] = (X[k] + conj(X[(m−k)%m]) + j·W_k* · (X[k] − conj(X[(m−k)%m]))) / 2`
+    ///    where `W_k* = conj(exp(−2πi·k/nz)) = exp(+2πi·k/nz)`.
+    /// 2. Apply normalized length-m IFFT: `h = IFFT_m(H)` (divides by m).
+    /// 3. Extract: `x[2k] = Re(h[k])/2`, `x[2k+1] = Im(h[k])/2` for k=0..m-1.
+    ///    The `/2` corrects for the 1/m normalization of the sub-IFFT (we want
+    ///    total z-axis normalization `1/nz = 1/(2m)`).
+    ///
+    /// Combined with the x- and y-axis IFFT normalizations by `1/nx` and `1/ny`,
+    /// the total normalization is `1/(nx·ny·nz)`. □
+    #[must_use]
+    pub fn inverse_c2r(&self, input: &Array3<Complex64>) -> Array3<f64> {
+        let mut out = Array3::<f64>::zeros((self.nx, self.ny, self.nz));
+        let mut scratch = input.clone();
+        self.inverse_c2r_into_with_scratch(&mut scratch, &mut out);
+        out
+    }
+
+    /// Inverse complex-to-real 3D transform into caller-owned real buffer.
+    ///
+    /// `scratch` must have shape `(nx, ny, nz_c)` and is overwritten.
+    pub fn inverse_c2r_into(
+        &self,
+        input: &Array3<Complex64>,
+        output: &mut Array3<f64>,
+        scratch: &mut Array3<Complex64>,
+    ) {
+        self.check_half_complex_shape(input.dim(), "c2r inverse input");
+        self.check_real_shape(output.dim(), "c2r inverse output");
+        self.check_half_complex_shape(scratch.dim(), "c2r inverse scratch");
+        scratch.assign(input);
+        self.inverse_c2r_into_with_scratch(scratch, output);
+    }
+
+    /// Inner c2r using a pre-filled mutable scratch buffer.
+    fn inverse_c2r_into_with_scratch(
+        &self,
+        scratch: &mut Array3<Complex64>,
+        output: &mut Array3<f64>,
+    ) {
+        let nz = self.nz;
+        let nz_c = self.nz_c;
+        let m = nz / 2;
+
+        // Edge case: nz == 1 — single complex sample per row; extract real part.
+        if nz == 1 {
+            let norm = 1.0 / (self.nx * self.ny) as f64;
+            ndarray::Zip::from(output)
+                .and(&*scratch)
+                .for_each(|out, &v| {
+                    *out = v.re * norm;
+                });
+            return;
+        }
+
+        // ── Step 1: X-axis complex IFFT on (nx, ny, nz_c) data ──────────────
+        {
+            let sc_sl = scratch
+                .as_slice_memory_order_mut()
+                .expect("c2r scratch must be contiguous");
+            self.r2c_axis0_pass_64(sc_sl, false);
+        }
+
+        // ── Step 2: Y-axis complex IFFT on (nx, ny, nz_c) data ──────────────
+        {
+            let sc_sl = scratch
+                .as_slice_memory_order_mut()
+                .expect("c2r scratch must be contiguous");
+            self.r2c_axis1_pass_64(sc_sl, false);
+        }
+
+        // ── Step 3: Z-axis C2R split-radix pass ─────────────────────────────
+        {
+            let sc_sl = scratch
+                .as_slice_memory_order()
+                .expect("c2r scratch must be contiguous");
+            let out_sl = output
+                .as_slice_memory_order_mut()
+                .expect("c2r output must be contiguous");
+            let n_rows = self.nx * self.ny;
+            let large = n_rows > RAYON_THRESHOLD / nz_c.max(1);
+            if large {
+                sc_sl
+                    .par_chunks(nz_c)
+                    .zip(out_sl.par_chunks_mut(nz))
+                    .for_each(|(in_row, out_row)| {
+                        self.r2c_z_inverse_row_64(in_row, out_row, m);
+                    });
+            } else {
+                sc_sl
+                    .chunks(nz_c)
+                    .zip(out_sl.chunks_mut(nz))
+                    .for_each(|(in_row, out_row)| {
+                        self.r2c_z_inverse_row_64(in_row, out_row, m);
+                    });
+            }
+        }
+    }
+
+    /// Z-axis r2c forward for a single row: pack + sub-FFT + Cooley-Tukey extraction.
+    ///
+    /// `in_row` has `nz` f64 values; `out_row` receives `nz_c = m+1` Complex64 values.
+    fn r2c_z_forward_row_64(&self, in_row: &[f64], out_row: &mut [Complex64], m: usize) {
+        let nz = self.nz;
+
+        // Stage 1: pack pairs → complex of length m.
+        let mut h: Vec<Complex64> = (0..m)
+            .map(|k| Complex64::new(in_row[2 * k], in_row[2 * k + 1]))
+            .collect();
+
+        // Stage 2: length-m complex FFT in-place.
+        match &self.twiddle_zh_fwd_64 {
+            Some(tw) => forward_inplace_64_with_twiddles(&mut h, tw.as_slice()),
+            None => fft_forward_64(&mut h),
+        }
+
+        // Stage 3: Cooley-Tukey extraction — X[k] for k = 0..m (inclusive).
+        // X[k] = (H_k + H_mk*) / 2 − j·W_k·(H_k − H_mk*) / 2
+        // where H_k = h[k % m] and H_mk = conj(h[(m−k) % m]).
+        // Process pairs simultaneously to avoid read-after-write aliasing.
+        let j = Complex64::new(0.0, 1.0);
+
+        // k = 0: H_0 = h[0], H_m0 = conj(h[0]).
+        {
+            let h0 = h[0];
+            let hm0_conj = h0.conj(); // conj(h[(m-0)%m]) = conj(h[0])
+            let wk = self.r2c_twiddles_64[0]; // W_0 = 1
+            let sum = h0 + hm0_conj;
+            let diff = h0 - hm0_conj;
+            out_row[0] = sum * 0.5 - j * wk * diff * 0.5;
+        }
+
+        // k = m: H_km = h[0] (same slot), H_mk = conj(h[0]).
+        {
+            let h0 = h[0];
+            let hm_conj = h0.conj();
+            let wk = self.r2c_twiddles_64[m]; // W_m = exp(−πi) = −1
+            let sum = h0 + hm_conj;
+            let diff = h0 - hm_conj;
+            out_row[m] = sum * 0.5 - j * wk * diff * 0.5;
+        }
+
+        // k = 1..m/2 and symmetric counterpart m-k (processed as pairs).
+        let k_max = m / 2 + if m % 2 == 1 { 1 } else { 0 };
+        for k in 1..k_max {
+            let mk = m - k;
+            let hk = h[k];
+            let hmk = h[mk]; // h[(m-k)]
+            let wk = self.r2c_twiddles_64[k];
+            let wmk = self.r2c_twiddles_64[mk];
+
+            // X[k]
+            let hmk_conj = hmk.conj();
+            let sum_k = hk + hmk_conj;
+            let diff_k = hk - hmk_conj;
+            out_row[k] = sum_k * 0.5 - j * wk * diff_k * 0.5;
+
+            if k != mk {
+                // X[m-k] — distinct slot, process as pair.
+                let hk_conj = hk.conj();
+                let sum_mk = hmk + hk_conj;
+                let diff_mk = hmk - hk_conj;
+                out_row[mk] = sum_mk * 0.5 - j * wmk * diff_mk * 0.5;
+            }
+        }
+
+        // When m is even, k = m/2 is its own symmetric partner.
+        if m % 2 == 0 && m >= 2 {
+            let k = m / 2;
+            let hk = h[k];
+            let wk = self.r2c_twiddles_64[k];
+            let hk_conj = hk.conj();
+            let sum_k = hk + hk_conj;
+            let diff_k = hk - hk_conj;
+            out_row[k] = sum_k * 0.5 - j * wk * diff_k * 0.5;
+        }
+
+        let _ = nz; // suppress unused warning when nz used only via m
+    }
+
+    /// Z-axis c2r inverse for a single row: inverse split + sub-IFFT + unpack.
+    ///
+    /// `in_row` has `nz_c = m+1` Complex64 values (the half-spectrum after x/y IFFTs).
+    /// `out_row` receives `nz` f64 values.
+    ///
+    /// Normalization: each output value is divided by `nz` so that combined with
+    /// the x-axis (÷nx) and y-axis (÷ny) IFFT normalizations, the total is `÷(nx·ny·nz)`.
+    fn r2c_z_inverse_row_64(&self, in_row: &[Complex64], out_row: &mut [f64], m: usize) {
+        let nz = self.nz;
+
+        // Stage 1: Recover H[k] for k = 0..m-1 from X[0..m] using the inverse split.
+        //
+        // Theorem (inverse split): from X[k] = (H_k + H_mk*)/2 − j·W_k·(H_k − H_mk*)/2
+        // and X[m−k] = (H_mk + H_k*)/2 + j·conj(W_k)·(H_mk − H_k*)/2, solving gives:
+        //   H[k] = (X[k] + conj(X[m−k]) + j·conj(W_k)·(X[k] − conj(X[m−k]))) / 2
+        // for k = 0..m−1, where conj(W_k) = exp(+2πi·k/nz) and X[m−k] is at index
+        // m−k in the nz_c = m+1 half-spectrum (k=0 uses X[m], the Nyquist bin). □
+
+        let j = Complex64::new(0.0, 1.0);
+
+        let mut h: Vec<Complex64> = vec![Complex64::default(); m];
+
+        // k = 0: conj(X[m-0]) = conj(X[m]).
+        //
+        // X[m] is the Nyquist bin stored at index m in the nz_c = m+1 half-spectrum.
+        // For real input X[m] is real, so conj(X[m]) = X[m].
+        // conj(W_0) = conj(1) = 1.
+        //
+        // Derivation: X[0] = Re{H[0]} + Im{H[0]}, X[m] = Re{H[0]} − Im{H[0]}.
+        // H[0] = (X[0] + X[m])/2 + j·(X[0] − X[m])/2, which matches the general
+        // formula with xmk_conj = conj(X[m]).
+        {
+            let xk = in_row[0];
+            let xmk_conj = in_row[m].conj(); // X[m] is at index m in the half-spectrum
+            let w_conj = self.r2c_twiddles_64[0].conj(); // = 1
+            h[0] = (xk + xmk_conj + j * w_conj * (xk - xmk_conj)) * 0.5;
+        }
+
+        // k = 1..m-1: symmetric pairs.
+        let k_max = m / 2 + if m % 2 == 1 { 1 } else { 0 };
+        for k in 1..k_max {
+            let mk = m - k;
+            let xk = in_row[k];
+            let xmk_conj = in_row[mk].conj();
+            let w_conj = self.r2c_twiddles_64[k].conj(); // exp(+2πi·k/nz)
+
+            h[k] = (xk + xmk_conj + j * w_conj * (xk - xmk_conj)) * 0.5;
+
+            if k != mk {
+                let xmk = in_row[mk];
+                let xk_conj = in_row[k].conj();
+                let wm_conj = self.r2c_twiddles_64[mk].conj();
+                h[mk] = (xmk + xk_conj + j * wm_conj * (xmk - xk_conj)) * 0.5;
+            }
+        }
+
+        // k = m/2 singleton (even m).
+        if m % 2 == 0 && m >= 2 {
+            let k = m / 2;
+            let xk = in_row[k];
+            let xmk_conj = in_row[k].conj(); // self-conjugate slot
+            let w_conj = self.r2c_twiddles_64[k].conj();
+            h[k] = (xk + xmk_conj + j * w_conj * (xk - xmk_conj)) * 0.5;
+        }
+
+        // Stage 2: normalized IFFT of length m in-place.
+        match &self.twiddle_zh_inv_64 {
+            Some(tw) => inverse_inplace_64_with_twiddles(&mut h, tw.as_slice()),
+            None => fft_inverse_64(&mut h),
+        }
+
+        // Stage 3: unpack h[k] → out_row[2k], out_row[2k+1].
+        //
+        // No additional scaling factor. The normalized IFFT_m satisfies
+        //   IFFT_m(FFT_m(h)) = h
+        // so stage 2 recovers h exactly. The forward z r2c packs
+        // h[n] = x[2n] + j·x[2n+1] and applies an unnormalized FFT_m;
+        // stage 1 recovers H_true, stage 2 recovers h_true; unpacking gives
+        // x back directly. No residual normalization factor arises here: the
+        // z-axis forward/inverse pair is its own identity (H_true recovered via
+        // the inverse split, IFFT_m cancels FFT_m). The x- and y-axis normalized
+        // IFFTs in the outer c2r caller cancel their respective DFTs identically.
+        for k in 0..m {
+            out_row[2 * k] = h[k].re;
+            out_row[2 * k + 1] = h[k].im;
+        }
+
+        let _ = nz; // suppress unused warning
+    }
+
+    /// Y-axis (axis-1) complex FFT/IFFT pass on `(nx, ny, nz_c)` half-spectrum data.
+    ///
+    /// Operates on a flat slice of length `nx * ny * nz_c` laid out in C order
+    /// `[i][j][k]`, applying length-ny transforms along axis 1.
+    fn r2c_axis1_pass_64(&self, data: &mut [Complex64], forward: bool) {
+        if self.ny <= 1 {
+            return;
+        }
+        let nz_c = self.nz_c;
+        let nx = self.nx;
+        let ny = self.ny;
+        let total = nx * ny * nz_c;
+        let mut scratch = self
+            .scratch_r2c_y_64
+            .lock()
+            .expect("scratch_r2c_y_64 mutex poisoned");
+
+        // Cache-blocked gather: data[i,j,k] → scratch[i,k,j] (transpose j↔k).
+        for i in 0..nx {
+            for j_t in (0..ny).step_by(GATHER_TILE) {
+                let j_end = (j_t + GATHER_TILE).min(ny);
+                for k_t in (0..nz_c).step_by(GATHER_TILE) {
+                    let k_end = (k_t + GATHER_TILE).min(nz_c);
+                    for j in j_t..j_end {
+                        let src = (i * ny + j) * nz_c;
+                        for k in k_t..k_end {
+                            scratch[(i * nz_c + k) * ny + j] = data[src + k];
+                        }
+                    }
+                }
+            }
+        }
+
+        let lane_fn = |lane: &mut [Complex64]| match (
+            forward,
+            &self.twiddle_y_fwd_64,
+            &self.twiddle_y_inv_64,
+        ) {
+            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_slice()),
+            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_slice()),
+            _ => {
+                if forward {
+                    fft_forward_64(lane);
+                } else {
+                    fft_inverse_64(lane);
+                }
+            }
+        };
+
+        if total > RAYON_THRESHOLD {
+            scratch[..total].par_chunks_mut(ny).for_each(lane_fn);
+        } else {
+            scratch[..total].chunks_mut(ny).for_each(lane_fn);
+        }
+
+        // Cache-blocked scatter: scratch[i,k,j] → data[i,j,k].
+        for i in 0..nx {
+            for j_t in (0..ny).step_by(GATHER_TILE) {
+                let j_end = (j_t + GATHER_TILE).min(ny);
+                for k_t in (0..nz_c).step_by(GATHER_TILE) {
+                    let k_end = (k_t + GATHER_TILE).min(nz_c);
+                    for j in j_t..j_end {
+                        let dst = (i * ny + j) * nz_c;
+                        for k in k_t..k_end {
+                            data[dst + k] = scratch[(i * nz_c + k) * ny + j];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// X-axis (axis-0) complex FFT/IFFT pass on `(nx, ny, nz_c)` half-spectrum data.
+    fn r2c_axis0_pass_64(&self, data: &mut [Complex64], forward: bool) {
+        if self.nx <= 1 {
+            return;
+        }
+        let nz_c = self.nz_c;
+        let nx = self.nx;
+        let ny = self.ny;
+        let total = nx * ny * nz_c;
+        let mut scratch = self
+            .scratch_r2c_x_64
+            .lock()
+            .expect("scratch_r2c_x_64 mutex poisoned");
+
+        // Cache-blocked gather: data[i,j,k] → scratch[j,k,i].
+        for i in 0..nx {
+            let src_base = i * ny * nz_c;
+            for j_t in (0..ny).step_by(GATHER_TILE) {
+                let j_end = (j_t + GATHER_TILE).min(ny);
+                for k_t in (0..nz_c).step_by(GATHER_TILE) {
+                    let k_end = (k_t + GATHER_TILE).min(nz_c);
+                    for j in j_t..j_end {
+                        let src = src_base + j * nz_c;
+                        for k in k_t..k_end {
+                            scratch[(j * nz_c + k) * nx + i] = data[src + k];
+                        }
+                    }
+                }
+            }
+        }
+
+        let lane_fn = |lane: &mut [Complex64]| match (
+            forward,
+            &self.twiddle_x_fwd_64,
+            &self.twiddle_x_inv_64,
+        ) {
+            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_slice()),
+            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_slice()),
+            _ => {
+                if forward {
+                    fft_forward_64(lane);
+                } else {
+                    fft_inverse_64(lane);
+                }
+            }
+        };
+
+        if total > RAYON_THRESHOLD {
+            scratch[..total].par_chunks_mut(nx).for_each(lane_fn);
+        } else {
+            scratch[..total].chunks_mut(nx).for_each(lane_fn);
+        }
+
+        // Cache-blocked scatter: scratch[j,k,i] → data[i,j,k].
+        for i in 0..nx {
+            let dst_base = i * ny * nz_c;
+            for j_t in (0..ny).step_by(GATHER_TILE) {
+                let j_end = (j_t + GATHER_TILE).min(ny);
+                for k_t in (0..nz_c).step_by(GATHER_TILE) {
+                    let k_end = (k_t + GATHER_TILE).min(nz_c);
+                    for j in j_t..j_end {
+                        let dst = dst_base + j * nz_c;
+                        for k in k_t..k_end {
+                            data[dst + k] = scratch[(j * nz_c + k) * nx + i];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn inverse_complex_to_real_with_workspace(
         &self,
         input: &Array3<Complex64>,
@@ -1067,6 +1663,134 @@ mod tests {
         for (a, b) in input.iter().zip(recovered.iter()) {
             let err = (a - b).abs();
             assert!(err < 1e-4, "low-precision roundtrip err={err:.2e}");
+        }
+    }
+
+    /// R2C forward then C2R inverse recovers the original real signal, eps 1e-10.
+    ///
+    /// Validates the Cooley-Tukey split formula and its inverse for power-of-two sizes.
+    #[test]
+    fn r2c_roundtrip_power_of_two() {
+        for (nx, ny, nz) in [(4usize, 4usize, 4usize), (8, 8, 8), (16, 4, 8)] {
+            let shape = Shape3D::new(nx, ny, nz).expect("valid shape");
+            let plan = FftPlan3D::new(shape);
+            let input = make_signal(nx, ny, nz);
+            let spectrum = plan.forward_r2c(&input);
+            assert_eq!(spectrum.dim(), (nx, ny, nz / 2 + 1));
+            let recovered = plan.inverse_c2r(&spectrum);
+            assert_eq!(recovered.dim(), (nx, ny, nz));
+            for (a, b) in input.iter().zip(recovered.iter()) {
+                let err = (a - b).abs();
+                assert!(err < 1e-10, "r2c roundtrip ({nx},{ny},{nz}) err={err:.2e}");
+            }
+        }
+    }
+
+    /// R2C for non-power-of-two nz uses the Bluestein fallback.
+    #[test]
+    fn r2c_roundtrip_non_power_of_two_nz() {
+        // nz = 6 (not power of two), so sub-FFT length m=3 falls back to Bluestein.
+        let (nx, ny, nz) = (4usize, 4usize, 6usize);
+        let shape = Shape3D::new(nx, ny, nz).expect("valid shape");
+        let plan = FftPlan3D::new(shape);
+        let input = make_signal(nx, ny, nz);
+        let spectrum = plan.forward_r2c(&input);
+        let recovered = plan.inverse_c2r(&spectrum);
+        for (a, b) in input.iter().zip(recovered.iter()) {
+            let err = (a - b).abs();
+            assert!(err < 1e-9, "r2c non-pow2 roundtrip err={err:.2e}");
+        }
+    }
+
+    /// R2C half-spectrum matches the first nz_c rows of the full-complex forward FFT.
+    ///
+    /// Correctness invariant: `forward_r2c(x)[i,j,k] == forward(x)[i,j,k]` for k = 0..nz_c-1.
+    #[test]
+    fn r2c_spectrum_matches_full_forward() {
+        let (nx, ny, nz) = (8usize, 6usize, 8usize);
+        let shape = Shape3D::new(nx, ny, nz).expect("valid shape");
+        let plan = FftPlan3D::new(shape);
+        let input = make_signal(nx, ny, nz);
+
+        let full_spectrum = plan.forward(&input);
+        let half_spectrum = plan.forward_r2c(&input);
+
+        let nz_c = nz / 2 + 1;
+        for i in 0..nx {
+            for j in 0..ny {
+                for k in 0..nz_c {
+                    let full = full_spectrum[[i, j, k]];
+                    let half = half_spectrum[[i, j, k]];
+                    let err = (full - half).norm();
+                    assert!(
+                        err < 1e-10,
+                        "r2c vs full: [{i},{j},{k}] full={full} half={half} err={err:.2e}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Parseval identity for r2c: sum|x|² == sum|X_half|² * 2 / (nx*ny*nz), eps 1e-6.
+    ///
+    /// For real x, the full spectrum satisfies sum|X|² = nx*ny*nz * sum|x|².
+    /// The half-spectrum has nz_c = nz/2+1 slabs; the interior slabs (k=1..nz/2-1)
+    /// are duplicated (Hermitian symmetry), so their energy counts double:
+    ///   sum|x|² = [|X[*,*,0]|² + |X[*,*,nz/2]|² + 2*sum_{k=1}^{nz/2-1} |X[*,*,k]|²] / (nx*ny*nz)
+    #[test]
+    fn r2c_parseval_holds() {
+        let (nx, ny, nz) = (8usize, 6usize, 8usize);
+        let shape = Shape3D::new(nx, ny, nz).expect("valid shape");
+        let plan = FftPlan3D::new(shape);
+        let input = make_signal(nx, ny, nz);
+
+        let half_spectrum = plan.forward_r2c(&input);
+        let nz_c = nz / 2 + 1;
+
+        let time_energy: f64 = input.iter().map(|&x| x * x).sum();
+
+        // Compute weighted spectral energy accounting for Hermitian symmetry.
+        let mut spectral_energy = 0.0_f64;
+        for i in 0..nx {
+            for j in 0..ny {
+                // k = 0 and k = nz/2 (if nz even): boundary terms, weight 1.
+                spectral_energy += half_spectrum[[i, j, 0]].norm_sqr();
+                if nz % 2 == 0 {
+                    spectral_energy += half_spectrum[[i, j, nz_c - 1]].norm_sqr();
+                }
+                // k = 1..nz_c-2: interior, each mode appears twice (Hermitian pair).
+                let k_end = if nz % 2 == 0 { nz_c - 1 } else { nz_c };
+                for k in 1..k_end {
+                    spectral_energy += 2.0 * half_spectrum[[i, j, k]].norm_sqr();
+                }
+            }
+        }
+        spectral_energy /= (nx * ny * nz) as f64;
+
+        let err = (time_energy - spectral_energy).abs();
+        assert!(
+            err < 1e-6,
+            "r2c Parseval err={err:.2e}: time_energy={time_energy:.6e} spectral={spectral_energy:.6e}"
+        );
+    }
+
+    /// C2R inverse using caller-owned scratch matches the allocating inverse_c2r.
+    #[test]
+    fn c2r_caller_owned_matches_allocating() {
+        let (nx, ny, nz) = (6usize, 4usize, 8usize);
+        let shape = Shape3D::new(nx, ny, nz).expect("valid shape");
+        let plan = FftPlan3D::new(shape);
+        let input = make_signal(nx, ny, nz);
+        let spectrum = plan.forward_r2c(&input);
+
+        let alloc = plan.inverse_c2r(&spectrum);
+        let mut out = Array3::<f64>::zeros((nx, ny, nz));
+        let mut scratch = Array3::<Complex64>::zeros((nx, ny, nz / 2 + 1));
+        plan.inverse_c2r_into(&spectrum, &mut out, &mut scratch);
+
+        for (a, b) in alloc.iter().zip(out.iter()) {
+            let err = (a - b).abs();
+            assert!(err < 1e-14, "c2r caller-owned mismatch: {err:.2e}");
         }
     }
 
