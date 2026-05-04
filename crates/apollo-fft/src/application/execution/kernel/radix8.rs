@@ -24,6 +24,7 @@
 use super::radix2_f16::Cf16;
 use super::{radix2, winograd};
 use num_complex::{Complex32, Complex64};
+use rayon::prelude::*;
 
 #[inline]
 fn is_power_of_eight(n: usize) -> bool {
@@ -62,6 +63,113 @@ fn digit_reverse_32(data: &mut [Complex32]) {
     }
 }
 
+// ── Rayon thresholds ──────────────────────────────────────────────────────────
+
+/// Minimum `eighth` (j-count per chunk) to activate inner j-loop Rayon.
+///
+/// Set to a very large value to effectively disable parallelism until SIMD
+/// single-threaded performance is optimized first.  Each j-iteration costs
+/// ~100–150 ns; need ≥ 50k iters to justify ~5 µs Rayon overhead per stage.
+const RAYON_PAR_J_MIN_R8: usize = 1 << 30;
+
+/// Minimum `eighth` and chunk count for outer-chunk Rayon.
+/// Disabled until single-threaded SIMD is the bottleneck.
+const RAYON_CHUNK_J_MIN_R8: usize = 1 << 30;
+const RAYON_CHUNK_COUNT_R8: usize = 4;
+
+// ── Sequential per-chunk helpers ──────────────────────────────────────────────
+
+/// Process one radix-8 chunk sequentially.
+#[inline(always)]
+fn process_r8_chunk_seq_64(
+    chunk: &mut [Complex64],
+    eighth: usize,
+    stage: Option<&[Complex64]>,
+    inverse: bool,
+) {
+    // j = 0: W_len^{p*0} = 1 for all p — no twiddle multiplication needed.
+    {
+        let mut buf = [Complex64::new(0.0, 0.0); 8];
+        for p in 0..8 {
+            buf[p] = chunk[p * eighth];
+        }
+        winograd::dft8_64(&mut buf, inverse);
+        for p in 0..8 {
+            chunk[p * eighth] = buf[p];
+        }
+    }
+    // j = 1..eighth: W_len^{p*j} requires actual twiddle multiplications.
+    for j in 1..eighth {
+        let step = match stage {
+            Some(s) => s[j],
+            None => {
+                let a = if inverse {
+                    std::f64::consts::TAU * j as f64 / (eighth * 8) as f64
+                } else {
+                    -std::f64::consts::TAU * j as f64 / (eighth * 8) as f64
+                };
+                Complex64::new(a.cos(), a.sin())
+            }
+        };
+        let mut buf = [Complex64::new(0.0, 0.0); 8];
+        buf[0] = chunk[j];
+        let mut tw = step;
+        for p in 1..8 {
+            buf[p] = winograd::apply_twiddle_64(chunk[j + p * eighth], tw);
+            tw = winograd::apply_twiddle_64(tw, step);
+        }
+        winograd::dft8_64(&mut buf, inverse);
+        for p in 0..8 {
+            chunk[j + p * eighth] = buf[p];
+        }
+    }
+}
+
+#[inline(always)]
+fn process_r8_chunk_seq_32(
+    chunk: &mut [Complex32],
+    eighth: usize,
+    stage: Option<&[Complex32]>,
+    inverse: bool,
+) {
+    // j = 0: W_len^{p*0} = 1 for all p — no twiddle multiplication needed.
+    {
+        let mut buf = [Complex32::new(0.0, 0.0); 8];
+        for p in 0..8 {
+            buf[p] = chunk[p * eighth];
+        }
+        winograd::dft8_32(&mut buf, inverse);
+        for p in 0..8 {
+            chunk[p * eighth] = buf[p];
+        }
+    }
+    // j = 1..eighth: W_len^{p*j} requires actual twiddle multiplications.
+    for j in 1..eighth {
+        let step = match stage {
+            Some(s) => s[j],
+            None => {
+                let a = if inverse {
+                    std::f64::consts::TAU * j as f64 / (eighth * 8) as f64
+                } else {
+                    -std::f64::consts::TAU * j as f64 / (eighth * 8) as f64
+                };
+                Complex32::new(a.cos() as f32, a.sin() as f32)
+            }
+        };
+        let mut buf = [Complex32::new(0.0, 0.0); 8];
+        buf[0] = chunk[j];
+        let mut tw = step;
+        for p in 1..8 {
+            buf[p] = winograd::apply_twiddle_32(chunk[j + p * eighth], tw);
+            tw = winograd::apply_twiddle_32(tw, step);
+        }
+        winograd::dft8_32(&mut buf, inverse);
+        for p in 0..8 {
+            chunk[j + p * eighth] = buf[p];
+        }
+    }
+}
+
 // ── core Winograd-radix-8 in-place kernel ─────────────────────────────────────
 
 fn winograd_r8_inplace_64(data: &mut [Complex64], twiddles: Option<&[Complex64]>, inverse: bool) {
@@ -75,38 +183,76 @@ fn winograd_r8_inplace_64(data: &mut [Complex64], twiddles: Option<&[Complex64]>
     let mut len = 8usize;
     while len <= n {
         let eighth = len >> 3;
-        // Stage twiddle slice: same layout as radix2 table (half - 1)..(half - 1 + half)
         let half = len >> 1;
         let stage = twiddles.map(|t| &t[(half - 1)..(half - 1 + half)]);
+        let num_chunks = n / len;
 
-        for chunk in data.chunks_exact_mut(len) {
-            for j in 0..eighth {
-                // Apply inter-group twiddles W_len^{p*j} for p = 0..8.
-                // W_len^0 = 1 (no-op). For p ≥ 1, compute by recurrence.
-                let step = if let Some(s) = stage {
-                    s[j]
-                } else {
-                    let a = if inverse {
-                        std::f64::consts::TAU * j as f64 / len as f64
-                    } else {
-                        -std::f64::consts::TAU * j as f64 / len as f64
-                    };
-                    Complex64::new(a.cos(), a.sin())
-                };
-                let mut buf = [Complex64::new(0.0, 0.0); 8];
-                // p=0 has twiddle factor 1, so avoid an unnecessary complex multiply.
-                buf[0] = chunk[j];
-                let mut tw = step;
-                for p in 1..8 {
-                    buf[p] = winograd::apply_twiddle_64(chunk[j + p * eighth], tw);
-                    tw = winograd::apply_twiddle_64(tw, step);
+        if eighth >= RAYON_PAR_J_MIN_R8 {
+            // Inner j-parallel: split each chunk into 8 disjoint sub-slices,
+            // zip them as par_iter_mut so each j-iteration runs independently.
+            // W_len^{p·j} are computed via the serial recurrence within each
+            // j-closure (only 7 multiplications, not worth further parallelism).
+            if let Some(st) = stage {
+                let stage_slice = &st[..eighth];
+                for chunk in data.chunks_exact_mut(len) {
+                    let e = eighth;
+                    let (g0, rest) = chunk.split_at_mut(e);
+                    let (g1, rest) = rest.split_at_mut(e);
+                    let (g2, rest) = rest.split_at_mut(e);
+                    let (g3, rest) = rest.split_at_mut(e);
+                    let (g4, rest) = rest.split_at_mut(e);
+                    let (g5, rest) = rest.split_at_mut(e);
+                    let (g6, g7) = rest.split_at_mut(e);
+                    g0.par_iter_mut()
+                        .zip(g1.par_iter_mut())
+                        .zip(g2.par_iter_mut())
+                        .zip(g3.par_iter_mut())
+                        .zip(g4.par_iter_mut())
+                        .zip(g5.par_iter_mut())
+                        .zip(g6.par_iter_mut())
+                        .zip(g7.par_iter_mut())
+                        .zip(stage_slice.par_iter())
+                        .for_each(
+                            |(((((((  (a0, a1), a2), a3), a4), a5), a6), a7), step)| {
+                                let mut buf = [Complex64::new(0.0, 0.0); 8];
+                                buf[0] = *a0;
+                                let srcs = [*a1, *a2, *a3, *a4, *a5, *a6, *a7];
+                                let mut tw = *step;
+                                for p in 1..8usize {
+                                    buf[p] = winograd::apply_twiddle_64(srcs[p - 1], tw);
+                                    tw = winograd::apply_twiddle_64(tw, *step);
+                                }
+                                winograd::dft8_64(&mut buf, inverse);
+                                *a0 = buf[0];
+                                *a1 = buf[1];
+                                *a2 = buf[2];
+                                *a3 = buf[3];
+                                *a4 = buf[4];
+                                *a5 = buf[5];
+                                *a6 = buf[6];
+                                *a7 = buf[7];
+                            },
+                        );
                 }
-                winograd::dft8_64(&mut buf, inverse);
-                for p in 0..8 {
-                    chunk[j + p * eighth] = buf[p];
+            } else {
+                // No twiddle table: fall back to sequential (only hits _no variants).
+                for chunk in data.chunks_exact_mut(len) {
+                    process_r8_chunk_seq_64(chunk, eighth, None, inverse);
                 }
             }
+        } else if eighth >= RAYON_CHUNK_J_MIN_R8 && num_chunks >= RAYON_CHUNK_COUNT_R8 {
+            // Outer chunk-parallel: distribute independent chunks across Rayon threads.
+            // Each thread processes one chunk's j-loop sequentially.
+            data.par_chunks_mut(len).for_each(|chunk| {
+                process_r8_chunk_seq_64(chunk, eighth, stage, inverse);
+            });
+        } else {
+            // Sequential: small N or first stage.
+            for chunk in data.chunks_exact_mut(len) {
+                process_r8_chunk_seq_64(chunk, eighth, stage, inverse);
+            }
         }
+
         len <<= 3;
     }
 }
@@ -124,32 +270,66 @@ fn winograd_r8_inplace_32(data: &mut [Complex32], twiddles: Option<&[Complex32]>
         let eighth = len >> 3;
         let half = len >> 1;
         let stage = twiddles.map(|t| &t[(half - 1)..(half - 1 + half)]);
+        let num_chunks = n / len;
 
-        for chunk in data.chunks_exact_mut(len) {
-            for j in 0..eighth {
-                let step = if let Some(s) = stage {
-                    s[j]
-                } else {
-                    let a = if inverse {
-                        std::f64::consts::TAU * j as f64 / len as f64
-                    } else {
-                        -std::f64::consts::TAU * j as f64 / len as f64
-                    };
-                    Complex32::new(a.cos() as f32, a.sin() as f32)
-                };
-                let mut buf = [Complex32::new(0.0, 0.0); 8];
-                buf[0] = chunk[j];
-                let mut tw = step;
-                for p in 1..8 {
-                    buf[p] = winograd::apply_twiddle_32(chunk[j + p * eighth], tw);
-                    tw = winograd::apply_twiddle_32(tw, step);
+        if eighth >= RAYON_PAR_J_MIN_R8 {
+            if let Some(st) = stage {
+                let stage_slice = &st[..eighth];
+                for chunk in data.chunks_exact_mut(len) {
+                    let e = eighth;
+                    let (g0, rest) = chunk.split_at_mut(e);
+                    let (g1, rest) = rest.split_at_mut(e);
+                    let (g2, rest) = rest.split_at_mut(e);
+                    let (g3, rest) = rest.split_at_mut(e);
+                    let (g4, rest) = rest.split_at_mut(e);
+                    let (g5, rest) = rest.split_at_mut(e);
+                    let (g6, g7) = rest.split_at_mut(e);
+                    g0.par_iter_mut()
+                        .zip(g1.par_iter_mut())
+                        .zip(g2.par_iter_mut())
+                        .zip(g3.par_iter_mut())
+                        .zip(g4.par_iter_mut())
+                        .zip(g5.par_iter_mut())
+                        .zip(g6.par_iter_mut())
+                        .zip(g7.par_iter_mut())
+                        .zip(stage_slice.par_iter())
+                        .for_each(
+                            |(((((((  (a0, a1), a2), a3), a4), a5), a6), a7), step)| {
+                                let mut buf = [Complex32::new(0.0, 0.0); 8];
+                                buf[0] = *a0;
+                                let srcs = [*a1, *a2, *a3, *a4, *a5, *a6, *a7];
+                                let mut tw = *step;
+                                for p in 1..8usize {
+                                    buf[p] = winograd::apply_twiddle_32(srcs[p - 1], tw);
+                                    tw = winograd::apply_twiddle_32(tw, *step);
+                                }
+                                winograd::dft8_32(&mut buf, inverse);
+                                *a0 = buf[0];
+                                *a1 = buf[1];
+                                *a2 = buf[2];
+                                *a3 = buf[3];
+                                *a4 = buf[4];
+                                *a5 = buf[5];
+                                *a6 = buf[6];
+                                *a7 = buf[7];
+                            },
+                        );
                 }
-                winograd::dft8_32(&mut buf, inverse);
-                for p in 0..8 {
-                    chunk[j + p * eighth] = buf[p];
+            } else {
+                for chunk in data.chunks_exact_mut(len) {
+                    process_r8_chunk_seq_32(chunk, eighth, None, inverse);
                 }
             }
+        } else if eighth >= RAYON_CHUNK_J_MIN_R8 && num_chunks >= RAYON_CHUNK_COUNT_R8 {
+            data.par_chunks_mut(len).for_each(|chunk| {
+                process_r8_chunk_seq_32(chunk, eighth, stage, inverse);
+            });
+        } else {
+            for chunk in data.chunks_exact_mut(len) {
+                process_r8_chunk_seq_32(chunk, eighth, stage, inverse);
+            }
         }
+
         len <<= 3;
     }
 }

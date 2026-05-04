@@ -38,9 +38,12 @@
 //! - caller-supplied buffers must match the plan dimensions
 //! - non-contiguous ndarray buffers panic when a contiguous slice is required
 
+use crate::application::execution::kernel::mixed_radix::{
+    cached_twiddle_fwd_32, cached_twiddle_fwd_64, cached_twiddle_inv_32,
+    cached_twiddle_inv_64,
+};
 use crate::application::execution::kernel::radix2::{
-    build_forward_twiddle_table_32, build_forward_twiddle_table_64, build_inverse_twiddle_table_32,
-    build_inverse_twiddle_table_64, forward_inplace_32_with_twiddles,
+    forward_inplace_32_with_twiddles,
     forward_inplace_64_with_twiddles, inverse_inplace_32_with_twiddles,
     inverse_inplace_64_with_twiddles,
 };
@@ -68,6 +71,7 @@ const RAYON_THRESHOLD: usize = 32768;
 const GATHER_TILE: usize = 32;
 use num_complex::Complex64;
 use rayon::prelude::*;
+use std::sync::Arc;
 
 /// Reusable 3D FFT plan.
 ///
@@ -94,18 +98,18 @@ pub struct FftPlan3D {
     nz_c: usize,
     precision: PrecisionProfile,
     // --- precomputed twiddle tables (Some iff axis length is power-of-two > 1) ---
-    twiddle_z_fwd_64: Option<Vec<Complex64>>,
-    twiddle_z_inv_64: Option<Vec<Complex64>>,
-    twiddle_y_fwd_64: Option<Vec<Complex64>>,
-    twiddle_y_inv_64: Option<Vec<Complex64>>,
-    twiddle_x_fwd_64: Option<Vec<Complex64>>,
-    twiddle_x_inv_64: Option<Vec<Complex64>>,
-    twiddle_z_fwd_32: Option<Vec<Complex32>>,
-    twiddle_z_inv_32: Option<Vec<Complex32>>,
-    twiddle_y_fwd_32: Option<Vec<Complex32>>,
-    twiddle_y_inv_32: Option<Vec<Complex32>>,
-    twiddle_x_fwd_32: Option<Vec<Complex32>>,
-    twiddle_x_inv_32: Option<Vec<Complex32>>,
+    twiddle_z_fwd_64: Option<Arc<[Complex64]>>,
+    twiddle_z_inv_64: Option<Arc<[Complex64]>>,
+    twiddle_y_fwd_64: Option<Arc<[Complex64]>>,
+    twiddle_y_inv_64: Option<Arc<[Complex64]>>,
+    twiddle_x_fwd_64: Option<Arc<[Complex64]>>,
+    twiddle_x_inv_64: Option<Arc<[Complex64]>>,
+    twiddle_z_fwd_32: Option<Arc<[Complex32]>>,
+    twiddle_z_inv_32: Option<Arc<[Complex32]>>,
+    twiddle_y_fwd_32: Option<Arc<[Complex32]>>,
+    twiddle_y_inv_32: Option<Arc<[Complex32]>>,
+    twiddle_x_fwd_32: Option<Arc<[Complex32]>>,
+    twiddle_x_inv_32: Option<Arc<[Complex32]>>,
     // --- preallocated scratch for y and x gather-FFT-scatter passes ---
     scratch_y_64: std::sync::Mutex<Vec<Complex64>>,
     scratch_x_64: std::sync::Mutex<Vec<Complex64>>,
@@ -116,13 +120,13 @@ pub struct FftPlan3D {
     // The r2c forward z-axis pass applies a length-m complex DFT to packed real
     // pairs, followed by Cooley-Tukey extraction. These tables are the twiddle
     // factors for the length-m sub-FFT (precomputed when m is a power of two).
-    twiddle_zh_fwd_64: Option<Vec<Complex64>>,
-    twiddle_zh_inv_64: Option<Vec<Complex64>>,
+    twiddle_zh_fwd_64: Option<Arc<[Complex64]>>,
+    twiddle_zh_inv_64: Option<Arc<[Complex64]>>,
     // f32 r2c/c2r fields reserved for future Complex32 r2c implementation.
     #[allow(dead_code)]
-    twiddle_zh_fwd_32: Option<Vec<Complex32>>,
+    twiddle_zh_fwd_32: Option<Arc<[Complex32]>>,
     #[allow(dead_code)]
-    twiddle_zh_inv_32: Option<Vec<Complex32>>,
+    twiddle_zh_inv_32: Option<Arc<[Complex32]>>,
     /// Extraction twiddles W_k = exp(−2πi·k/nz) for k = 0..nz_c−1.
     /// Used in the Cooley-Tukey r2c split step and its inverse.
     r2c_twiddles_64: Vec<Complex64>,
@@ -161,23 +165,23 @@ impl FftPlan3D {
     pub fn with_precision(shape: Shape3D, precision: PrecisionProfile) -> Self {
         let (nx, ny, nz) = (shape.nx, shape.ny, shape.nz);
         let vol = nx * ny * nz;
-        let make64 = |n: usize, forward: bool| -> Option<Vec<Complex64>> {
+        let make64 = |n: usize, forward: bool| -> Option<Arc<[Complex64]>> {
             if n > 1 && n.is_power_of_two() {
                 Some(if forward {
-                    build_forward_twiddle_table_64(n)
+                    cached_twiddle_fwd_64(n)
                 } else {
-                    build_inverse_twiddle_table_64(n)
+                    cached_twiddle_inv_64(n)
                 })
             } else {
                 None
             }
         };
-        let make32 = |n: usize, forward: bool| -> Option<Vec<Complex32>> {
+        let make32 = |n: usize, forward: bool| -> Option<Arc<[Complex32]>> {
             if n > 1 && n.is_power_of_two() {
                 Some(if forward {
-                    build_forward_twiddle_table_32(n)
+                    cached_twiddle_fwd_32(n)
                 } else {
-                    build_inverse_twiddle_table_32(n)
+                    cached_twiddle_inv_32(n)
                 })
             } else {
                 None
@@ -670,8 +674,8 @@ impl FftPlan3D {
             &self.twiddle_y_fwd_64,
             &self.twiddle_y_inv_64,
         ) {
-            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_slice()),
-            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_slice()),
+            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_ref()),
+            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_ref()),
             _ => {
                 if forward {
                     fft_forward_64(lane)
@@ -736,8 +740,8 @@ impl FftPlan3D {
             &self.twiddle_x_fwd_64,
             &self.twiddle_x_inv_64,
         ) {
-            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_slice()),
-            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_slice()),
+            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_ref()),
+            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_ref()),
             _ => {
                 if forward {
                     fft_forward_64(lane)
@@ -783,8 +787,8 @@ impl FftPlan3D {
             &self.twiddle_z_fwd_64,
             &self.twiddle_z_inv_64,
         ) {
-            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_slice()),
-            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_slice()),
+            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_ref()),
+            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_ref()),
             _ => {
                 if forward {
                     fft_forward_64(lane)
@@ -844,8 +848,8 @@ impl FftPlan3D {
             &self.twiddle_y_fwd_32,
             &self.twiddle_y_inv_32,
         ) {
-            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_slice()),
-            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_slice()),
+            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_ref()),
+            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_ref()),
             _ => {
                 if forward {
                     fft_forward_32(lane)
@@ -903,8 +907,8 @@ impl FftPlan3D {
             &self.twiddle_x_fwd_32,
             &self.twiddle_x_inv_32,
         ) {
-            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_slice()),
-            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_slice()),
+            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_ref()),
+            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_ref()),
             _ => {
                 if forward {
                     fft_forward_32(lane)
@@ -947,8 +951,8 @@ impl FftPlan3D {
             &self.twiddle_z_fwd_32,
             &self.twiddle_z_inv_32,
         ) {
-            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_slice()),
-            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_slice()),
+            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_ref()),
+            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_ref()),
             _ => {
                 if forward {
                     fft_forward_32(lane)
@@ -1228,7 +1232,7 @@ impl FftPlan3D {
 
         // Stage 2: length-m complex FFT in-place.
         match &self.twiddle_zh_fwd_64 {
-            Some(tw) => forward_inplace_64_with_twiddles(&mut h, tw.as_slice()),
+            Some(tw) => forward_inplace_64_with_twiddles(&mut h, tw.as_ref()),
             None => fft_forward_64(&mut h),
         }
 
@@ -1363,7 +1367,7 @@ impl FftPlan3D {
 
         // Stage 2: normalized IFFT of length m in-place.
         match &self.twiddle_zh_inv_64 {
-            Some(tw) => inverse_inplace_64_with_twiddles(&mut h, tw.as_slice()),
+            Some(tw) => inverse_inplace_64_with_twiddles(&mut h, tw.as_ref()),
             None => fft_inverse_64(&mut h),
         }
 
@@ -1424,8 +1428,8 @@ impl FftPlan3D {
             &self.twiddle_y_fwd_64,
             &self.twiddle_y_inv_64,
         ) {
-            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_slice()),
-            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_slice()),
+            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_ref()),
+            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_ref()),
             _ => {
                 if forward {
                     fft_forward_64(lane);
@@ -1494,8 +1498,8 @@ impl FftPlan3D {
             &self.twiddle_x_fwd_64,
             &self.twiddle_x_inv_64,
         ) {
-            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_slice()),
-            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_slice()),
+            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_ref()),
+            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_ref()),
             _ => {
                 if forward {
                     fft_forward_64(lane);

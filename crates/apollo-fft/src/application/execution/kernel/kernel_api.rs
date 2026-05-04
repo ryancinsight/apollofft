@@ -78,24 +78,24 @@ macro_rules! radix_kernel_api {
         pub fn forward_inplace_64(data: &mut [Complex64]) {
             if data.len() <= 1 { return; }
             debug_assert!($check(data.len()));
-            let twiddles = super::radix2::build_forward_twiddle_table_64(data.len());
-            $inplace64(data, false, Some(&twiddles));
+            let twiddles = super::mixed_radix::cached_twiddle_fwd_64(data.len());
+            $inplace64(data, false, Some(twiddles.as_ref()));
         }
 
         #[doc = concat!("Inverse FFT (unnormalized) for ", $desc, " lengths.")]
         pub fn inverse_inplace_unnorm_64(data: &mut [Complex64]) {
             if data.len() <= 1 { return; }
             debug_assert!($check(data.len()));
-            let twiddles = super::radix2::build_inverse_twiddle_table_64(data.len());
-            $inplace64(data, true, Some(&twiddles));
+            let twiddles = super::mixed_radix::cached_twiddle_inv_64(data.len());
+            $inplace64(data, true, Some(twiddles.as_ref()));
         }
 
         #[doc = concat!("Inverse FFT normalized by 1/N for ", $desc, " lengths.")]
         pub fn inverse_inplace_64(data: &mut [Complex64]) {
             if data.len() <= 1 { return; }
             debug_assert!($check(data.len()));
-            let twiddles = super::radix2::build_inverse_twiddle_table_64(data.len());
-            $inplace64(data, true, Some(&twiddles));
+            let twiddles = super::mixed_radix::cached_twiddle_inv_64(data.len());
+            $inplace64(data, true, Some(twiddles.as_ref()));
             super::radix_stage::normalize_inplace(data, 1.0 / data.len() as f64);
         }
 
@@ -132,24 +132,24 @@ macro_rules! radix_kernel_api {
         pub fn forward_inplace_32(data: &mut [Complex32]) {
             if data.len() <= 1 { return; }
             debug_assert!($check(data.len()));
-            let twiddles = super::radix2::build_forward_twiddle_table_32(data.len());
-            $inplace32(data, false, Some(&twiddles));
+            let twiddles = super::mixed_radix::cached_twiddle_fwd_32(data.len());
+            $inplace32(data, false, Some(twiddles.as_ref()));
         }
 
         #[doc = concat!("Inverse FFT (unnormalized, f32) for ", $desc, " lengths.")]
         pub fn inverse_inplace_unnorm_32(data: &mut [Complex32]) {
             if data.len() <= 1 { return; }
             debug_assert!($check(data.len()));
-            let twiddles = super::radix2::build_inverse_twiddle_table_32(data.len());
-            $inplace32(data, true, Some(&twiddles));
+            let twiddles = super::mixed_radix::cached_twiddle_inv_32(data.len());
+            $inplace32(data, true, Some(twiddles.as_ref()));
         }
 
         #[doc = concat!("Inverse FFT normalized by 1/N (f32) for ", $desc, " lengths.")]
         pub fn inverse_inplace_32(data: &mut [Complex32]) {
             if data.len() <= 1 { return; }
             debug_assert!($check(data.len()));
-            let twiddles = super::radix2::build_inverse_twiddle_table_32(data.len());
-            $inplace32(data, true, Some(&twiddles));
+            let twiddles = super::mixed_radix::cached_twiddle_inv_32(data.len());
+            $inplace32(data, true, Some(twiddles.as_ref()));
             super::radix_stage::normalize_inplace(data, 1.0f32 / data.len() as f32);
         }
 

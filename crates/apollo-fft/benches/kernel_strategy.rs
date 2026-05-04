@@ -210,7 +210,7 @@ fn bench_fft_kernels(c: &mut Criterion) {
                 |bench, input| {
                     bench.iter(|| {
                         let mut data = input.clone();
-                        radix4::forward_inplace_f16(black_box(&mut data));
+                        radix4::forward_inplace_32(black_box(&mut data));
                         black_box(data);
                     });
                 },
@@ -223,7 +223,7 @@ fn bench_fft_kernels(c: &mut Criterion) {
                 |bench, input| {
                     bench.iter(|| {
                         let mut data = input.clone();
-                        radix8::forward_inplace_f16(black_box(&mut data));
+                        radix8::forward_inplace_32(black_box(&mut data));
                         black_box(data);
                     });
                 },
@@ -236,7 +236,7 @@ fn bench_fft_kernels(c: &mut Criterion) {
                 |bench, input| {
                     bench.iter(|| {
                         let mut data = input.clone();
-                        radix16::forward_inplace_f16(black_box(&mut data));
+                        radix16::forward_inplace_32(black_box(&mut data));
                         black_box(data);
                     });
                 },
@@ -249,7 +249,7 @@ fn bench_fft_kernels(c: &mut Criterion) {
                 |bench, input| {
                     bench.iter(|| {
                         let mut data = input.clone();
-                        radix32::forward_inplace_f16(black_box(&mut data));
+                        radix32::forward_inplace_32(black_box(&mut data));
                         black_box(data);
                     });
                 },
@@ -262,7 +262,7 @@ fn bench_fft_kernels(c: &mut Criterion) {
                 |bench, input| {
                     bench.iter(|| {
                         let mut data = input.clone();
-                        radix64::forward_inplace_f16(black_box(&mut data));
+                        radix64::forward_inplace_32(black_box(&mut data));
                         black_box(data);
                     });
                 },
@@ -279,7 +279,7 @@ fn bench_fft_kernels(c: &mut Criterion) {
                 &input,
                 |bench, input| {
                     bench.iter(|| {
-                        black_box(max_abs_err_f16_vs_f64(input, radix8::forward_inplace_f16))
+                        black_box(max_abs_err_f16_vs_f64(input, radix8::forward_inplace_32))
                     });
                 },
             );
@@ -290,7 +290,7 @@ fn bench_fft_kernels(c: &mut Criterion) {
                 &input,
                 |bench, input| {
                     bench.iter(|| {
-                        black_box(max_abs_err_f16_vs_f64(input, radix16::forward_inplace_f16))
+                        black_box(max_abs_err_f16_vs_f64(input, radix16::forward_inplace_32))
                     });
                 },
             );
@@ -301,7 +301,7 @@ fn bench_fft_kernels(c: &mut Criterion) {
                 &input,
                 |bench, input| {
                     bench.iter(|| {
-                        black_box(max_abs_err_f16_vs_f64(input, radix32::forward_inplace_f16))
+                        black_box(max_abs_err_f16_vs_f64(input, radix32::forward_inplace_32))
                     });
                 },
             );
@@ -312,7 +312,7 @@ fn bench_fft_kernels(c: &mut Criterion) {
                 &input,
                 |bench, input| {
                     bench.iter(|| {
-                        black_box(max_abs_err_f16_vs_f64(input, radix64::forward_inplace_f16))
+                        black_box(max_abs_err_f16_vs_f64(input, radix64::forward_inplace_32))
                     });
                 },
             );

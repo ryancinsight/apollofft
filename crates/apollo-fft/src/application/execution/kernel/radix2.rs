@@ -58,6 +58,333 @@
 
 use num_complex::{Complex32, Complex64};
 
+// ── SIMD butterfly helpers ────────────────────────────────────────────────────
+//
+// AVX + FMA butterfly for the general stages (len ≥ 32).
+//
+// All intrinsics are from AVX (256-bit load/store/unpack/permute) and FMA3
+// (VFMADDSUBPD/PS). These features are present on all CPUs supporting FMA
+// (Intel Haswell+, AMD Piledriver+). With `RUSTFLAGS=-C target-cpu=native`
+// the `cfg(target_feature)` guards resolve to constant-true at compile time
+// and the scalar fall-back is dead-code-eliminated.
+//
+// ## Correctness proof for `butterfly_f64`
+//
+// Let u = lo[j], v = hi[j], w = twiddle[j].
+// Complex product:
+//   tw = w · v = (w.re·v.re − w.im·v.im) + i(w.re·v.im + w.im·v.re)
+//
+// SIMD implementation (2 Complex64 per register):
+//   ac      = [w[j].re, w[j].re, w[j+1].re, w[j+1].re]   (_mm256_unpacklo_pd)
+//   bd      = [w[j].im, w[j].im, w[j+1].im, w[j+1].im]   (_mm256_unpackhi_pd)
+//   v_perm  = [v[j].im, v[j].re, v[j+1].im, v[j+1].re]   (_mm256_permute_pd, imm=5)
+//   tw_vec  = _mm256_fmaddsub_pd(ac, v, bd * v_perm)
+//           = [ac·v.re − bd·v.im, ac·v.im + bd·v.re, …]   (alternating sub/add)
+//           = [tw.re, tw.im, …]                            ✓
+//   lo[j..] ← u + tw_vec
+//   hi[j..] ← u − tw_vec                                  ✓
+//
+// Analogous proof holds for `butterfly_f32` (4 Complex32 per register) using
+// VMOVSLDUP/VMOVSHDUP for twiddle broadcast and VPERMILPS(0xB1) for re/im swap.
+
+/// Apply the Cooley–Tukey butterfly to `lo[1..]`, `hi[1..]`, `tw[1..]`.
+///
+/// `lo` and `hi` each have `half` elements; `tw` has `half` elements.
+/// Element at index 0 (unity twiddle) must be handled by the caller.
+/// Dispatches to `butterfly_f64_avx_fma` when the build target has AVX+FMA
+/// (static cfg check, zero runtime overhead with `target-cpu=native`).
+#[inline]
+fn butterfly_f64(lo: &mut [Complex64], hi: &mut [Complex64], tw: &[Complex64]) {
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx",
+        target_feature = "fma"
+    ))]
+    {
+        // SAFETY: cfg guard ensures AVX and FMA are available at compile time.
+        unsafe { return butterfly_f64_avx_fma(lo, hi, tw); }
+    }
+    #[allow(unreachable_code)]
+    butterfly_f64_scalar(lo, hi, tw);
+}
+
+/// Apply the scaled Cooley–Tukey butterfly to `lo[1..]`, `hi[1..]`, `tw[1..]`.
+///
+/// Same as `butterfly_f64` but each output element is multiplied by `scale`
+/// (used to fuse the 1/N normalization into the final inverse stage).
+#[inline]
+fn butterfly_f64_scaled(lo: &mut [Complex64], hi: &mut [Complex64], tw: &[Complex64], scale: f64) {
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx",
+        target_feature = "fma"
+    ))]
+    {
+        unsafe { return butterfly_f64_scaled_avx_fma(lo, hi, tw, scale); }
+    }
+    #[allow(unreachable_code)]
+    butterfly_f64_scaled_scalar(lo, hi, tw, scale);
+}
+
+/// Apply the Cooley–Tukey butterfly to `lo`, `hi`, `tw` (all same length).
+///
+/// Dispatches to AVX+FMA for f32 when the build target supports it.
+#[inline]
+fn butterfly_f32(lo: &mut [Complex32], hi: &mut [Complex32], tw: &[Complex32]) {
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx",
+        target_feature = "fma"
+    ))]
+    {
+        unsafe { return butterfly_f32_avx_fma(lo, hi, tw); }
+    }
+    #[allow(unreachable_code)]
+    butterfly_f32_scalar(lo, hi, tw);
+}
+
+/// Scaled f32 butterfly (fuse 1/N into final inverse stage).
+#[inline]
+fn butterfly_f32_scaled(lo: &mut [Complex32], hi: &mut [Complex32], tw: &[Complex32], scale: f32) {
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx",
+        target_feature = "fma"
+    ))]
+    {
+        unsafe { return butterfly_f32_scaled_avx_fma(lo, hi, tw, scale); }
+    }
+    #[allow(unreachable_code)]
+    butterfly_f32_scaled_scalar(lo, hi, tw, scale);
+}
+
+// ── scalar fall-backs ─────────────────────────────────────────────────────────
+
+#[inline]
+fn butterfly_f64_scalar(lo: &mut [Complex64], hi: &mut [Complex64], tw: &[Complex64]) {
+    for k in 0..lo.len() {
+        let u = lo[k];
+        let v = hi[k];
+        let w = tw[k];
+        let tr = w.re * v.re - w.im * v.im;
+        let ti = w.re * v.im + w.im * v.re;
+        lo[k] = Complex64::new(u.re + tr, u.im + ti);
+        hi[k] = Complex64::new(u.re - tr, u.im - ti);
+    }
+}
+
+#[inline]
+fn butterfly_f64_scaled_scalar(
+    lo: &mut [Complex64],
+    hi: &mut [Complex64],
+    tw: &[Complex64],
+    scale: f64,
+) {
+    for k in 0..lo.len() {
+        let u = lo[k];
+        let v = hi[k];
+        let w = tw[k];
+        let tr = w.re * v.re - w.im * v.im;
+        let ti = w.re * v.im + w.im * v.re;
+        lo[k] = Complex64::new((u.re + tr) * scale, (u.im + ti) * scale);
+        hi[k] = Complex64::new((u.re - tr) * scale, (u.im - ti) * scale);
+    }
+}
+
+#[inline]
+fn butterfly_f32_scalar(lo: &mut [Complex32], hi: &mut [Complex32], tw: &[Complex32]) {
+    for k in 0..lo.len() {
+        let u = lo[k];
+        let v = hi[k];
+        let w = tw[k];
+        let tr = w.re * v.re - w.im * v.im;
+        let ti = w.re * v.im + w.im * v.re;
+        lo[k] = Complex32::new(u.re + tr, u.im + ti);
+        hi[k] = Complex32::new(u.re - tr, u.im - ti);
+    }
+}
+
+#[inline]
+fn butterfly_f32_scaled_scalar(
+    lo: &mut [Complex32],
+    hi: &mut [Complex32],
+    tw: &[Complex32],
+    scale: f32,
+) {
+    for k in 0..lo.len() {
+        let u = lo[k];
+        let v = hi[k];
+        let w = tw[k];
+        let tr = w.re * v.re - w.im * v.im;
+        let ti = w.re * v.im + w.im * v.re;
+        lo[k] = Complex32::new((u.re + tr) * scale, (u.im + ti) * scale);
+        hi[k] = Complex32::new((u.re - tr) * scale, (u.im - ti) * scale);
+    }
+}
+
+// ── AVX + FMA implementations ─────────────────────────────────────────────────
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+#[target_feature(enable = "avx,fma")]
+/// # Safety
+/// Caller must guarantee AVX and FMA are available (enforced by cfg guard).
+unsafe fn butterfly_f64_avx_fma(lo: &mut [Complex64], hi: &mut [Complex64], tw: &[Complex64]) {
+    use std::arch::x86_64::{
+        _mm256_add_pd, _mm256_fmaddsub_pd, _mm256_loadu_pd, _mm256_mul_pd, _mm256_permute_pd,
+        _mm256_storeu_pd, _mm256_sub_pd, _mm256_unpackhi_pd, _mm256_unpacklo_pd,
+    };
+    debug_assert_eq!(lo.len(), hi.len());
+    debug_assert_eq!(lo.len(), tw.len());
+    let count = lo.len();
+    let lo_f = lo.as_mut_ptr() as *mut f64;
+    let hi_f = hi.as_mut_ptr() as *mut f64;
+    let tw_f = tw.as_ptr() as *const f64;
+    let batches = count / 2;
+    for b in 0..batches {
+        let f = b * 4; // f64 offset: 2 Complex64 = 4 f64
+        let u = _mm256_loadu_pd(lo_f.add(f));
+        let v = _mm256_loadu_pd(hi_f.add(f));
+        let w = _mm256_loadu_pd(tw_f.add(f));
+        // Broadcast re and im parts of each twiddle:
+        // unpacklo_pd([a,b,c,d],[a,b,c,d]) = [a,a,c,c]  → re parts
+        // unpackhi_pd([a,b,c,d],[a,b,c,d]) = [b,b,d,d]  → im parts
+        let ac = _mm256_unpacklo_pd(w, w);
+        let bd = _mm256_unpackhi_pd(w, w);
+        // Swap re/im in each Complex64: permute_pd(imm=5=0b0101) swaps pairs
+        // [v.re, v.im, v.re, v.im] → [v.im, v.re, v.im, v.re]
+        let v_perm = _mm256_permute_pd(v, 5);
+        // fmaddsub(a,b,c) = [a[0]*b[0]-c[0], a[1]*b[1]+c[1], …]
+        // = [ac*v.re - bd*v.im, ac*v.im + bd*v.re, …] = [tw.re, tw.im, …]
+        let tw_vec = _mm256_fmaddsub_pd(ac, v, _mm256_mul_pd(bd, v_perm));
+        _mm256_storeu_pd(lo_f.add(f), _mm256_add_pd(u, tw_vec));
+        _mm256_storeu_pd(hi_f.add(f), _mm256_sub_pd(u, tw_vec));
+    }
+    // Scalar tail when count is odd (e.g. half=17 → 1 tail element).
+    let tail = batches * 2;
+    butterfly_f64_scalar(&mut lo[tail..], &mut hi[tail..], &tw[tail..]);
+}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+#[target_feature(enable = "avx,fma")]
+/// # Safety
+/// Caller must guarantee AVX and FMA are available (enforced by cfg guard).
+unsafe fn butterfly_f64_scaled_avx_fma(
+    lo: &mut [Complex64],
+    hi: &mut [Complex64],
+    tw: &[Complex64],
+    scale: f64,
+) {
+    use std::arch::x86_64::{
+        _mm256_fmaddsub_pd, _mm256_loadu_pd, _mm256_mul_pd, _mm256_permute_pd, _mm256_set1_pd,
+        _mm256_storeu_pd, _mm256_sub_pd, _mm256_unpackhi_pd, _mm256_unpacklo_pd,
+    };
+    // _mm256_fmadd_pd computes a*b+c; here we want (u±tw)*scale which is
+    // _mm256_mul_pd(_mm256_add_pd(u, tw_vec), scale_v).
+    // Using VFMADD: scale*(u+tw) = fmadd(tw, scale, u*scale) — requires u*scale first.
+    // Simpler: load scale broadcast, multiply after add/sub.
+    let scale_v = _mm256_set1_pd(scale);
+    let count = lo.len();
+    let lo_f = lo.as_mut_ptr() as *mut f64;
+    let hi_f = hi.as_mut_ptr() as *mut f64;
+    let tw_f = tw.as_ptr() as *const f64;
+    let batches = count / 2;
+    for b in 0..batches {
+        let f = b * 4;
+        let u = _mm256_loadu_pd(lo_f.add(f));
+        let v = _mm256_loadu_pd(hi_f.add(f));
+        let w = _mm256_loadu_pd(tw_f.add(f));
+        let ac = _mm256_unpacklo_pd(w, w);
+        let bd = _mm256_unpackhi_pd(w, w);
+        let v_perm = _mm256_permute_pd(v, 5);
+        let tw_vec = _mm256_fmaddsub_pd(ac, v, _mm256_mul_pd(bd, v_perm));
+        // Fuse scale: (u + tw) * scale and (u - tw) * scale
+        // Using FMA: fmadd(tw_vec, scale_v, u*scale_v) = (u+tw)*scale → but needs u*scale
+        // Simplest: mul(add(u,tw), scale) — 2 instructions per output
+        use std::arch::x86_64::_mm256_add_pd;
+        let sum = _mm256_add_pd(u, tw_vec);
+        let dif = _mm256_sub_pd(u, tw_vec);
+        _mm256_storeu_pd(lo_f.add(f), _mm256_mul_pd(sum, scale_v));
+        _mm256_storeu_pd(hi_f.add(f), _mm256_mul_pd(dif, scale_v));
+    }
+    let tail = batches * 2;
+    butterfly_f64_scaled_scalar(&mut lo[tail..], &mut hi[tail..], &tw[tail..], scale);
+}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+#[target_feature(enable = "avx,fma")]
+/// # Safety
+/// Caller must guarantee AVX and FMA are available (enforced by cfg guard).
+unsafe fn butterfly_f32_avx_fma(lo: &mut [Complex32], hi: &mut [Complex32], tw: &[Complex32]) {
+    use std::arch::x86_64::{
+        _mm256_add_ps, _mm256_fmaddsub_ps, _mm256_loadu_ps, _mm256_movehdup_ps,
+        _mm256_moveldup_ps, _mm256_mul_ps, _mm256_permute_ps, _mm256_storeu_ps, _mm256_sub_ps,
+    };
+    debug_assert_eq!(lo.len(), hi.len());
+    debug_assert_eq!(lo.len(), tw.len());
+    let count = lo.len();
+    let lo_f = lo.as_mut_ptr() as *mut f32;
+    let hi_f = hi.as_mut_ptr() as *mut f32;
+    let tw_f = tw.as_ptr() as *const f32;
+    let batches = count / 4; // 4 Complex32 = 8 f32 per 256-bit register
+    for b in 0..batches {
+        let f = b * 8; // f32 offset
+        let u = _mm256_loadu_ps(lo_f.add(f));
+        let v = _mm256_loadu_ps(hi_f.add(f));
+        let w = _mm256_loadu_ps(tw_f.add(f));
+        // moveldup duplicates even floats (re parts): [w0.re,w0.re,w1.re,w1.re,…]
+        let w_re = _mm256_moveldup_ps(w);
+        // movehdup duplicates odd floats (im parts): [w0.im,w0.im,w1.im,w1.im,…]
+        let w_im = _mm256_movehdup_ps(w);
+        // Swap re/im in each Complex32 pair: 0xB1 = 0b10110001 swaps adjacent f32 pairs
+        // [v0.re, v0.im, v1.re, v1.im, …] → [v0.im, v0.re, v1.im, v1.re, …]
+        let v_swap = _mm256_permute_ps(v, 0xB1);
+        // fmaddsub(a,b,c)[2k]   = a[2k]*b[2k] - c[2k]   = w.re*v.re - w.im*v.im = tw.re
+        // fmaddsub(a,b,c)[2k+1] = a[2k+1]*b[2k+1]+c[2k+1] = w.re*v.im + w.im*v.re = tw.im
+        let tw_vec = _mm256_fmaddsub_ps(w_re, v, _mm256_mul_ps(w_im, v_swap));
+        _mm256_storeu_ps(lo_f.add(f), _mm256_add_ps(u, tw_vec));
+        _mm256_storeu_ps(hi_f.add(f), _mm256_sub_ps(u, tw_vec));
+    }
+    let tail = batches * 4;
+    butterfly_f32_scalar(&mut lo[tail..], &mut hi[tail..], &tw[tail..]);
+}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+#[target_feature(enable = "avx,fma")]
+/// # Safety
+/// Caller must guarantee AVX and FMA are available (enforced by cfg guard).
+unsafe fn butterfly_f32_scaled_avx_fma(
+    lo: &mut [Complex32],
+    hi: &mut [Complex32],
+    tw: &[Complex32],
+    scale: f32,
+) {
+    use std::arch::x86_64::{
+        _mm256_add_ps, _mm256_fmaddsub_ps, _mm256_loadu_ps, _mm256_movehdup_ps,
+        _mm256_moveldup_ps, _mm256_mul_ps, _mm256_permute_ps, _mm256_set1_ps, _mm256_storeu_ps,
+        _mm256_sub_ps,
+    };
+    let scale_v = _mm256_set1_ps(scale);
+    let count = lo.len();
+    let lo_f = lo.as_mut_ptr() as *mut f32;
+    let hi_f = hi.as_mut_ptr() as *mut f32;
+    let tw_f = tw.as_ptr() as *const f32;
+    let batches = count / 4;
+    for b in 0..batches {
+        let f = b * 8;
+        let u = _mm256_loadu_ps(lo_f.add(f));
+        let v = _mm256_loadu_ps(hi_f.add(f));
+        let w = _mm256_loadu_ps(tw_f.add(f));
+        let w_re = _mm256_moveldup_ps(w);
+        let w_im = _mm256_movehdup_ps(w);
+        let v_swap = _mm256_permute_ps(v, 0xB1);
+        let tw_vec = _mm256_fmaddsub_ps(w_re, v, _mm256_mul_ps(w_im, v_swap));
+        _mm256_storeu_ps(lo_f.add(f), _mm256_mul_ps(_mm256_add_ps(u, tw_vec), scale_v));
+        _mm256_storeu_ps(hi_f.add(f), _mm256_mul_ps(_mm256_sub_ps(u, tw_vec), scale_v));
+    }
+    let tail = batches * 4;
+    butterfly_f32_scaled_scalar(&mut lo[tail..], &mut hi[tail..], &tw[tail..], scale);
+}
+
 // ── twiddle table helpers ─────────────────────────────────────────────────────
 
 /// Build a contiguous per-stage forward twiddle table for an N-point DFT.
@@ -673,15 +1000,7 @@ pub fn forward_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
                 lo[0] = u + v;
                 hi[0] = u - v;
             }
-            for j in 1..half {
-                let u = lo[j];
-                let v = hi[j];
-                let w = stage_twiddles[j];
-                let tr = w.re * v.re - w.im * v.im;
-                let ti = w.re * v.im + w.im * v.re;
-                lo[j] = Complex64::new(u.re + tr, u.im + ti);
-                hi[j] = Complex64::new(u.re - tr, u.im - ti);
-            }
+            butterfly_f64(&mut lo[1..], &mut hi[1..], &stage_twiddles[1..]);
         }
         base += half;
         len <<= 1;
@@ -854,15 +1173,7 @@ pub fn inverse_inplace_unnorm_64_with_twiddles(data: &mut [Complex64], twiddles:
                 lo[0] = u + v;
                 hi[0] = u - v;
             }
-            for j in 1..half {
-                let u = lo[j];
-                let v = hi[j];
-                let w = stage_twiddles[j];
-                let tr = w.re * v.re - w.im * v.im;
-                let ti = w.re * v.im + w.im * v.re;
-                lo[j] = Complex64::new(u.re + tr, u.im + ti);
-                hi[j] = Complex64::new(u.re - tr, u.im - ti);
-            }
+            butterfly_f64(&mut lo[1..], &mut hi[1..], &stage_twiddles[1..]);
         }
         base += half;
         len <<= 1;
@@ -1083,15 +1394,7 @@ pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
                 lo[0] = u + v;
                 hi[0] = u - v;
             }
-            for j in 1..half {
-                let u = lo[j];
-                let v = hi[j];
-                let w = stage_twiddles[j];
-                let tr = w.re * v.re - w.im * v.im;
-                let ti = w.re * v.im + w.im * v.re;
-                lo[j] = Complex64::new(u.re + tr, u.im + ti);
-                hi[j] = Complex64::new(u.re - tr, u.im - ti);
-            }
+            butterfly_f64(&mut lo[1..], &mut hi[1..], &stage_twiddles[1..]);
         }
         base += half;
         len <<= 1;
@@ -1106,15 +1409,7 @@ pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
         lo[0] = (u + v) * scale;
         hi[0] = (u - v) * scale;
     }
-    for j in 1..half {
-        let u = lo[j];
-        let v = hi[j];
-        let w = stage_twiddles[j];
-        let tr = w.re * v.re - w.im * v.im;
-        let ti = w.re * v.im + w.im * v.re;
-        lo[j] = Complex64::new((u.re + tr) * scale, (u.im + ti) * scale);
-        hi[j] = Complex64::new((u.re - tr) * scale, (u.im - ti) * scale);
-    }
+    butterfly_f64_scaled(&mut lo[1..], &mut hi[1..], &stage_twiddles[1..], scale);
 }
 
 /// Forward FFT (f32) using a precomputed contiguous per-stage twiddle table.
@@ -1270,15 +1565,7 @@ pub fn forward_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
                 lo[0] = u + v;
                 hi[0] = u - v;
             }
-            for j in 1..half {
-                let u = lo[j];
-                let v = hi[j];
-                let w = stage_twiddles[j];
-                let tr = w.re * v.re - w.im * v.im;
-                let ti = w.re * v.im + w.im * v.re;
-                lo[j] = Complex32::new(u.re + tr, u.im + ti);
-                hi[j] = Complex32::new(u.re - tr, u.im - ti);
-            }
+            butterfly_f32(&mut lo[1..], &mut hi[1..], &stage_twiddles[1..]);
         }
         base += half;
         len <<= 1;
@@ -1437,15 +1724,7 @@ pub fn inverse_inplace_unnorm_32_with_twiddles(data: &mut [Complex32], twiddles:
                 lo[0] = u + v;
                 hi[0] = u - v;
             }
-            for j in 1..half {
-                let u = lo[j];
-                let v = hi[j];
-                let w = stage_twiddles[j];
-                let tr = w.re * v.re - w.im * v.im;
-                let ti = w.re * v.im + w.im * v.re;
-                lo[j] = Complex32::new(u.re + tr, u.im + ti);
-                hi[j] = Complex32::new(u.re - tr, u.im - ti);
-            }
+            butterfly_f32(&mut lo[1..], &mut hi[1..], &stage_twiddles[1..]);
         }
         base += half;
         len <<= 1;
@@ -1661,15 +1940,7 @@ pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
                 lo[0] = u + v;
                 hi[0] = u - v;
             }
-            for j in 1..half {
-                let u = lo[j];
-                let v = hi[j];
-                let w = stage_twiddles[j];
-                let tr = w.re * v.re - w.im * v.im;
-                let ti = w.re * v.im + w.im * v.re;
-                lo[j] = Complex32::new(u.re + tr, u.im + ti);
-                hi[j] = Complex32::new(u.re - tr, u.im - ti);
-            }
+            butterfly_f32(&mut lo[1..], &mut hi[1..], &stage_twiddles[1..]);
         }
         base += half;
         len <<= 1;
@@ -1683,15 +1954,7 @@ pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
         lo[0] = (u + v) * scale;
         hi[0] = (u - v) * scale;
     }
-    for j in 1..half {
-        let u = lo[j];
-        let v = hi[j];
-        let w = stage_twiddles[j];
-        let tr = w.re * v.re - w.im * v.im;
-        let ti = w.re * v.im + w.im * v.re;
-        lo[j] = Complex32::new((u.re + tr) * scale, (u.im + ti) * scale);
-        hi[j] = Complex32::new((u.re - tr) * scale, (u.im - ti) * scale);
-    }
+    butterfly_f32_scaled(&mut lo[1..], &mut hi[1..], &stage_twiddles[1..], scale);
 }
 
 /// Iterative radix-2 DIT inverse FFT (unnormalized, f64).

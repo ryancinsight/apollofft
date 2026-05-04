@@ -1,10 +1,13 @@
 //! 1D FFT plan.
 
 use crate::application::execution::kernel::radix2::{
-    build_forward_twiddle_table_32, build_forward_twiddle_table_64, build_inverse_twiddle_table_32,
-    build_inverse_twiddle_table_64, build_real_fwd_post_twiddles_64,
+    build_real_fwd_post_twiddles_64,
     forward_inplace_32_with_twiddles, forward_inplace_64_with_twiddles, forward_real_inplace_64,
     inverse_inplace_32_with_twiddles, inverse_inplace_64_with_twiddles, inverse_real_inplace_64,
+};
+use crate::application::execution::kernel::mixed_radix::{
+    cached_twiddle_fwd_32, cached_twiddle_fwd_64, cached_twiddle_inv_32,
+    cached_twiddle_inv_64,
 };
 use crate::application::execution::kernel::{
     fft_forward_32, fft_forward_f16, fft_inverse_32, fft_inverse_f16, Cf16,
@@ -16,7 +19,7 @@ use half::f16;
 use ndarray::{Array1, Zip};
 use num_complex::Complex32;
 use num_complex::Complex64;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// Reusable 1D FFT plan.
 ///
@@ -88,13 +91,13 @@ pub struct FftPlan1D {
     /// Precomputed contiguous per-stage forward twiddle table for power-of-two N.
     /// Layout: stage s occupies entries [base..base+half] where half = 2^(s-1).
     /// Total length = N-1. `None` for non-power-of-two (Bluestein handles those).
-    twiddle_fwd_64: Option<Vec<Complex64>>,
+    twiddle_fwd_64: Option<Arc<[Complex64]>>,
     /// Precomputed contiguous per-stage inverse twiddle table for power-of-two N.
-    twiddle_inv_64: Option<Vec<Complex64>>,
+    twiddle_inv_64: Option<Arc<[Complex64]>>,
     /// Precomputed f32 forward twiddle table (used in LOW_PRECISION_F32 mode).
-    twiddle_fwd_32: Option<Vec<Complex32>>,
+    twiddle_fwd_32: Option<Arc<[Complex32]>>,
     /// Precomputed f32 inverse twiddle table (used in LOW_PRECISION_F32 mode).
-    twiddle_inv_32: Option<Vec<Complex32>>,
+    twiddle_inv_32: Option<Arc<[Complex32]>>,
     /// Post-processing twiddles for the real-input half-spectrum FFT.
     /// Entry k = exp(-2πi·k/N) for k = 0..=N/2. Length N/2+1.
     /// `Some` iff `N` is a power of two ≥ 4; `None` otherwise.
@@ -139,22 +142,22 @@ impl FftPlan1D {
         // For non-power-of-two (Bluestein), these are None; Bluestein has its own tables.
         let is_pow2 = shape.n.is_power_of_two() && shape.n > 1;
         let twiddle_fwd_64 = if is_pow2 {
-            Some(build_forward_twiddle_table_64(shape.n))
+            Some(cached_twiddle_fwd_64(shape.n))
         } else {
             None
         };
         let twiddle_inv_64 = if is_pow2 {
-            Some(build_inverse_twiddle_table_64(shape.n))
+            Some(cached_twiddle_inv_64(shape.n))
         } else {
             None
         };
         let twiddle_fwd_32 = if is_pow2 {
-            Some(build_forward_twiddle_table_32(shape.n))
+            Some(cached_twiddle_fwd_32(shape.n))
         } else {
             None
         };
         let twiddle_inv_32 = if is_pow2 {
-            Some(build_inverse_twiddle_table_32(shape.n))
+            Some(cached_twiddle_inv_32(shape.n))
         } else {
             None
         };
@@ -243,7 +246,7 @@ impl FftPlan1D {
             forward_real_inplace_64(
                 input_slice,
                 output.as_slice_mut().expect("output must be contiguous"),
-                fft_tw,
+                fft_tw.as_ref(),
                 post_tw,
             );
             output
@@ -268,7 +271,7 @@ impl FftPlan1D {
             forward_real_inplace_64(
                 input_slice,
                 output.as_slice_mut().expect("output must be contiguous"),
-                fft_tw,
+                fft_tw.as_ref(),
                 post_tw,
             );
         } else {
@@ -315,7 +318,7 @@ impl FftPlan1D {
                 input_slice,
                 output_slice,
                 &mut scratch_slice[..m],
-                inv_tw,
+                inv_tw.as_ref(),
                 post_tw,
             );
         } else {
@@ -347,7 +350,13 @@ impl FftPlan1D {
             let input_slice = input.as_slice().expect("input must be contiguous");
             let output_slice = output.as_slice_mut().expect("output must be contiguous");
             let mut scratch = scratch_mu.lock().expect("real_inv_scratch mutex poisoned");
-            inverse_real_inplace_64(input_slice, output_slice, &mut scratch, inv_tw, post_tw);
+            inverse_real_inplace_64(
+                input_slice,
+                output_slice,
+                &mut scratch,
+                inv_tw.as_ref(),
+                post_tw,
+            );
         } else {
             let mut spectrum = input.to_owned();
             self.inverse_complex_inplace(&mut spectrum);
@@ -366,7 +375,7 @@ impl FftPlan1D {
             let mut scratch = scratch_mu.lock().expect("bluestein scratch mutex poisoned");
             plan.forward_with_scratch(data, &mut scratch);
         } else if let Some(twiddles) = &self.twiddle_fwd_64 {
-            forward_inplace_64_with_twiddles(data, twiddles);
+            forward_inplace_64_with_twiddles(data, twiddles.as_ref());
         } else {
             crate::application::execution::kernel::radix2::forward_inplace_64(data);
         }
@@ -383,7 +392,7 @@ impl FftPlan1D {
                 *x *= scale;
             }
         } else if let Some(twiddles) = &self.twiddle_inv_64 {
-            inverse_inplace_64_with_twiddles(data, twiddles);
+            inverse_inplace_64_with_twiddles(data, twiddles.as_ref());
         } else {
             crate::application::execution::kernel::radix2::inverse_inplace_64(data);
         }
@@ -432,7 +441,7 @@ impl FftPlan1D {
             let mut output = input.mapv(|value| Complex32::new(value, 0.0));
             let slice = output.as_slice_mut().expect("Array must be contiguous");
             if let Some(twiddles) = &self.twiddle_fwd_32 {
-                forward_inplace_32_with_twiddles(slice, twiddles);
+                forward_inplace_32_with_twiddles(slice, twiddles.as_ref());
             } else {
                 fft_forward_32(slice);
             }
@@ -451,7 +460,7 @@ impl FftPlan1D {
             let mut output = input.clone();
             let slice = output.as_slice_mut().expect("Array must be contiguous");
             if let Some(twiddles) = &self.twiddle_inv_32 {
-                inverse_inplace_32_with_twiddles(slice, twiddles);
+                inverse_inplace_32_with_twiddles(slice, twiddles.as_ref());
             } else {
                 fft_inverse_32(slice);
             }

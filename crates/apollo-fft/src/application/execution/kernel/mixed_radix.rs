@@ -31,8 +31,11 @@ use super::{bluestein, radix2, radix2_f16, radix4, radix8};
 use num_complex::{Complex32, Complex64};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+// ── Global backing caches (cross-thread sharing, written once per size) ───────
 
 static TWIDDLE_FWD_64_CACHE: Lazy<RwLock<HashMap<usize, Arc<[Complex64]>>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
@@ -47,82 +50,121 @@ static TWIDDLE_FWD_F16_CACHE: Lazy<RwLock<HashMap<usize, Arc<[Cf16]>>>> =
 static TWIDDLE_INV_F16_CACHE: Lazy<RwLock<HashMap<usize, Arc<[Cf16]>>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
+// ── Thread-local fast-path caches (zero locking on the hot path after warmup) ─
+//
+// On a cache hit the hot path is:
+//   TW_FWD_64.with(|c| c.borrow().get(&n).cloned()) — no atomic, no lock.
+// On a miss, the global RwLock is consulted or the table is built once, then
+// the Arc is stored into the thread-local HashMap for all future calls.
+
+thread_local! {
+    static TL_FWD_64: RefCell<HashMap<usize, Arc<[Complex64]>>> =
+        RefCell::new(HashMap::with_capacity(8));
+    static TL_INV_64: RefCell<HashMap<usize, Arc<[Complex64]>>> =
+        RefCell::new(HashMap::with_capacity(8));
+    static TL_FWD_32: RefCell<HashMap<usize, Arc<[Complex32]>>> =
+        RefCell::new(HashMap::with_capacity(8));
+    static TL_INV_32: RefCell<HashMap<usize, Arc<[Complex32]>>> =
+        RefCell::new(HashMap::with_capacity(8));
+    static TL_FWD_F16: RefCell<HashMap<usize, Arc<[Cf16]>>> =
+        RefCell::new(HashMap::with_capacity(8));
+    static TL_INV_F16: RefCell<HashMap<usize, Arc<[Cf16]>>> =
+        RefCell::new(HashMap::with_capacity(8));
+}
+
+/// Retrieves the Arc from the thread-local map or falls back to global.
+/// `build_fn` is called at most once per (thread, size) pair.
 #[inline]
-fn cached_twiddle_fwd_64(n: usize) -> Arc<[Complex64]> {
-    if let Some(tw) = TWIDDLE_FWD_64_CACHE.read().get(&n).cloned() {
+fn tl_cached<T: Clone>(
+    tl: &'static std::thread::LocalKey<RefCell<HashMap<usize, Arc<[T]>>>>,
+    global: &'static Lazy<RwLock<HashMap<usize, Arc<[T]>>>>,
+    n: usize,
+    build_fn: impl FnOnce(usize) -> Vec<T>,
+) -> Arc<[T]> {
+    // Fast path: hit in this thread's HashMap — no lock or atomic.
+    if let Some(tw) = tl.with(|c| c.borrow().get(&n).cloned()) {
         return tw;
     }
-    let tw: Arc<[Complex64]> = Arc::from(radix2::build_forward_twiddle_table_64(n));
-    TWIDDLE_FWD_64_CACHE
-        .write()
-        .entry(n)
-        .or_insert_with(|| Arc::clone(&tw))
-        .clone()
+    // Slow path (once per thread per size): read or write the global cache.
+    // NOTE: The read guard MUST be dropped (via let binding with `;`) before
+    // calling global.write() to avoid a same-thread read→write deadlock with
+    // parking_lot::RwLock, which does not allow upgrading a read lock on the
+    // same thread.
+    let tw = {
+        let maybe_cached = global.read().get(&n).cloned(); // ReadGuard drops here at `;`
+        if let Some(tw) = maybe_cached {
+            tw
+        } else {
+            let new_tw: Arc<[T]> = Arc::from(build_fn(n));
+            global
+                .write()
+                .entry(n)
+                .or_insert_with(|| Arc::clone(&new_tw))
+                .clone()
+        }
+    };
+    tl.with(|c| c.borrow_mut().insert(n, Arc::clone(&tw)));
+    tw
 }
 
 #[inline]
-fn cached_twiddle_inv_64(n: usize) -> Arc<[Complex64]> {
-    if let Some(tw) = TWIDDLE_INV_64_CACHE.read().get(&n).cloned() {
-        return tw;
-    }
-    let tw: Arc<[Complex64]> = Arc::from(radix2::build_inverse_twiddle_table_64(n));
-    TWIDDLE_INV_64_CACHE
-        .write()
-        .entry(n)
-        .or_insert_with(|| Arc::clone(&tw))
-        .clone()
+pub(crate) fn cached_twiddle_fwd_64(n: usize) -> Arc<[Complex64]> {
+    tl_cached(
+        &TL_FWD_64,
+        &TWIDDLE_FWD_64_CACHE,
+        n,
+        radix2::build_forward_twiddle_table_64,
+    )
 }
 
 #[inline]
-fn cached_twiddle_fwd_32(n: usize) -> Arc<[Complex32]> {
-    if let Some(tw) = TWIDDLE_FWD_32_CACHE.read().get(&n).cloned() {
-        return tw;
-    }
-    let tw: Arc<[Complex32]> = Arc::from(radix2::build_forward_twiddle_table_32(n));
-    TWIDDLE_FWD_32_CACHE
-        .write()
-        .entry(n)
-        .or_insert_with(|| Arc::clone(&tw))
-        .clone()
+pub(crate) fn cached_twiddle_inv_64(n: usize) -> Arc<[Complex64]> {
+    tl_cached(
+        &TL_INV_64,
+        &TWIDDLE_INV_64_CACHE,
+        n,
+        radix2::build_inverse_twiddle_table_64,
+    )
 }
 
 #[inline]
-fn cached_twiddle_inv_32(n: usize) -> Arc<[Complex32]> {
-    if let Some(tw) = TWIDDLE_INV_32_CACHE.read().get(&n).cloned() {
-        return tw;
-    }
-    let tw: Arc<[Complex32]> = Arc::from(radix2::build_inverse_twiddle_table_32(n));
-    TWIDDLE_INV_32_CACHE
-        .write()
-        .entry(n)
-        .or_insert_with(|| Arc::clone(&tw))
-        .clone()
+pub(crate) fn cached_twiddle_fwd_32(n: usize) -> Arc<[Complex32]> {
+    tl_cached(
+        &TL_FWD_32,
+        &TWIDDLE_FWD_32_CACHE,
+        n,
+        radix2::build_forward_twiddle_table_32,
+    )
 }
 
 #[inline]
-fn cached_twiddle_fwd_f16(n: usize) -> Arc<[Cf16]> {
-    if let Some(tw) = TWIDDLE_FWD_F16_CACHE.read().get(&n).cloned() {
-        return tw;
-    }
-    let tw: Arc<[Cf16]> = Arc::from(radix2_f16::build_forward_twiddle_table_f16(n));
-    TWIDDLE_FWD_F16_CACHE
-        .write()
-        .entry(n)
-        .or_insert_with(|| Arc::clone(&tw))
-        .clone()
+pub(crate) fn cached_twiddle_inv_32(n: usize) -> Arc<[Complex32]> {
+    tl_cached(
+        &TL_INV_32,
+        &TWIDDLE_INV_32_CACHE,
+        n,
+        radix2::build_inverse_twiddle_table_32,
+    )
 }
 
 #[inline]
-fn cached_twiddle_inv_f16(n: usize) -> Arc<[Cf16]> {
-    if let Some(tw) = TWIDDLE_INV_F16_CACHE.read().get(&n).cloned() {
-        return tw;
-    }
-    let tw: Arc<[Cf16]> = Arc::from(radix2_f16::build_inverse_twiddle_table_f16(n));
-    TWIDDLE_INV_F16_CACHE
-        .write()
-        .entry(n)
-        .or_insert_with(|| Arc::clone(&tw))
-        .clone()
+pub(crate) fn cached_twiddle_fwd_f16(n: usize) -> Arc<[Cf16]> {
+    tl_cached(
+        &TL_FWD_F16,
+        &TWIDDLE_FWD_F16_CACHE,
+        n,
+        radix2_f16::build_forward_twiddle_table_f16,
+    )
+}
+
+#[inline]
+pub(crate) fn cached_twiddle_inv_f16(n: usize) -> Arc<[Cf16]> {
+    tl_cached(
+        &TL_INV_F16,
+        &TWIDDLE_INV_F16_CACHE,
+        n,
+        radix2_f16::build_inverse_twiddle_table_f16,
+    )
 }
 
 // ── SSOT dispatch macro ───────────────────────────────────────────────────────

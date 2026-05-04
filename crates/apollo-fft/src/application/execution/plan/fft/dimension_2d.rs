@@ -28,9 +28,12 @@
 //! place, while non-contiguous passes gather lanes into scratch buffers before
 //! scattering them back.
 
+use crate::application::execution::kernel::mixed_radix::{
+    cached_twiddle_fwd_32, cached_twiddle_fwd_64, cached_twiddle_inv_32,
+    cached_twiddle_inv_64,
+};
 use crate::application::execution::kernel::radix2::{
-    build_forward_twiddle_table_32, build_forward_twiddle_table_64, build_inverse_twiddle_table_32,
-    build_inverse_twiddle_table_64, forward_inplace_32_with_twiddles,
+    forward_inplace_32_with_twiddles,
     forward_inplace_64_with_twiddles, inverse_inplace_32_with_twiddles,
     inverse_inplace_64_with_twiddles,
 };
@@ -52,6 +55,7 @@ use crate::domain::metadata::shape::Shape2D;
 use half::f16;
 use ndarray::{Array2, Axis, Zip};
 use num_complex::{Complex32, Complex64};
+use std::sync::Arc;
 use rayon::prelude::*;
 
 /// Reusable 2D FFT plan.
@@ -82,18 +86,18 @@ pub struct FftPlan2D {
     precision: PrecisionProfile,
     /// Per-stage forward twiddle table for row (axis-1) passes of length `ny`.
     /// `Some` iff `ny` is a power of two and `ny > 1`.
-    twiddle_row_fwd_64: Option<Vec<Complex64>>,
+    twiddle_row_fwd_64: Option<Arc<[Complex64]>>,
     /// Per-stage inverse twiddle table for row (axis-1) passes of length `ny`.
-    twiddle_row_inv_64: Option<Vec<Complex64>>,
+    twiddle_row_inv_64: Option<Arc<[Complex64]>>,
     /// Per-stage forward twiddle table for column (axis-0) passes of length `nx`.
-    twiddle_col_fwd_64: Option<Vec<Complex64>>,
+    twiddle_col_fwd_64: Option<Arc<[Complex64]>>,
     /// Per-stage inverse twiddle table for column (axis-0) passes of length `nx`.
-    twiddle_col_inv_64: Option<Vec<Complex64>>,
+    twiddle_col_inv_64: Option<Arc<[Complex64]>>,
     /// f32 variants of the above four.
-    twiddle_row_fwd_32: Option<Vec<Complex32>>,
-    twiddle_row_inv_32: Option<Vec<Complex32>>,
-    twiddle_col_fwd_32: Option<Vec<Complex32>>,
-    twiddle_col_inv_32: Option<Vec<Complex32>>,
+    twiddle_row_fwd_32: Option<Arc<[Complex32]>>,
+    twiddle_row_inv_32: Option<Arc<[Complex32]>>,
+    twiddle_col_fwd_32: Option<Arc<[Complex32]>>,
+    twiddle_col_inv_32: Option<Arc<[Complex32]>>,
     /// Preallocated scratch buffer for the column transpose-FFT-scatter pass.
     /// Holds `nx * ny` Complex64 entries; protected by Mutex for shared plan reuse.
     scratch_col_64: std::sync::Mutex<Vec<Complex64>>,
@@ -122,23 +126,23 @@ impl FftPlan2D {
     #[must_use]
     pub fn with_precision(shape: Shape2D, precision: PrecisionProfile) -> Self {
         let (nx, ny) = (shape.nx, shape.ny);
-        let make64 = |n: usize, forward: bool| -> Option<Vec<Complex64>> {
+        let make64 = |n: usize, forward: bool| -> Option<Arc<[Complex64]>> {
             if n > 1 && n.is_power_of_two() {
                 Some(if forward {
-                    build_forward_twiddle_table_64(n)
+                    cached_twiddle_fwd_64(n)
                 } else {
-                    build_inverse_twiddle_table_64(n)
+                    cached_twiddle_inv_64(n)
                 })
             } else {
                 None
             }
         };
-        let make32 = |n: usize, forward: bool| -> Option<Vec<Complex32>> {
+        let make32 = |n: usize, forward: bool| -> Option<Arc<[Complex32]>> {
             if n > 1 && n.is_power_of_two() {
                 Some(if forward {
-                    build_forward_twiddle_table_32(n)
+                    cached_twiddle_fwd_32(n)
                 } else {
-                    build_inverse_twiddle_table_32(n)
+                    cached_twiddle_inv_32(n)
                 })
             } else {
                 None
@@ -447,8 +451,8 @@ impl FftPlan2D {
             &self.twiddle_row_fwd_64,
             &self.twiddle_row_inv_64,
         ) {
-            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_slice()),
-            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_slice()),
+            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_ref()),
+            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_ref()),
             _ => {
                 if forward {
                     fft_forward_64(lane)
@@ -491,8 +495,8 @@ impl FftPlan2D {
             &self.twiddle_col_fwd_64,
             &self.twiddle_col_inv_64,
         ) {
-            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_slice()),
-            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_slice()),
+            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_ref()),
+            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_ref()),
             _ => {
                 if forward {
                     fft_forward_64(lane)
@@ -568,8 +572,8 @@ impl FftPlan2D {
             &self.twiddle_row_fwd_32,
             &self.twiddle_row_inv_32,
         ) {
-            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_slice()),
-            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_slice()),
+            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_ref()),
+            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_ref()),
             _ => {
                 if forward {
                     fft_forward_32(lane)
@@ -609,8 +613,8 @@ impl FftPlan2D {
             &self.twiddle_col_fwd_32,
             &self.twiddle_col_inv_32,
         ) {
-            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_slice()),
-            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_slice()),
+            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_ref()),
+            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_ref()),
             _ => {
                 if forward {
                     fft_forward_32(lane)

@@ -25,6 +25,8 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use num_complex::{Complex32, Complex64};
 use rustfft::FftPlanner;
 
+const _BENCH_BUILD_TAG: &str = "simd-radix4-rerun-01";
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 fn signal_f64(len: usize) -> Vec<Complex64> {
