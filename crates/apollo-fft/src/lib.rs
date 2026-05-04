@@ -366,6 +366,56 @@ pub fn ifft_3d_complex(field_hat: &Array3<Complex64>) -> Array3<Complex64> {
     output
 }
 
+/// Forward real-to-complex 3D FFT — half-spectrum `(nx, ny, nz/2+1)`.
+///
+/// Uses the Cooley-Tukey split-radix z-axis algorithm followed by standard
+/// complex FFT passes on Y and X axes. Output is exact (no approximation).
+#[must_use]
+pub fn fft_3d_r2c(field: &Array3<f64>) -> Array3<Complex64> {
+    let (nx, ny, nz) = field.dim();
+    FFT_CACHE_3D
+        .get_or_create(Shape3D::new(nx, ny, nz).expect("fft_3d_r2c requires non-zero dimensions"))
+        .forward_r2c(field)
+}
+
+/// Forward real-to-complex 3D FFT into a caller-owned half-spectrum buffer.
+pub fn fft_3d_r2c_into(field: &Array3<f64>, out: &mut Array3<Complex64>) {
+    let (nx, ny, nz) = field.dim();
+    FFT_CACHE_3D
+        .get_or_create(
+            Shape3D::new(nx, ny, nz).expect("fft_3d_r2c_into requires non-zero dimensions"),
+        )
+        .forward_r2c_into(field, out);
+}
+
+/// Inverse complex-to-real 3D FFT from half-spectrum `(nx, ny, nz/2+1)`.
+///
+/// Normalizes by `1/(nx·ny·nz)`. The `nz` of the output is inferred as
+/// `2 * (spectrum.dim().2 - 1)`.
+#[must_use]
+pub fn ifft_3d_r2c(spectrum: &Array3<Complex64>) -> Array3<f64> {
+    let (nx, ny, nz_c) = spectrum.dim();
+    let nz = (nz_c - 1) * 2;
+    FFT_CACHE_3D
+        .get_or_create(Shape3D::new(nx, ny, nz).expect("ifft_3d_r2c requires non-zero dimensions"))
+        .inverse_c2r(spectrum)
+}
+
+/// Inverse complex-to-real 3D FFT into caller-owned buffers.
+pub fn ifft_3d_r2c_into(
+    spectrum: &Array3<Complex64>,
+    out: &mut Array3<f64>,
+    scratch: &mut Array3<Complex64>,
+) {
+    let (nx, ny, nz_c) = spectrum.dim();
+    let nz = (nz_c - 1) * 2;
+    FFT_CACHE_3D
+        .get_or_create(
+            Shape3D::new(nx, ny, nz).expect("ifft_3d_r2c_into requires non-zero dimensions"),
+        )
+        .inverse_c2r_into(spectrum, out, scratch);
+}
+
 /// Forward 3D FFT of a real array into a caller-provided complex buffer.
 pub fn fft_3d_array_into(field: &Array3<f64>, out: &mut Array3<Complex64>) {
     debug_assert_eq!(field.dim(), out.dim(), "fft_3d_array_into: shape mismatch");
