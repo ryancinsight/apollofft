@@ -6,7 +6,9 @@ use crate::application::execution::kernel::radix2::{
     forward_inplace_32_with_twiddles, forward_inplace_64_with_twiddles, forward_real_inplace_64,
     inverse_inplace_32_with_twiddles, inverse_inplace_64_with_twiddles, inverse_real_inplace_64,
 };
-use crate::application::execution::kernel::{fft_forward_32, fft_forward_f16, fft_inverse_32, fft_inverse_f16, Cf16};
+use crate::application::execution::kernel::{
+    fft_forward_32, fft_forward_f16, fft_inverse_32, fft_inverse_f16, Cf16,
+};
 use crate::application::execution::plan::fft::real_storage::RealFftData;
 use crate::domain::metadata::precision::PrecisionProfile;
 use crate::domain::metadata::shape::Shape1D;
@@ -474,8 +476,7 @@ impl FftPlan1D {
         if self.precision == PrecisionProfile::MIXED_PRECISION_F16_F32 {
             if input.len().is_power_of_two() {
                 // Pack real f16 input as complex Cf16 (imaginary = 0).
-                let mut buf: Vec<Cf16> =
-                    input.iter().map(|&v| Cf16::new(v, f16::ZERO)).collect();
+                let mut buf: Vec<Cf16> = input.iter().map(|&v| Cf16::new(v, f16::ZERO)).collect();
                 fft_forward_f16(&mut buf);
                 // Convert Cf16 spectrum to Complex32 at the output boundary.
                 Array1::from_vec(
@@ -689,7 +690,8 @@ mod tests {
     #[test]
     fn mixed_precision_non_power_of_two_roundtrip_stays_bounded() {
         let shape = Shape1D::new(30).expect("shape");
-        let mixed_plan = FftPlan1D::with_precision(shape, PrecisionProfile::MIXED_PRECISION_F16_F32);
+        let mixed_plan =
+            FftPlan1D::with_precision(shape, PrecisionProfile::MIXED_PRECISION_F16_F32);
 
         let signal = Array1::from_iter((0..30).map(|i| {
             let x = i as f32;
@@ -704,14 +706,18 @@ mod tests {
             .fold(0.0f32, f32::max);
 
         // Non-PoT mixed path executes via f32 auto-kernel and quantizes at boundaries.
-        assert!(max_err <= 2e-2, "non-PoT mixed roundtrip max error {max_err:.4e}");
+        assert!(
+            max_err <= 2e-2,
+            "non-PoT mixed roundtrip max error {max_err:.4e}"
+        );
     }
 
     #[test]
     fn mixed_precision_non_power_of_two_forward_tracks_low_precision_outputs() {
         let shape = Shape1D::new(30).expect("shape");
         let low_plan = FftPlan1D::with_precision(shape, PrecisionProfile::LOW_PRECISION_F32);
-        let mixed_plan = FftPlan1D::with_precision(shape, PrecisionProfile::MIXED_PRECISION_F16_F32);
+        let mixed_plan =
+            FftPlan1D::with_precision(shape, PrecisionProfile::MIXED_PRECISION_F16_F32);
 
         let mixed_input = Array1::from_iter((0..30).map(|i| {
             let x = i as f32;
@@ -729,7 +735,10 @@ mod tests {
             .fold(0.0f32, f32::max);
 
         // Mixed path should remain close to low-precision spectrum on identical quantized input.
-        assert!(max_diff <= 2e-2, "non-PoT forward spectrum max diff {max_diff:.4e}");
+        assert!(
+            max_diff <= 2e-2,
+            "non-PoT forward spectrum max diff {max_diff:.4e}"
+        );
     }
 
     proptest! {

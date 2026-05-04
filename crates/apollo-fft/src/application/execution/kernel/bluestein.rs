@@ -45,7 +45,9 @@ where
 {
     BLUESTEIN_SCRATCH_64.with(|map_cell| {
         let mut map = map_cell.borrow_mut();
-        let mut scratch = map.remove(&m).unwrap_or_else(|| vec![Complex64::new(0.0, 0.0); m]);
+        let mut scratch = map
+            .remove(&m)
+            .unwrap_or_else(|| vec![Complex64::new(0.0, 0.0); m]);
         if scratch.len() != m {
             scratch.resize(m, Complex64::new(0.0, 0.0));
         }
@@ -262,8 +264,8 @@ fn bluestein_via_f64<F: Fn(&mut [Complex64])>(data: &mut [Complex32], op: F) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::test_utils::max_abs_err_64 as max_abs_err;
+    use super::*;
     use crate::application::execution::kernel::direct::{dft_forward_64, dft_inverse_64};
 
     fn sig(n: usize) -> Vec<Complex64> {

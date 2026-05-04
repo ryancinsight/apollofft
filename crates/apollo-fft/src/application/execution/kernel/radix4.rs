@@ -23,10 +23,10 @@
 //! Cooley, J.W. & Tukey, J.W. (1965). *Math. Comput.* 19(90), 297–301.
 
 use super::kernel_api::radix_kernel_api;
+use super::radix2_f16::Cf16;
 use super::radix_permute::digit_reverse_permute_pow2_radix;
 use super::radix_shape::{is_power_of_four, stage_twiddle};
 use super::radix_stage::WinogradComplex;
-use super::radix2_f16::Cf16;
 use num_complex::{Complex32, Complex64};
 
 radix_kernel_api! {
@@ -64,8 +64,8 @@ where
     let mut len = 4usize;
     while len <= n {
         let quarter = len >> 2;
-        let half    = len >> 1;
-        let stage   = if len > 4 {
+        let half = len >> 1;
+        let stage = if len > 4 {
             Some(&twiddles[(half - 1)..(half - 1 + half)])
         } else {
             None
@@ -129,9 +129,9 @@ fn radix4_inplace_32(data: &mut [Complex32], inverse: bool, twiddles: Option<&[C
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_utils::max_abs_err_64;
     use super::*;
     use crate::application::execution::kernel::direct::{dft_forward_64, dft_inverse_64};
-    use super::super::test_utils::max_abs_err_64;
 
     #[test]
     fn radix4_forward_n16_matches_direct() {

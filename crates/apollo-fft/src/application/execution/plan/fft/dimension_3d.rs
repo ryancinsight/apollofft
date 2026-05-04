@@ -1037,19 +1037,23 @@ impl FftPlan3D {
         let nz_c = self.nz_c;
         let m = nz / 2;
 
-        // Edge case: nz == 1 — single real sample per row; no z-transform.
-        if nz == 1 {
-            ndarray::Zip::from(output).and(input).for_each(|out, &v| {
-                *out = Complex64::new(v, 0.0);
-            });
-            return;
-        }
-
-        // ── Step 1: Z-axis R2C split-radix pass ─────────────────────────────
+        // ── Step 1: Z-axis R2C pass ──────────────────────────────────────────
         //
-        // Processes each (i,j) row independently via rayon par_chunks zip.
-        // Each row: pack m complex values, FFT of length m, Cooley-Tukey extraction.
-        {
+        // nz == 1: trivial — cast each real sample to complex with zero imaginary
+        // part (DC-only spectrum). No sub-FFT or Cooley-Tukey extraction needed.
+        // Falls through to x/y FFT passes below so the full 3D transform is
+        // computed even when nz == 1 (e.g. purely 1D or 2D grids).
+        //
+        // nz > 1: split-radix r2c — processes each (i,j) row independently via
+        // rayon par_chunks zip. Pack m complex values, FFT of length m,
+        // Cooley-Tukey extraction.
+        if nz == 1 {
+            ndarray::Zip::from(&mut *output)
+                .and(input)
+                .for_each(|out, &v| {
+                    *out = Complex64::new(v, 0.0);
+                });
+        } else {
             let in_sl = input
                 .as_slice_memory_order()
                 .expect("r2c input must be contiguous");
@@ -1076,6 +1080,7 @@ impl FftPlan3D {
         }
 
         // ── Step 2: Y-axis complex FFT on (nx, ny, nz_c) data ───────────────
+        // r2c_axis1_pass_64 returns trivially when ny == 1.
         {
             let out_sl = output
                 .as_slice_memory_order_mut()
@@ -1084,6 +1089,7 @@ impl FftPlan3D {
         }
 
         // ── Step 3: X-axis complex FFT on (nx, ny, nz_c) data ───────────────
+        // r2c_axis0_pass_64 returns trivially when nx == 1.
         {
             let out_sl = output
                 .as_slice_memory_order_mut()
@@ -1148,18 +1154,9 @@ impl FftPlan3D {
         let nz_c = self.nz_c;
         let m = nz / 2;
 
-        // Edge case: nz == 1 — single complex sample per row; extract real part.
-        if nz == 1 {
-            let norm = 1.0 / (self.nx * self.ny) as f64;
-            ndarray::Zip::from(output)
-                .and(&*scratch)
-                .for_each(|out, &v| {
-                    *out = v.re * norm;
-                });
-            return;
-        }
-
         // ── Step 1: X-axis complex IFFT on (nx, ny, nz_c) data ──────────────
+        // r2c_axis0_pass_64 returns trivially when nx == 1.
+        // Applies normalization 1/nx.
         {
             let sc_sl = scratch
                 .as_slice_memory_order_mut()
@@ -1168,6 +1165,8 @@ impl FftPlan3D {
         }
 
         // ── Step 2: Y-axis complex IFFT on (nx, ny, nz_c) data ──────────────
+        // r2c_axis1_pass_64 returns trivially when ny == 1.
+        // Applies normalization 1/ny.
         {
             let sc_sl = scratch
                 .as_slice_memory_order_mut()
@@ -1175,8 +1174,21 @@ impl FftPlan3D {
             self.r2c_axis1_pass_64(sc_sl, false);
         }
 
-        // ── Step 3: Z-axis C2R split-radix pass ─────────────────────────────
-        {
+        // ── Step 3: Z-axis C2R pass ──────────────────────────────────────────
+        //
+        // nz == 1: trivial — extract the real part of each DC-bin complex sample.
+        // Steps 1 and 2 above already applied 1/nx and 1/ny normalization, so no
+        // additional factor is needed here (total = 1/(nx·ny·1) = 1/(nx·ny·nz)).
+        //
+        // nz > 1: split-radix c2r — inverse Cooley-Tukey extraction + length-m
+        // IFFT (applies 1/(2m) = 1/nz normalization) → total 1/(nx·ny·nz). □
+        if nz == 1 {
+            ndarray::Zip::from(output)
+                .and(&*scratch)
+                .for_each(|out, &v| {
+                    *out = v.re;
+                });
+        } else {
             let sc_sl = scratch
                 .as_slice_memory_order()
                 .expect("c2r scratch must be contiguous");
@@ -1791,6 +1803,81 @@ mod tests {
         for (a, b) in alloc.iter().zip(out.iter()) {
             let err = (a - b).abs();
             assert!(err < 1e-14, "c2r caller-owned mismatch: {err:.2e}");
+        }
+    }
+
+    /// R2C/C2R roundtrip for nz=1 (1D grid): verifies that x/y FFT passes
+    /// still execute when nz=1 and that the z-trivial branch does not
+    /// short-circuit the full transform.
+    ///
+    /// Physical motivation: kwavers 1D PSTD simulations use (nx, 1, 1) grids;
+    /// the bug this test guards against caused `forward_r2c_into` to return
+    /// after a real→complex cast without performing the x-axis FFT, making
+    /// every spectral derivative zero and the solver a no-op.
+    #[test]
+    fn r2c_roundtrip_nz1_1d_grid() {
+        // 1D grid: (nx, 1, 1). The x-axis FFT must run; y/z are trivial.
+        for nx in [8usize, 16, 32, 64] {
+            let shape = Shape3D::new(nx, 1, 1).expect("valid shape");
+            let plan = FftPlan3D::new(shape);
+            let input = make_signal(nx, 1, 1);
+            let spectrum = plan.forward_r2c(&input);
+            // Half-spectrum shape: (nx, 1, nz/2+1) = (nx, 1, 1) for nz=1.
+            assert_eq!(spectrum.dim(), (nx, 1, 1), "nz=1 half-spectrum shape");
+            let recovered = plan.inverse_c2r(&spectrum);
+            assert_eq!(recovered.dim(), (nx, 1, 1));
+            for (a, b) in input.iter().zip(recovered.iter()) {
+                let err = (a - b).abs();
+                assert!(err < 1e-10, "r2c nz=1 1D roundtrip nx={nx} err={err:.2e}");
+            }
+        }
+    }
+
+    /// R2C/C2R roundtrip for nz=1, ny>1 (2D grid): verifies that both the
+    /// y-axis and x-axis FFT passes run when nz=1.
+    #[test]
+    fn r2c_roundtrip_nz1_2d_grid() {
+        for (nx, ny) in [(8usize, 8usize), (16, 12), (6, 10)] {
+            let shape = Shape3D::new(nx, ny, 1).expect("valid shape");
+            let plan = FftPlan3D::new(shape);
+            let input = make_signal(nx, ny, 1);
+            let spectrum = plan.forward_r2c(&input);
+            assert_eq!(spectrum.dim(), (nx, ny, 1), "nz=1 2D half-spectrum shape");
+            let recovered = plan.inverse_c2r(&spectrum);
+            for (a, b) in input.iter().zip(recovered.iter()) {
+                let err = (a - b).abs();
+                assert!(
+                    err < 1e-10,
+                    "r2c nz=1 2D roundtrip ({nx},{ny}) err={err:.2e}"
+                );
+            }
+        }
+    }
+
+    /// Spectrum correctness for nz=1: forward_r2c must produce the same
+    /// DC-only spectrum as the full complex forward FFT for a 1D grid.
+    ///
+    /// For nz=1, nz_c=1, and `forward_r2c(x)[i,0,0] == forward(x)[i,0,0]`
+    /// (the single frequency bin is the DC component, which equals the sum
+    /// of the x-axis DFT coefficients).
+    #[test]
+    fn r2c_spectrum_matches_full_forward_nz1() {
+        let (nx, ny) = (16usize, 1usize);
+        let shape = Shape3D::new(nx, ny, 1).expect("valid shape");
+        let plan = FftPlan3D::new(shape);
+        let input = make_signal(nx, ny, 1);
+
+        let full_spectrum = plan.forward(&input);
+        let half_spectrum = plan.forward_r2c(&input);
+
+        for i in 0..nx {
+            let full = full_spectrum[[i, 0, 0]];
+            let half = half_spectrum[[i, 0, 0]];
+            let err = (full - half).norm();
+            assert!(
+                err < 1e-10,
+                "r2c vs full nz=1: [{i},0,0] full={full} half={half} err={err:.2e}"
+            );
         }
     }
 

@@ -25,9 +25,9 @@
 //! | `_f16`  | `Cf16`       | Each sub-kernel promotes to f32 internally; non-PoT sizes use `run_f16_via_f32` + Bluestein-f32. |
 
 use super::f16_bridge::run_f16_via_f32;
+use super::radix2_f16::Cf16;
 use super::radix_shape::{is_power_of_eight, is_power_of_four};
 use super::{bluestein, radix2, radix2_f16, radix4, radix8};
-use super::radix2_f16::Cf16;
 use num_complex::{Complex32, Complex64};
 
 // ── SSOT dispatch macro ───────────────────────────────────────────────────────
@@ -66,17 +66,50 @@ macro_rules! pow2_dispatch {
     }};
 }
 
+macro_rules! pow2_dispatch_no_r8 {
+    (
+        $data:expr, $twiddles:expr,
+        r4 = ($r4_tw:path, $r4_no:path),
+        r2 = ($r2_tw:path, $r2_no:path)
+    ) => {{
+        if is_power_of_four($data.len()) {
+            if let Some(tw) = $twiddles {
+                $r4_tw($data, tw);
+            } else {
+                $r4_no($data);
+            }
+        } else if let Some(tw) = $twiddles {
+            $r2_tw($data, tw);
+        } else {
+            $r2_no($data);
+        }
+    }};
+}
+
 // ── f64 ───────────────────────────────────────────────────────────────────────
 
 /// In-place forward FFT (unnormalized, f64) with optional precomputed twiddles.
 #[inline]
 pub fn forward_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: Option<&[Complex64]>) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     if data.len().is_power_of_two() {
-        pow2_dispatch!(data, twiddles,
-            r8 = (radix8::forward_inplace_64_with_twiddles, radix8::forward_inplace_64),
-            r4 = (radix4::forward_inplace_64_with_twiddles, radix4::forward_inplace_64),
-            r2 = (radix2::forward_inplace_64_with_twiddles, radix2::forward_inplace_64)
+        pow2_dispatch!(
+            data,
+            twiddles,
+            r8 = (
+                radix8::forward_inplace_64_with_twiddles,
+                radix8::forward_inplace_64
+            ),
+            r4 = (
+                radix4::forward_inplace_64_with_twiddles,
+                radix4::forward_inplace_64
+            ),
+            r2 = (
+                radix2::forward_inplace_64_with_twiddles,
+                radix2::forward_inplace_64
+            )
         );
     } else {
         bluestein::forward_inplace_64(data);
@@ -89,12 +122,25 @@ pub fn inverse_inplace_unnorm_64_with_twiddles(
     data: &mut [Complex64],
     twiddles: Option<&[Complex64]>,
 ) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     if data.len().is_power_of_two() {
-        pow2_dispatch!(data, twiddles,
-            r8 = (radix8::inverse_inplace_unnorm_64_with_twiddles, radix8::inverse_inplace_unnorm_64),
-            r4 = (radix4::inverse_inplace_unnorm_64_with_twiddles, radix4::inverse_inplace_unnorm_64),
-            r2 = (radix2::inverse_inplace_unnorm_64_with_twiddles, radix2::inverse_inplace_unnorm_64)
+        pow2_dispatch!(
+            data,
+            twiddles,
+            r8 = (
+                radix8::inverse_inplace_unnorm_64_with_twiddles,
+                radix8::inverse_inplace_unnorm_64
+            ),
+            r4 = (
+                radix4::inverse_inplace_unnorm_64_with_twiddles,
+                radix4::inverse_inplace_unnorm_64
+            ),
+            r2 = (
+                radix2::inverse_inplace_unnorm_64_with_twiddles,
+                radix2::inverse_inplace_unnorm_64
+            )
         );
     } else {
         bluestein::inverse_inplace_unnorm_64(data);
@@ -104,12 +150,25 @@ pub fn inverse_inplace_unnorm_64_with_twiddles(
 /// In-place inverse FFT normalized by 1/N (f64) with optional precomputed twiddles.
 #[inline]
 pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: Option<&[Complex64]>) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     if data.len().is_power_of_two() {
-        pow2_dispatch!(data, twiddles,
-            r8 = (radix8::inverse_inplace_64_with_twiddles, radix8::inverse_inplace_64),
-            r4 = (radix4::inverse_inplace_64_with_twiddles, radix4::inverse_inplace_64),
-            r2 = (radix2::inverse_inplace_64_with_twiddles, radix2::inverse_inplace_64)
+        pow2_dispatch!(
+            data,
+            twiddles,
+            r8 = (
+                radix8::inverse_inplace_64_with_twiddles,
+                radix8::inverse_inplace_64
+            ),
+            r4 = (
+                radix4::inverse_inplace_64_with_twiddles,
+                radix4::inverse_inplace_64
+            ),
+            r2 = (
+                radix2::inverse_inplace_64_with_twiddles,
+                radix2::inverse_inplace_64
+            )
         );
     } else {
         bluestein::inverse_inplace_64(data);
@@ -118,7 +177,9 @@ pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: Option
 
 /// In-place forward FFT (unnormalized, f64).
 pub fn forward_inplace_64(data: &mut [Complex64]) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     if data.len().is_power_of_two() {
         let tw = radix2::build_forward_twiddle_table_64(data.len());
         forward_inplace_64_with_twiddles(data, Some(&tw));
@@ -129,7 +190,9 @@ pub fn forward_inplace_64(data: &mut [Complex64]) {
 
 /// In-place inverse FFT (unnormalized, f64).
 pub fn inverse_inplace_unnorm_64(data: &mut [Complex64]) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     if data.len().is_power_of_two() {
         let tw = radix2::build_inverse_twiddle_table_64(data.len());
         inverse_inplace_unnorm_64_with_twiddles(data, Some(&tw));
@@ -140,7 +203,9 @@ pub fn inverse_inplace_unnorm_64(data: &mut [Complex64]) {
 
 /// In-place inverse FFT normalized by 1/N (f64).
 pub fn inverse_inplace_64(data: &mut [Complex64]) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     if data.len().is_power_of_two() {
         let tw = radix2::build_inverse_twiddle_table_64(data.len());
         inverse_inplace_64_with_twiddles(data, Some(&tw));
@@ -154,12 +219,25 @@ pub fn inverse_inplace_64(data: &mut [Complex64]) {
 /// In-place forward FFT (unnormalized, f32) with optional precomputed twiddles.
 #[inline]
 pub fn forward_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: Option<&[Complex32]>) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     if data.len().is_power_of_two() {
-        pow2_dispatch!(data, twiddles,
-            r8 = (radix8::forward_inplace_32_with_twiddles, radix8::forward_inplace_32),
-            r4 = (radix4::forward_inplace_32_with_twiddles, radix4::forward_inplace_32),
-            r2 = (radix2::forward_inplace_32_with_twiddles, radix2::forward_inplace_32)
+        pow2_dispatch!(
+            data,
+            twiddles,
+            r8 = (
+                radix8::forward_inplace_32_with_twiddles,
+                radix8::forward_inplace_32
+            ),
+            r4 = (
+                radix4::forward_inplace_32_with_twiddles,
+                radix4::forward_inplace_32
+            ),
+            r2 = (
+                radix2::forward_inplace_32_with_twiddles,
+                radix2::forward_inplace_32
+            )
         );
     } else {
         bluestein::forward_inplace_32(data);
@@ -172,12 +250,25 @@ pub fn inverse_inplace_unnorm_32_with_twiddles(
     data: &mut [Complex32],
     twiddles: Option<&[Complex32]>,
 ) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     if data.len().is_power_of_two() {
-        pow2_dispatch!(data, twiddles,
-            r8 = (radix8::inverse_inplace_unnorm_32_with_twiddles, radix8::inverse_inplace_unnorm_32),
-            r4 = (radix4::inverse_inplace_unnorm_32_with_twiddles, radix4::inverse_inplace_unnorm_32),
-            r2 = (radix2::inverse_inplace_unnorm_32_with_twiddles, radix2::inverse_inplace_unnorm_32)
+        pow2_dispatch!(
+            data,
+            twiddles,
+            r8 = (
+                radix8::inverse_inplace_unnorm_32_with_twiddles,
+                radix8::inverse_inplace_unnorm_32
+            ),
+            r4 = (
+                radix4::inverse_inplace_unnorm_32_with_twiddles,
+                radix4::inverse_inplace_unnorm_32
+            ),
+            r2 = (
+                radix2::inverse_inplace_unnorm_32_with_twiddles,
+                radix2::inverse_inplace_unnorm_32
+            )
         );
     } else {
         bluestein::inverse_inplace_unnorm_32(data);
@@ -187,12 +278,25 @@ pub fn inverse_inplace_unnorm_32_with_twiddles(
 /// In-place inverse FFT normalized by 1/N (f32) with optional precomputed twiddles.
 #[inline]
 pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: Option<&[Complex32]>) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     if data.len().is_power_of_two() {
-        pow2_dispatch!(data, twiddles,
-            r8 = (radix8::inverse_inplace_32_with_twiddles, radix8::inverse_inplace_32),
-            r4 = (radix4::inverse_inplace_32_with_twiddles, radix4::inverse_inplace_32),
-            r2 = (radix2::inverse_inplace_32_with_twiddles, radix2::inverse_inplace_32)
+        pow2_dispatch!(
+            data,
+            twiddles,
+            r8 = (
+                radix8::inverse_inplace_32_with_twiddles,
+                radix8::inverse_inplace_32
+            ),
+            r4 = (
+                radix4::inverse_inplace_32_with_twiddles,
+                radix4::inverse_inplace_32
+            ),
+            r2 = (
+                radix2::inverse_inplace_32_with_twiddles,
+                radix2::inverse_inplace_32
+            )
         );
     } else {
         bluestein::inverse_inplace_32(data);
@@ -201,7 +305,9 @@ pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: Option
 
 /// In-place forward FFT (unnormalized, f32).
 pub fn forward_inplace_32(data: &mut [Complex32]) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     if data.len().is_power_of_two() {
         let tw = radix2::build_forward_twiddle_table_32(data.len());
         forward_inplace_32_with_twiddles(data, Some(&tw));
@@ -212,7 +318,9 @@ pub fn forward_inplace_32(data: &mut [Complex32]) {
 
 /// In-place inverse FFT (unnormalized, f32).
 pub fn inverse_inplace_unnorm_32(data: &mut [Complex32]) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     if data.len().is_power_of_two() {
         let tw = radix2::build_inverse_twiddle_table_32(data.len());
         inverse_inplace_unnorm_32_with_twiddles(data, Some(&tw));
@@ -223,7 +331,9 @@ pub fn inverse_inplace_unnorm_32(data: &mut [Complex32]) {
 
 /// In-place inverse FFT normalized by 1/N (f32).
 pub fn inverse_inplace_32(data: &mut [Complex32]) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     if data.len().is_power_of_two() {
         let tw = radix2::build_inverse_twiddle_table_32(data.len());
         inverse_inplace_32_with_twiddles(data, Some(&tw));
@@ -240,12 +350,21 @@ pub fn inverse_inplace_32(data: &mut [Complex32]) {
 /// `run_f16_via_f32`. This is the only allocation site for f16 non-PoT sizes.
 #[inline]
 pub fn forward_inplace_f16_with_twiddles(data: &mut [Cf16], twiddles: Option<&[Cf16]>) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     if data.len().is_power_of_two() {
-        pow2_dispatch!(data, twiddles,
-            r8 = (radix8::forward_inplace_f16_with_twiddles, radix8::forward_inplace_f16),
-            r4 = (radix4::forward_inplace_f16_with_twiddles, radix4::forward_inplace_f16),
-            r2 = (radix2_f16::forward_inplace_f16_with_twiddles, radix2_f16::forward_inplace_f16)
+        pow2_dispatch_no_r8!(
+            data,
+            twiddles,
+            r4 = (
+                radix4::forward_inplace_f16_with_twiddles,
+                radix4::forward_inplace_f16
+            ),
+            r2 = (
+                radix2_f16::forward_inplace_f16_with_twiddles,
+                radix2_f16::forward_inplace_f16
+            )
         );
     } else {
         run_f16_via_f32(data, bluestein::forward_inplace_32);
@@ -255,12 +374,21 @@ pub fn forward_inplace_f16_with_twiddles(data: &mut [Cf16], twiddles: Option<&[C
 /// In-place inverse FFT (unnormalized, f16 storage) with optional precomputed twiddles.
 #[inline]
 pub fn inverse_inplace_unnorm_f16_with_twiddles(data: &mut [Cf16], twiddles: Option<&[Cf16]>) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     if data.len().is_power_of_two() {
-        pow2_dispatch!(data, twiddles,
-            r8 = (radix8::inverse_inplace_unnorm_f16_with_twiddles, radix8::inverse_inplace_unnorm_f16),
-            r4 = (radix4::inverse_inplace_unnorm_f16_with_twiddles, radix4::inverse_inplace_unnorm_f16),
-            r2 = (radix2_f16::inverse_inplace_unnorm_f16_with_twiddles, radix2_f16::inverse_inplace_unnorm_f16)
+        pow2_dispatch_no_r8!(
+            data,
+            twiddles,
+            r4 = (
+                radix4::inverse_inplace_unnorm_f16_with_twiddles,
+                radix4::inverse_inplace_unnorm_f16
+            ),
+            r2 = (
+                radix2_f16::inverse_inplace_unnorm_f16_with_twiddles,
+                radix2_f16::inverse_inplace_unnorm_f16
+            )
         );
     } else {
         run_f16_via_f32(data, bluestein::inverse_inplace_unnorm_32);
@@ -270,12 +398,21 @@ pub fn inverse_inplace_unnorm_f16_with_twiddles(data: &mut [Cf16], twiddles: Opt
 /// In-place inverse FFT normalized by 1/N (f16 storage) with optional precomputed twiddles.
 #[inline]
 pub fn inverse_inplace_f16_with_twiddles(data: &mut [Cf16], twiddles: Option<&[Cf16]>) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     if data.len().is_power_of_two() {
-        pow2_dispatch!(data, twiddles,
-            r8 = (radix8::inverse_inplace_f16_with_twiddles, radix8::inverse_inplace_f16),
-            r4 = (radix4::inverse_inplace_f16_with_twiddles, radix4::inverse_inplace_f16),
-            r2 = (radix2_f16::inverse_inplace_f16_with_twiddles, radix2_f16::inverse_inplace_f16)
+        pow2_dispatch_no_r8!(
+            data,
+            twiddles,
+            r4 = (
+                radix4::inverse_inplace_f16_with_twiddles,
+                radix4::inverse_inplace_f16
+            ),
+            r2 = (
+                radix2_f16::inverse_inplace_f16_with_twiddles,
+                radix2_f16::inverse_inplace_f16
+            )
         );
     } else {
         run_f16_via_f32(data, bluestein::inverse_inplace_32);
@@ -284,7 +421,9 @@ pub fn inverse_inplace_f16_with_twiddles(data: &mut [Cf16], twiddles: Option<&[C
 
 /// In-place forward FFT (unnormalized, f16 storage).
 pub fn forward_inplace_f16(data: &mut [Cf16]) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     if data.len().is_power_of_two() {
         let tw = radix2_f16::build_forward_twiddle_table_f16(data.len());
         forward_inplace_f16_with_twiddles(data, Some(&tw));
@@ -295,7 +434,9 @@ pub fn forward_inplace_f16(data: &mut [Cf16]) {
 
 /// In-place inverse FFT (unnormalized, f16 storage).
 pub fn inverse_inplace_unnorm_f16(data: &mut [Cf16]) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     if data.len().is_power_of_two() {
         let tw = radix2_f16::build_inverse_twiddle_table_f16(data.len());
         inverse_inplace_unnorm_f16_with_twiddles(data, Some(&tw));
@@ -306,7 +447,9 @@ pub fn inverse_inplace_unnorm_f16(data: &mut [Cf16]) {
 
 /// In-place inverse FFT normalized by 1/N (f16 storage).
 pub fn inverse_inplace_f16(data: &mut [Cf16]) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     if data.len().is_power_of_two() {
         let tw = radix2_f16::build_inverse_twiddle_table_f16(data.len());
         inverse_inplace_f16_with_twiddles(data, Some(&tw));
@@ -317,9 +460,9 @@ pub fn inverse_inplace_f16(data: &mut [Cf16]) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_utils::max_abs_err_64;
     use super::*;
     use crate::application::execution::kernel::direct::{dft_forward_64, dft_inverse_64};
-    use super::super::test_utils::max_abs_err_64;
 
     #[test]
     fn mixed_forward_n32_matches_direct() {

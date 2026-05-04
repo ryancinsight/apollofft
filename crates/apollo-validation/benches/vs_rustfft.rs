@@ -58,17 +58,13 @@ fn bench_f64(c: &mut Criterion) {
         let input = signal_f64(len);
 
         // Apollo — auto-selector (radix path for PoT, Bluestein for arbitrary).
-        group.bench_with_input(
-            BenchmarkId::new("apollo", len),
-            &input,
-            |bench, input| {
-                bench.iter(|| {
-                    let mut buf = input.clone();
-                    fft_forward_64(black_box(&mut buf));
-                    black_box(buf);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("apollo", len), &input, |bench, input| {
+            bench.iter(|| {
+                let mut buf = input.clone();
+                fft_forward_64(black_box(&mut buf));
+                black_box(buf);
+            });
+        });
 
         // RustFFT — plan once, process many.  Scratch buffer reused per iter.
         {
@@ -114,17 +110,13 @@ fn bench_f32(c: &mut Criterion) {
         let input = signal_f32(len);
 
         // Apollo f32 auto-selector.
-        group.bench_with_input(
-            BenchmarkId::new("apollo", len),
-            &input,
-            |bench, input| {
-                bench.iter(|| {
-                    let mut buf = input.clone();
-                    fft_forward_32(black_box(&mut buf));
-                    black_box(buf);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("apollo", len), &input, |bench, input| {
+            bench.iter(|| {
+                let mut buf = input.clone();
+                fft_forward_32(black_box(&mut buf));
+                black_box(buf);
+            });
+        });
 
         // RustFFT f32.
         {

@@ -20,16 +20,16 @@ pub mod direct;
 pub(crate) mod f16_bridge;
 pub(crate) mod kernel_api;
 pub mod mixed_radix;
+pub mod radix16;
 pub mod radix2;
 pub mod radix2_f16;
-pub(crate) mod radix_permute;
-pub(crate) mod radix_shape;
-pub(crate) mod radix_stage;
-pub mod radix16;
 pub mod radix32;
 pub mod radix4;
 pub mod radix64;
 pub mod radix8;
+pub(crate) mod radix_permute;
+pub(crate) mod radix_shape;
+pub(crate) mod radix_stage;
 pub(crate) mod tuning;
 pub(crate) mod twiddle_table;
 pub mod winograd;
@@ -151,29 +151,47 @@ pub fn fft_inverse_unnorm_f16(data: &mut [Cf16]) {
 
 impl FftPrecision for Complex64 {
     #[inline]
-    fn fft_forward(data: &mut [Self]) { fft_forward_64(data); }
+    fn fft_forward(data: &mut [Self]) {
+        fft_forward_64(data);
+    }
     #[inline]
-    fn fft_inverse(data: &mut [Self]) { fft_inverse_64(data); }
+    fn fft_inverse(data: &mut [Self]) {
+        fft_inverse_64(data);
+    }
     #[inline]
-    fn fft_inverse_unnorm(data: &mut [Self]) { fft_inverse_unnorm_64(data); }
+    fn fft_inverse_unnorm(data: &mut [Self]) {
+        fft_inverse_unnorm_64(data);
+    }
 }
 
 impl FftPrecision for Complex32 {
     #[inline]
-    fn fft_forward(data: &mut [Self]) { fft_forward_32(data); }
+    fn fft_forward(data: &mut [Self]) {
+        fft_forward_32(data);
+    }
     #[inline]
-    fn fft_inverse(data: &mut [Self]) { fft_inverse_32(data); }
+    fn fft_inverse(data: &mut [Self]) {
+        fft_inverse_32(data);
+    }
     #[inline]
-    fn fft_inverse_unnorm(data: &mut [Self]) { fft_inverse_unnorm_32(data); }
+    fn fft_inverse_unnorm(data: &mut [Self]) {
+        fft_inverse_unnorm_32(data);
+    }
 }
 
 impl FftPrecision for Cf16 {
     #[inline]
-    fn fft_forward(data: &mut [Self]) { fft_forward_f16(data); }
+    fn fft_forward(data: &mut [Self]) {
+        fft_forward_f16(data);
+    }
     #[inline]
-    fn fft_inverse(data: &mut [Self]) { fft_inverse_f16(data); }
+    fn fft_inverse(data: &mut [Self]) {
+        fft_inverse_f16(data);
+    }
     #[inline]
-    fn fft_inverse_unnorm(data: &mut [Self]) { fft_inverse_unnorm_f16(data); }
+    fn fft_inverse_unnorm(data: &mut [Self]) {
+        fft_inverse_unnorm_f16(data);
+    }
 }
 
 #[cfg(test)]

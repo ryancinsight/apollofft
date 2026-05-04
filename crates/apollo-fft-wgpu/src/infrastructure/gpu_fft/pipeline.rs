@@ -453,7 +453,13 @@ impl GpuFft3d {
         let axis_fwd_x = match strategy_x {
             AxisStrategy::Radix2 => {
                 if nx.is_power_of_two() && (nx.trailing_zeros() % 2 == 0) {
-                    RadixStages::precompute_radix4(&device, &params_layout, nx as u32, batch_x, false)
+                    RadixStages::precompute_radix4(
+                        &device,
+                        &params_layout,
+                        nx as u32,
+                        batch_x,
+                        false,
+                    )
                 } else {
                     RadixStages::precompute(&device, &params_layout, nx as u32, batch_x, false)
                 }
@@ -463,7 +469,13 @@ impl GpuFft3d {
         let axis_inv_x = match strategy_x {
             AxisStrategy::Radix2 => {
                 if nx.is_power_of_two() && (nx.trailing_zeros() % 2 == 0) {
-                    RadixStages::precompute_radix4(&device, &params_layout, nx as u32, batch_x, true)
+                    RadixStages::precompute_radix4(
+                        &device,
+                        &params_layout,
+                        nx as u32,
+                        batch_x,
+                        true,
+                    )
                 } else {
                     RadixStages::precompute(&device, &params_layout, nx as u32, batch_x, true)
                 }
@@ -473,7 +485,13 @@ impl GpuFft3d {
         let axis_fwd_y = match strategy_y {
             AxisStrategy::Radix2 => {
                 if ny.is_power_of_two() && (ny.trailing_zeros() % 2 == 0) {
-                    RadixStages::precompute_radix4(&device, &params_layout, ny as u32, batch_y, false)
+                    RadixStages::precompute_radix4(
+                        &device,
+                        &params_layout,
+                        ny as u32,
+                        batch_y,
+                        false,
+                    )
                 } else {
                     RadixStages::precompute(&device, &params_layout, ny as u32, batch_y, false)
                 }
@@ -483,7 +501,13 @@ impl GpuFft3d {
         let axis_inv_y = match strategy_y {
             AxisStrategy::Radix2 => {
                 if ny.is_power_of_two() && (ny.trailing_zeros() % 2 == 0) {
-                    RadixStages::precompute_radix4(&device, &params_layout, ny as u32, batch_y, true)
+                    RadixStages::precompute_radix4(
+                        &device,
+                        &params_layout,
+                        ny as u32,
+                        batch_y,
+                        true,
+                    )
                 } else {
                     RadixStages::precompute(&device, &params_layout, ny as u32, batch_y, true)
                 }
@@ -493,7 +517,13 @@ impl GpuFft3d {
         let axis_fwd_z = match strategy_z {
             AxisStrategy::Radix2 => {
                 if nz.is_power_of_two() && (nz.trailing_zeros() % 2 == 0) {
-                    RadixStages::precompute_radix4(&device, &params_layout, nz as u32, batch_z, false)
+                    RadixStages::precompute_radix4(
+                        &device,
+                        &params_layout,
+                        nz as u32,
+                        batch_z,
+                        false,
+                    )
                 } else {
                     RadixStages::precompute(&device, &params_layout, nz as u32, batch_z, false)
                 }
@@ -503,7 +533,13 @@ impl GpuFft3d {
         let axis_inv_z = match strategy_z {
             AxisStrategy::Radix2 => {
                 if nz.is_power_of_two() && (nz.trailing_zeros() % 2 == 0) {
-                    RadixStages::precompute_radix4(&device, &params_layout, nz as u32, batch_z, true)
+                    RadixStages::precompute_radix4(
+                        &device,
+                        &params_layout,
+                        nz as u32,
+                        batch_z,
+                        true,
+                    )
                 } else {
                     RadixStages::precompute(&device, &params_layout, nz as u32, batch_z, true)
                 }

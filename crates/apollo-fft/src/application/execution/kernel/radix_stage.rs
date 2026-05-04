@@ -100,13 +100,7 @@ impl WinogradScalar for Complex32 {
 /// - `from_f64_pair` to construct twiddle constants from f64 literals (cast to element precision)
 /// - `cmul` for the complex multiply step in each butterfly combine stage
 pub(crate) trait WinogradComplex:
-    std::ops::Add<Output = Self>
-    + std::ops::Sub<Output = Self>
-    + Copy
-    + Sized
-    + Send
-    + Sync
-    + 'static
+    std::ops::Add<Output = Self> + std::ops::Sub<Output = Self> + Copy + Sized + Send + Sync + 'static
 {
     /// Rotate by +i: `(re, im) → (−im, re)`.  Zero multiplications.
     fn rot_pos_i(self) -> Self;
@@ -120,24 +114,40 @@ pub(crate) trait WinogradComplex:
 
 impl WinogradComplex for Complex64 {
     #[inline(always)]
-    fn rot_pos_i(self) -> Self { Complex64::new(-self.im, self.re) }
+    fn rot_pos_i(self) -> Self {
+        Complex64::new(-self.im, self.re)
+    }
     #[inline(always)]
-    fn rot_neg_i(self) -> Self { Complex64::new(self.im, -self.re) }
+    fn rot_neg_i(self) -> Self {
+        Complex64::new(self.im, -self.re)
+    }
     #[inline(always)]
-    fn from_f64_pair(re: f64, im: f64) -> Self { Complex64::new(re, im) }
+    fn from_f64_pair(re: f64, im: f64) -> Self {
+        Complex64::new(re, im)
+    }
     #[inline(always)]
-    fn cmul(self, rhs: Self) -> Self { self * rhs }
+    fn cmul(self, rhs: Self) -> Self {
+        self * rhs
+    }
 }
 
 impl WinogradComplex for Complex32 {
     #[inline(always)]
-    fn rot_pos_i(self) -> Self { Complex32::new(-self.im, self.re) }
+    fn rot_pos_i(self) -> Self {
+        Complex32::new(-self.im, self.re)
+    }
     #[inline(always)]
-    fn rot_neg_i(self) -> Self { Complex32::new(self.im, -self.re) }
+    fn rot_neg_i(self) -> Self {
+        Complex32::new(self.im, -self.re)
+    }
     #[inline(always)]
-    fn from_f64_pair(re: f64, im: f64) -> Self { Complex32::new(re as f32, im as f32) }
+    fn from_f64_pair(re: f64, im: f64) -> Self {
+        Complex32::new(re as f32, im as f32)
+    }
     #[inline(always)]
-    fn cmul(self, rhs: Self) -> Self { self * rhs }
+    fn cmul(self, rhs: Self) -> Self {
+        self * rhs
+    }
 }
 
 // ── Generic stage driver ──────────────────────────────────────────────────────

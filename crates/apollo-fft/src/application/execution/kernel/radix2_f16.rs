@@ -34,10 +34,10 @@
 //! Cache-fitting threshold doubles vs f32: for N = 8192, the Cf16 working buffer
 //! is 32 KiB (vs 64 KiB), fitting in typical L1D caches.
 
-use half::f16;
-use rayon::prelude::*;
 use super::radix_permute::bit_reverse_permute;
 use super::twiddle_table::build_twiddle_table;
+use half::f16;
+use rayon::prelude::*;
 
 /// Minimum transform size for enabling stage-level Rayon MIMD chunking.
 ///
@@ -69,13 +69,19 @@ impl Cf16 {
     /// Return the additive identity `0 + 0i`.
     #[inline(always)]
     pub fn zero() -> Self {
-        Self { re: f16::ZERO, im: f16::ZERO }
+        Self {
+            re: f16::ZERO,
+            im: f16::ZERO,
+        }
     }
 
     /// Construct from f32 parts, rounding each to f16.
     #[inline(always)]
     pub fn from_f32_pair(re: f32, im: f32) -> Self {
-        Self { re: f16::from_f32(re), im: f16::from_f32(im) }
+        Self {
+            re: f16::from_f32(re),
+            im: f16::from_f32(im),
+        }
     }
 
     /// Expand both components to f32 for arithmetic.
@@ -196,9 +202,9 @@ fn run_butterfly_stages_f16_scalar(data: &mut [Cf16], twiddles: &[Cf16]) {
 #[target_feature(enable = "avx,f16c,fma")]
 unsafe fn butterfly_slice_avx2(lo: &mut [Cf16], hi: &mut [Cf16], tw: &[Cf16]) {
     use std::arch::x86_64::{
-        __m128i, __m256, _mm256_add_ps, _mm256_cvtph_ps, _mm256_cvtps_ph,
-        _mm256_fmaddsub_ps, _mm256_moveldup_ps, _mm256_movehdup_ps, _mm256_mul_ps,
-        _mm256_permute_ps, _mm256_sub_ps, _mm_loadu_si128, _mm_storeu_si128,
+        __m128i, __m256, _mm256_add_ps, _mm256_cvtph_ps, _mm256_cvtps_ph, _mm256_fmaddsub_ps,
+        _mm256_movehdup_ps, _mm256_moveldup_ps, _mm256_mul_ps, _mm256_permute_ps, _mm256_sub_ps,
+        _mm_loadu_si128, _mm_storeu_si128,
     };
 
     let batches = lo.len() / 4;
@@ -330,7 +336,10 @@ pub fn forward_inplace_f16(data: &mut [Cf16]) {
     if data.len() <= 1 {
         return;
     }
-    debug_assert!(data.len().is_power_of_two(), "radix-2 f16 requires power-of-2 length");
+    debug_assert!(
+        data.len().is_power_of_two(),
+        "radix-2 f16 requires power-of-2 length"
+    );
     let table = build_forward_twiddle_table_f16(data.len());
     run_butterfly_stages_f16(data, &table);
 }
@@ -340,7 +349,10 @@ pub fn forward_inplace_f16_with_twiddles(data: &mut [Cf16], twiddles: &[Cf16]) {
     if data.len() <= 1 {
         return;
     }
-    debug_assert!(data.len().is_power_of_two(), "radix-2 f16 requires power-of-2 length");
+    debug_assert!(
+        data.len().is_power_of_two(),
+        "radix-2 f16 requires power-of-2 length"
+    );
     run_butterfly_stages_f16(data, twiddles);
 }
 
@@ -349,7 +361,10 @@ pub fn inverse_inplace_unnorm_f16_with_twiddles(data: &mut [Cf16], twiddles: &[C
     if data.len() <= 1 {
         return;
     }
-    debug_assert!(data.len().is_power_of_two(), "radix-2 f16 requires power-of-2 length");
+    debug_assert!(
+        data.len().is_power_of_two(),
+        "radix-2 f16 requires power-of-2 length"
+    );
     run_butterfly_stages_f16(data, twiddles);
 }
 
@@ -358,7 +373,10 @@ pub fn inverse_inplace_f16_with_twiddles(data: &mut [Cf16], twiddles: &[Cf16]) {
     if data.len() <= 1 {
         return;
     }
-    debug_assert!(data.len().is_power_of_two(), "radix-2 f16 requires power-of-2 length");
+    debug_assert!(
+        data.len().is_power_of_two(),
+        "radix-2 f16 requires power-of-2 length"
+    );
     run_butterfly_stages_f16(data, twiddles);
     let inv_n = 1.0f32 / data.len() as f32;
     for c in data.iter_mut() {
@@ -373,7 +391,10 @@ pub fn inverse_inplace_f16(data: &mut [Cf16]) {
     if n <= 1 {
         return;
     }
-    debug_assert!(n.is_power_of_two(), "radix-2 f16 requires power-of-2 length");
+    debug_assert!(
+        n.is_power_of_two(),
+        "radix-2 f16 requires power-of-2 length"
+    );
     let table = build_inverse_twiddle_table_f16(n);
     run_butterfly_stages_f16(data, &table);
     // 1/N normalization: scalar, O(N). LLVM auto-vectorizes with target-cpu=native.
@@ -390,7 +411,10 @@ pub fn inverse_inplace_unnorm_f16(data: &mut [Cf16]) {
     if n <= 1 {
         return;
     }
-    debug_assert!(n.is_power_of_two(), "radix-2 f16 requires power-of-2 length");
+    debug_assert!(
+        n.is_power_of_two(),
+        "radix-2 f16 requires power-of-2 length"
+    );
     let table = build_inverse_twiddle_table_f16(n);
     run_butterfly_stages_f16(data, &table);
 }
@@ -407,8 +431,7 @@ mod tests {
 
     /// Reference f64 forward DFT for comparison.
     fn fft64(signal: &[f64]) -> Vec<Complex64> {
-        let mut buf: Vec<Complex64> =
-            signal.iter().map(|&x| Complex64::new(x, 0.0)).collect();
+        let mut buf: Vec<Complex64> = signal.iter().map(|&x| Complex64::new(x, 0.0)).collect();
         let table = build_forward_twiddle_table_64(buf.len());
         forward_inplace_64_with_twiddles(&mut buf, &table);
         buf
@@ -516,7 +539,10 @@ mod tests {
         // 2 × log₂N stages. Analytical bound for N=64: ≈ 2 × 6 × ε_u ≈ 5.86×10⁻³.
         let n = 64;
         let signal: Vec<f64> = (0..n).map(|i| (i as f64 * 0.23 - 1.5).tanh()).collect();
-        let mut buf: Vec<Cf16> = signal.iter().map(|&x| Cf16::from_f32_pair(x as f32, 0.0)).collect();
+        let mut buf: Vec<Cf16> = signal
+            .iter()
+            .map(|&x| Cf16::from_f32_pair(x as f32, 0.0))
+            .collect();
 
         forward_inplace_f16(&mut buf);
         inverse_inplace_f16(&mut buf);
@@ -534,7 +560,10 @@ mod tests {
     fn round_trip_n4_tight_bound() {
         // N=4 has only log₂4 = 2 stages. Analytic bound: 2 × ε_u × N × max|x| ≈ 3.9×10⁻³.
         let signal = [1.0f32, -0.5f32, 0.75f32, -0.25f32];
-        let mut buf: Vec<Cf16> = signal.iter().map(|&x| Cf16::from_f32_pair(x, 0.0)).collect();
+        let mut buf: Vec<Cf16> = signal
+            .iter()
+            .map(|&x| Cf16::from_f32_pair(x, 0.0))
+            .collect();
         forward_inplace_f16(&mut buf);
         inverse_inplace_f16(&mut buf);
         for (&orig, rec) in signal.iter().zip(buf.iter()) {

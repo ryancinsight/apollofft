@@ -278,7 +278,9 @@ fn bench_fft_kernels(c: &mut Criterion) {
                 BenchmarkId::new("accuracy_f16_radix8_vs_f64", len),
                 &input,
                 |bench, input| {
-                    bench.iter(|| black_box(max_abs_err_f16_vs_f64(input, radix8::forward_inplace_f16)));
+                    bench.iter(|| {
+                        black_box(max_abs_err_f16_vs_f64(input, radix8::forward_inplace_f16))
+                    });
                 },
             );
         }
@@ -287,7 +289,9 @@ fn bench_fft_kernels(c: &mut Criterion) {
                 BenchmarkId::new("accuracy_f16_radix16_vs_f64", len),
                 &input,
                 |bench, input| {
-                    bench.iter(|| black_box(max_abs_err_f16_vs_f64(input, radix16::forward_inplace_f16)));
+                    bench.iter(|| {
+                        black_box(max_abs_err_f16_vs_f64(input, radix16::forward_inplace_f16))
+                    });
                 },
             );
         }
@@ -296,7 +300,9 @@ fn bench_fft_kernels(c: &mut Criterion) {
                 BenchmarkId::new("accuracy_f16_radix32_vs_f64", len),
                 &input,
                 |bench, input| {
-                    bench.iter(|| black_box(max_abs_err_f16_vs_f64(input, radix32::forward_inplace_f16)));
+                    bench.iter(|| {
+                        black_box(max_abs_err_f16_vs_f64(input, radix32::forward_inplace_f16))
+                    });
                 },
             );
         }
@@ -305,7 +311,9 @@ fn bench_fft_kernels(c: &mut Criterion) {
                 BenchmarkId::new("accuracy_f16_radix64_vs_f64", len),
                 &input,
                 |bench, input| {
-                    bench.iter(|| black_box(max_abs_err_f16_vs_f64(input, radix64::forward_inplace_f16)));
+                    bench.iter(|| {
+                        black_box(max_abs_err_f16_vs_f64(input, radix64::forward_inplace_f16))
+                    });
                 },
             );
         }
