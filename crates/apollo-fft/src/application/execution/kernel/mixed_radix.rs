@@ -29,6 +29,101 @@ use super::radix2_f16::Cf16;
 use super::radix_shape::{is_power_of_eight, is_power_of_four};
 use super::{bluestein, radix2, radix2_f16, radix4, radix8};
 use num_complex::{Complex32, Complex64};
+use once_cell::sync::Lazy;
+use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+static TWIDDLE_FWD_64_CACHE: Lazy<RwLock<HashMap<usize, Arc<[Complex64]>>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+static TWIDDLE_INV_64_CACHE: Lazy<RwLock<HashMap<usize, Arc<[Complex64]>>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+static TWIDDLE_FWD_32_CACHE: Lazy<RwLock<HashMap<usize, Arc<[Complex32]>>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+static TWIDDLE_INV_32_CACHE: Lazy<RwLock<HashMap<usize, Arc<[Complex32]>>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+static TWIDDLE_FWD_F16_CACHE: Lazy<RwLock<HashMap<usize, Arc<[Cf16]>>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+static TWIDDLE_INV_F16_CACHE: Lazy<RwLock<HashMap<usize, Arc<[Cf16]>>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
+#[inline]
+fn cached_twiddle_fwd_64(n: usize) -> Arc<[Complex64]> {
+    if let Some(tw) = TWIDDLE_FWD_64_CACHE.read().get(&n).cloned() {
+        return tw;
+    }
+    let tw: Arc<[Complex64]> = Arc::from(radix2::build_forward_twiddle_table_64(n));
+    TWIDDLE_FWD_64_CACHE
+        .write()
+        .entry(n)
+        .or_insert_with(|| Arc::clone(&tw))
+        .clone()
+}
+
+#[inline]
+fn cached_twiddle_inv_64(n: usize) -> Arc<[Complex64]> {
+    if let Some(tw) = TWIDDLE_INV_64_CACHE.read().get(&n).cloned() {
+        return tw;
+    }
+    let tw: Arc<[Complex64]> = Arc::from(radix2::build_inverse_twiddle_table_64(n));
+    TWIDDLE_INV_64_CACHE
+        .write()
+        .entry(n)
+        .or_insert_with(|| Arc::clone(&tw))
+        .clone()
+}
+
+#[inline]
+fn cached_twiddle_fwd_32(n: usize) -> Arc<[Complex32]> {
+    if let Some(tw) = TWIDDLE_FWD_32_CACHE.read().get(&n).cloned() {
+        return tw;
+    }
+    let tw: Arc<[Complex32]> = Arc::from(radix2::build_forward_twiddle_table_32(n));
+    TWIDDLE_FWD_32_CACHE
+        .write()
+        .entry(n)
+        .or_insert_with(|| Arc::clone(&tw))
+        .clone()
+}
+
+#[inline]
+fn cached_twiddle_inv_32(n: usize) -> Arc<[Complex32]> {
+    if let Some(tw) = TWIDDLE_INV_32_CACHE.read().get(&n).cloned() {
+        return tw;
+    }
+    let tw: Arc<[Complex32]> = Arc::from(radix2::build_inverse_twiddle_table_32(n));
+    TWIDDLE_INV_32_CACHE
+        .write()
+        .entry(n)
+        .or_insert_with(|| Arc::clone(&tw))
+        .clone()
+}
+
+#[inline]
+fn cached_twiddle_fwd_f16(n: usize) -> Arc<[Cf16]> {
+    if let Some(tw) = TWIDDLE_FWD_F16_CACHE.read().get(&n).cloned() {
+        return tw;
+    }
+    let tw: Arc<[Cf16]> = Arc::from(radix2_f16::build_forward_twiddle_table_f16(n));
+    TWIDDLE_FWD_F16_CACHE
+        .write()
+        .entry(n)
+        .or_insert_with(|| Arc::clone(&tw))
+        .clone()
+}
+
+#[inline]
+fn cached_twiddle_inv_f16(n: usize) -> Arc<[Cf16]> {
+    if let Some(tw) = TWIDDLE_INV_F16_CACHE.read().get(&n).cloned() {
+        return tw;
+    }
+    let tw: Arc<[Cf16]> = Arc::from(radix2_f16::build_inverse_twiddle_table_f16(n));
+    TWIDDLE_INV_F16_CACHE
+        .write()
+        .entry(n)
+        .or_insert_with(|| Arc::clone(&tw))
+        .clone()
+}
 
 // ── SSOT dispatch macro ───────────────────────────────────────────────────────
 
@@ -181,8 +276,8 @@ pub fn forward_inplace_64(data: &mut [Complex64]) {
         return;
     }
     if data.len().is_power_of_two() {
-        let tw = radix2::build_forward_twiddle_table_64(data.len());
-        forward_inplace_64_with_twiddles(data, Some(&tw));
+        let tw = cached_twiddle_fwd_64(data.len());
+        forward_inplace_64_with_twiddles(data, Some(tw.as_ref()));
     } else {
         forward_inplace_64_with_twiddles(data, None);
     }
@@ -194,8 +289,8 @@ pub fn inverse_inplace_unnorm_64(data: &mut [Complex64]) {
         return;
     }
     if data.len().is_power_of_two() {
-        let tw = radix2::build_inverse_twiddle_table_64(data.len());
-        inverse_inplace_unnorm_64_with_twiddles(data, Some(&tw));
+        let tw = cached_twiddle_inv_64(data.len());
+        inverse_inplace_unnorm_64_with_twiddles(data, Some(tw.as_ref()));
     } else {
         inverse_inplace_unnorm_64_with_twiddles(data, None);
     }
@@ -207,8 +302,8 @@ pub fn inverse_inplace_64(data: &mut [Complex64]) {
         return;
     }
     if data.len().is_power_of_two() {
-        let tw = radix2::build_inverse_twiddle_table_64(data.len());
-        inverse_inplace_64_with_twiddles(data, Some(&tw));
+        let tw = cached_twiddle_inv_64(data.len());
+        inverse_inplace_64_with_twiddles(data, Some(tw.as_ref()));
     } else {
         inverse_inplace_64_with_twiddles(data, None);
     }
@@ -309,8 +404,8 @@ pub fn forward_inplace_32(data: &mut [Complex32]) {
         return;
     }
     if data.len().is_power_of_two() {
-        let tw = radix2::build_forward_twiddle_table_32(data.len());
-        forward_inplace_32_with_twiddles(data, Some(&tw));
+        let tw = cached_twiddle_fwd_32(data.len());
+        forward_inplace_32_with_twiddles(data, Some(tw.as_ref()));
     } else {
         forward_inplace_32_with_twiddles(data, None);
     }
@@ -322,8 +417,8 @@ pub fn inverse_inplace_unnorm_32(data: &mut [Complex32]) {
         return;
     }
     if data.len().is_power_of_two() {
-        let tw = radix2::build_inverse_twiddle_table_32(data.len());
-        inverse_inplace_unnorm_32_with_twiddles(data, Some(&tw));
+        let tw = cached_twiddle_inv_32(data.len());
+        inverse_inplace_unnorm_32_with_twiddles(data, Some(tw.as_ref()));
     } else {
         inverse_inplace_unnorm_32_with_twiddles(data, None);
     }
@@ -335,8 +430,8 @@ pub fn inverse_inplace_32(data: &mut [Complex32]) {
         return;
     }
     if data.len().is_power_of_two() {
-        let tw = radix2::build_inverse_twiddle_table_32(data.len());
-        inverse_inplace_32_with_twiddles(data, Some(&tw));
+        let tw = cached_twiddle_inv_32(data.len());
+        inverse_inplace_32_with_twiddles(data, Some(tw.as_ref()));
     } else {
         inverse_inplace_32_with_twiddles(data, None);
     }
@@ -425,8 +520,8 @@ pub fn forward_inplace_f16(data: &mut [Cf16]) {
         return;
     }
     if data.len().is_power_of_two() {
-        let tw = radix2_f16::build_forward_twiddle_table_f16(data.len());
-        forward_inplace_f16_with_twiddles(data, Some(&tw));
+        let tw = cached_twiddle_fwd_f16(data.len());
+        forward_inplace_f16_with_twiddles(data, Some(tw.as_ref()));
     } else {
         forward_inplace_f16_with_twiddles(data, None);
     }
@@ -438,8 +533,8 @@ pub fn inverse_inplace_unnorm_f16(data: &mut [Cf16]) {
         return;
     }
     if data.len().is_power_of_two() {
-        let tw = radix2_f16::build_inverse_twiddle_table_f16(data.len());
-        inverse_inplace_unnorm_f16_with_twiddles(data, Some(&tw));
+        let tw = cached_twiddle_inv_f16(data.len());
+        inverse_inplace_unnorm_f16_with_twiddles(data, Some(tw.as_ref()));
     } else {
         inverse_inplace_unnorm_f16_with_twiddles(data, None);
     }
@@ -451,8 +546,8 @@ pub fn inverse_inplace_f16(data: &mut [Cf16]) {
         return;
     }
     if data.len().is_power_of_two() {
-        let tw = radix2_f16::build_inverse_twiddle_table_f16(data.len());
-        inverse_inplace_f16_with_twiddles(data, Some(&tw));
+        let tw = cached_twiddle_inv_f16(data.len());
+        inverse_inplace_f16_with_twiddles(data, Some(tw.as_ref()));
     } else {
         inverse_inplace_f16_with_twiddles(data, None);
     }
