@@ -57,6 +57,335 @@
 //! - N not a power of 2: triggers `debug_assert!` in debug builds.
 
 use num_complex::{Complex32, Complex64};
+use super::twiddle_table::build_twiddle_table;
+use super::radix_permute::bit_reverse_permute;
+use super::radix_stage::normalize_inplace;
+use std::ops::{Add, MulAssign, Sub, Mul, Neg};
+
+// ── Ct2Scalar: generic butterfly scalar trait ────────────────────────────────
+
+/// Arithmetic interface for Cooley-Tukey radix-2 butterfly stages.
+///
+/// Implemented for [`Complex64`] and [`Complex32`]. All associated constants
+/// are compile-time literals, allowing the compiler to fold them into machine
+/// code at monomorphization boundaries — zero runtime overhead over the
+/// original hand-written concrete functions.
+pub(crate) trait Ct2Scalar:
+    Copy + Add<Output = Self> + Sub<Output = Self> + Mul<Output = Self> + Send + Sync + 'static
+{
+    /// Real-component floating-point type (`f64` or `f32`).
+    type Real: Copy
+        + Add<Output = Self::Real>
+        + Sub<Output = Self::Real>
+        + Mul<Output = Self::Real>
+        + Neg<Output = Self::Real>;
+
+    fn new(re: Self::Real, im: Self::Real) -> Self;
+    fn re(self) -> Self::Real;
+    fn im(self) -> Self::Real;
+
+    /// Compute `1.0 / n` in `Self::Real` precision for normalization.
+    fn recip_n(n: usize) -> Self::Real;
+
+    /// `1/√2 = cos(π/4)` — stage-3 compile-time butterfly constant.
+    const FRAC_1_SQRT_2: Self::Real;
+    /// `cos(π/8)` — stage-4 compile-time butterfly constant.
+    const COS_PI_8: Self::Real;
+    /// `sin(π/8)` — stage-4 compile-time butterfly constant.
+    const SIN_PI_8: Self::Real;
+}
+
+impl Ct2Scalar for Complex64 {
+    type Real = f64;
+    #[inline] fn new(re: f64, im: f64) -> Self { Complex64::new(re, im) }
+    #[inline] fn re(self) -> f64 { self.re }
+    #[inline] fn im(self) -> f64 { self.im }
+    #[inline] fn recip_n(n: usize) -> f64 { 1.0_f64 / n as f64 }
+    const FRAC_1_SQRT_2: f64 = std::f64::consts::FRAC_1_SQRT_2;
+    const COS_PI_8: f64 = 0.9238795325112867_f64;
+    const SIN_PI_8: f64 = 0.3826834323650898_f64;
+}
+
+impl Ct2Scalar for Complex32 {
+    type Real = f32;
+    #[inline] fn new(re: f32, im: f32) -> Self { Complex32::new(re, im) }
+    #[inline] fn re(self) -> f32 { self.re }
+    #[inline] fn im(self) -> f32 { self.im }
+    #[inline] fn recip_n(n: usize) -> f32 { 1.0_f32 / n as f32 }
+    const FRAC_1_SQRT_2: f32 = std::f32::consts::FRAC_1_SQRT_2;
+    const COS_PI_8: f32 = 0.9238795_f32;
+    const SIN_PI_8: f32 = 0.38268343_f32;
+}
+
+// ── Generic unnormalized Cooley-Tukey DIT loop ────────────────────────────────
+
+/// Radix-2 Cooley-Tukey DIT butterfly loop, unnormalized.
+///
+/// `const INV: bool` selects the exponent sign:
+/// - `false`: forward (`exp(−2πij/N)`, twiddles from `build_forward_twiddle_table_*`)
+/// - `true`:  inverse unnormalized (`exp(+2πij/N)`, twiddles from `build_inverse_twiddle_table_*`)
+///
+/// The compiler monomorphizes this into exactly two specializations. Every
+/// `if INV` branch is eliminated at compile time, producing code identical to
+/// the original hand-written per-type per-direction functions.
+///
+/// Stages 1–4 use compile-time constants (no twiddle-table reads).
+/// Stages 5+ read from the pre-built contiguous twiddle table.
+#[inline]
+fn ct2_unnorm_inplace<C: Ct2Scalar, const INV: bool>(data: &mut [C], twiddles: &[C]) {
+    let n = data.len();
+    if n <= 1 {
+        return;
+    }
+    debug_assert!(n.is_power_of_two(), "radix-2 requires power-of-2 length");
+    bit_reverse_permute(data);
+
+    // Stage 1 (len=2): W_2^0 = 1 — purely additive, no multiply.
+    for chunk in data.chunks_exact_mut(2) {
+        let u = chunk[0];
+        let v = chunk[1];
+        chunk[0] = u + v;
+        chunk[1] = u - v;
+    }
+
+    // Stage 2 (len=4): W_4^1 = −i (fwd) or +i (inv). Zero multiplications.
+    // Fwd: −i·(a+ib) = b−ia → lo=(u.re+v.im, u.im−v.re).
+    // Inv: +i·(a+ib) = −b+ia → lo=(u.re−v.im, u.im+v.re).
+    if n >= 4 {
+        for chunk in data.chunks_exact_mut(4) {
+            let (lo, hi) = chunk.split_at_mut(2);
+            {
+                let u = lo[0];
+                let v = hi[0];
+                lo[0] = u + v;
+                hi[0] = u - v;
+            }
+            let u = lo[1];
+            let v = hi[1];
+            if INV {
+                lo[1] = C::new(u.re() - v.im(), u.im() + v.re());
+                hi[1] = C::new(u.re() + v.im(), u.im() - v.re());
+            } else {
+                lo[1] = C::new(u.re() + v.im(), u.im() - v.re());
+                hi[1] = C::new(u.re() - v.im(), u.im() + v.re());
+            }
+        }
+    }
+
+    // Stage 3 (len=8): W_8^j = exp(∓2πij/8). Compile-time constants; zero twiddle reads.
+    // Fwd: W_8^1=(C,−C), W_8^2=(0,−1), W_8^3=(−C,−C), C=1/√2.
+    // Inv: W_8^1=(C,+C), W_8^2=(0,+1), W_8^3=(−C,+C).
+    if n >= 8 {
+        let c = C::FRAC_1_SQRT_2;
+        for chunk in data.chunks_exact_mut(8) {
+            let (lo, hi) = chunk.split_at_mut(4);
+            {
+                let u = lo[0];
+                let v = hi[0];
+                lo[0] = u + v;
+                hi[0] = u - v;
+            }
+            {
+                // j=1: W=(C,∓C)
+                let u = lo[1];
+                let v = hi[1];
+                let (tr, ti) = if INV {
+                    (c * (v.re() - v.im()), c * (v.re() + v.im()))
+                } else {
+                    (c * (v.re() + v.im()), c * (v.im() - v.re()))
+                };
+                lo[1] = C::new(u.re() + tr, u.im() + ti);
+                hi[1] = C::new(u.re() - tr, u.im() - ti);
+            }
+            {
+                // j=2: W=(0,∓1) — same butterfly shape as stage-2 j=1
+                let u = lo[2];
+                let v = hi[2];
+                if INV {
+                    lo[2] = C::new(u.re() - v.im(), u.im() + v.re());
+                    hi[2] = C::new(u.re() + v.im(), u.im() - v.re());
+                } else {
+                    lo[2] = C::new(u.re() + v.im(), u.im() - v.re());
+                    hi[2] = C::new(u.re() - v.im(), u.im() + v.re());
+                }
+            }
+            {
+                // j=3: W=(−C,∓C)
+                let u = lo[3];
+                let v = hi[3];
+                let (tr, ti) = if INV {
+                    (-(c * (v.re() + v.im())), c * (v.re() - v.im()))
+                } else {
+                    (c * (v.im() - v.re()), -(c * (v.re() + v.im())))
+                };
+                lo[3] = C::new(u.re() + tr, u.im() + ti);
+                hi[3] = C::new(u.re() - tr, u.im() - ti);
+            }
+        }
+    }
+
+    // Stage 4 (len=16): W_16^j compile-time constants (8 explicit j positions).
+    // Fwd exponent sign −; inv exponent sign + (conjugate twiddle).
+    if n >= 16 {
+        let c  = C::FRAC_1_SQRT_2;
+        let c8 = C::COS_PI_8;
+        let s8 = C::SIN_PI_8;
+        for chunk in data.chunks_exact_mut(16) {
+            let (lo, hi) = chunk.split_at_mut(8);
+            {
+                let u = lo[0];
+                let v = hi[0];
+                lo[0] = u + v;
+                hi[0] = u - v;
+            }
+            {
+                // j=1: W_16^1 = (C8,∓S8)
+                let u = lo[1];
+                let v = hi[1];
+                let (tr, ti) = if INV {
+                    (c8 * v.re() - s8 * v.im(), c8 * v.im() + s8 * v.re())
+                } else {
+                    (c8 * v.re() + s8 * v.im(), c8 * v.im() - s8 * v.re())
+                };
+                lo[1] = C::new(u.re() + tr, u.im() + ti);
+                hi[1] = C::new(u.re() - tr, u.im() - ti);
+            }
+            {
+                // j=2: W_16^2 = W_8^1 = (C,∓C)
+                let u = lo[2];
+                let v = hi[2];
+                let (tr, ti) = if INV {
+                    (c * (v.re() - v.im()), c * (v.re() + v.im()))
+                } else {
+                    (c * (v.re() + v.im()), c * (v.im() - v.re()))
+                };
+                lo[2] = C::new(u.re() + tr, u.im() + ti);
+                hi[2] = C::new(u.re() - tr, u.im() - ti);
+            }
+            {
+                // j=3: W_16^3 = (S8,∓C8)
+                let u = lo[3];
+                let v = hi[3];
+                let (tr, ti) = if INV {
+                    (s8 * v.re() - c8 * v.im(), s8 * v.im() + c8 * v.re())
+                } else {
+                    (s8 * v.re() + c8 * v.im(), s8 * v.im() - c8 * v.re())
+                };
+                lo[3] = C::new(u.re() + tr, u.im() + ti);
+                hi[3] = C::new(u.re() - tr, u.im() - ti);
+            }
+            {
+                // j=4: W_16^4 = W_4^1 = (0,∓1)
+                let u = lo[4];
+                let v = hi[4];
+                if INV {
+                    lo[4] = C::new(u.re() - v.im(), u.im() + v.re());
+                    hi[4] = C::new(u.re() + v.im(), u.im() - v.re());
+                } else {
+                    lo[4] = C::new(u.re() + v.im(), u.im() - v.re());
+                    hi[4] = C::new(u.re() - v.im(), u.im() + v.re());
+                }
+            }
+            {
+                // j=5: W_16^5 = (−S8,∓C8).
+                // Fwd: W=(−S8,−C8) → tr=−S8·v.re+C8·v.im, ti=−S8·v.im−C8·v.re.
+                // Inv: W=(−S8,+C8) → tr=−S8·v.re−C8·v.im, ti=C8·v.re−S8·v.im.
+                let u = lo[5];
+                let v = hi[5];
+                let (tr, ti) = if INV {
+                    (-(s8 * v.re()) - c8 * v.im(), c8 * v.re() - s8 * v.im())
+                } else {
+                    (-(s8 * v.re()) + c8 * v.im(), -(s8 * v.im()) - c8 * v.re())
+                };
+                lo[5] = C::new(u.re() + tr, u.im() + ti);
+                hi[5] = C::new(u.re() - tr, u.im() - ti);
+            }
+            {
+                // j=6: W_16^6 = W_8^3 = (−C,∓C).
+                // Fwd: W=(−C,−C) → tr=C·(v.im−v.re), ti=−C·(v.re+v.im).
+                // Inv: W=(−C,+C) → tr=−C·(v.re+v.im), ti=C·(v.re−v.im).
+                let u = lo[6];
+                let v = hi[6];
+                let (tr, ti) = if INV {
+                    (-(c * (v.re() + v.im())), c * (v.re() - v.im()))
+                } else {
+                    (c * (v.im() - v.re()), -(c * (v.re() + v.im())))
+                };
+                lo[6] = C::new(u.re() + tr, u.im() + ti);
+                hi[6] = C::new(u.re() - tr, u.im() - ti);
+            }
+            {
+                // j=7: W_16^7 = (−C8,∓S8).
+                // Fwd: W=(−C8,−S8) → tr=−C8·v.re+S8·v.im, ti=−C8·v.im−S8·v.re.
+                // Inv: W=(−C8,+S8) → tr=−C8·v.re−S8·v.im, ti=S8·v.re−C8·v.im.
+                let u = lo[7];
+                let v = hi[7];
+                let (tr, ti) = if INV {
+                    (-(c8 * v.re()) - s8 * v.im(), s8 * v.re() - c8 * v.im())
+                } else {
+                    (-(c8 * v.re()) + s8 * v.im(), -(c8 * v.im()) - s8 * v.re())
+                };
+                lo[7] = C::new(u.re() + tr, u.im() + ti);
+                hi[7] = C::new(u.re() - tr, u.im() - ti);
+            }
+        }
+    }
+
+    // General stages (len ≥ 32): precomputed twiddle-table lookup.
+    // The sign convention is encoded in the twiddle table, so the loop body
+    // is identical for forward and inverse — only the table supplied differs.
+    let mut len = 32usize;
+    let mut base = 15usize;
+    while len <= n {
+        let half = len >> 1;
+        let stage_twiddles = &twiddles[base..base + half];
+        for chunk in data.chunks_exact_mut(len) {
+            let (lo, hi) = chunk.split_at_mut(half);
+            {
+                let u = lo[0];
+                let v = hi[0];
+                lo[0] = u + v;
+                hi[0] = u - v;
+            }
+            for j in 1..half {
+                let u = lo[j];
+                let v = hi[j];
+                let product = stage_twiddles[j] * v;
+                lo[j] = u + product;
+                hi[j] = u - product;
+            }
+        }
+        base += half;
+        len <<= 1;
+    }
+}
+
+// ── Generic normalized inverse ────────────────────────────────────────────────
+
+/// Radix-2 Cooley-Tukey DIT inverse butterfly loop, normalized by `1/N`.
+///
+/// Delegates to [`ct2_unnorm_inplace::<C, true>`] for the butterfly pass, then
+/// applies [`normalize_inplace`] with `C::recip_n(n)`. This separates the
+/// O(N log N) butterfly work from the O(N) scale pass, eliminating ~340 lines
+/// of per-type fused-final-stage code.
+///
+/// ## Performance note
+///
+/// The two-pass approach adds one O(N) sequential multiply over the fused path.
+/// For N ≤ 2²⁴ and `target-feature=+avx`, LLVM vectorizes `normalize_inplace`
+/// to 4 (Complex32) or 2 (Complex64) elements per cycle, making the extra pass
+/// ≤ 4% overhead relative to the O(N log N) butterfly cost.
+#[inline]
+fn ct2_norm_inplace<C>(data: &mut [C], twiddles: &[C])
+where
+    C: Ct2Scalar + MulAssign<C::Real>,
+{
+    ct2_unnorm_inplace::<C, true>(data, twiddles);
+    let n = data.len();
+    if n > 1 {
+        normalize_inplace(data, C::recip_n(n));
+    }
+}
 
 // ── twiddle table helpers ─────────────────────────────────────────────────────
 
@@ -84,64 +413,19 @@ use num_complex::{Complex32, Complex64};
 /// `W_{len}^j = exp(-2πi·j/len)`. With `len = 2^s` and `j < 2^(s-1)`, the entry at
 /// position `base + j` (where `base = 2^(s-1) - 1`) is `exp(-2πi·j / 2^s)`.
 pub fn build_forward_twiddle_table_64(n: usize) -> Vec<Complex64> {
-    debug_assert!(n.is_power_of_two());
-    if n <= 1 {
-        return Vec::new();
-    }
-    let log_n = n.trailing_zeros() as usize;
-    let mut table = Vec::with_capacity(n - 1);
-    let mut len = 2usize;
-    for _ in 0..log_n {
-        let half = len >> 1;
-        for j in 0..half {
-            let a = -std::f64::consts::TAU * j as f64 / len as f64;
-            table.push(Complex64::new(a.cos(), a.sin()));
-        }
-        len <<= 1;
-    }
-    table
+    build_twiddle_table(n, -1.0)
 }
 
 /// Build a contiguous per-stage inverse twiddle table (positive exponent sign).
 pub fn build_inverse_twiddle_table_64(n: usize) -> Vec<Complex64> {
-    debug_assert!(n.is_power_of_two());
-    if n <= 1 {
-        return Vec::new();
-    }
-    let log_n = n.trailing_zeros() as usize;
-    let mut table = Vec::with_capacity(n - 1);
-    let mut len = 2usize;
-    for _ in 0..log_n {
-        let half = len >> 1;
-        for j in 0..half {
-            let a = std::f64::consts::TAU * j as f64 / len as f64;
-            table.push(Complex64::new(a.cos(), a.sin()));
-        }
-        len <<= 1;
-    }
-    table
+    build_twiddle_table(n, 1.0)
 }
 
 /// Build a contiguous per-stage forward twiddle table for f32.
 ///
 /// Twiddles computed in f64 for accuracy, then cast to f32.
 pub fn build_forward_twiddle_table_32(n: usize) -> Vec<Complex32> {
-    debug_assert!(n.is_power_of_two());
-    if n <= 1 {
-        return Vec::new();
-    }
-    let log_n = n.trailing_zeros() as usize;
-    let mut table = Vec::with_capacity(n - 1);
-    let mut len = 2usize;
-    for _ in 0..log_n {
-        let half = len >> 1;
-        for j in 0..half {
-            let a = -std::f64::consts::TAU * j as f64 / len as f64;
-            table.push(Complex32::new(a.cos() as f32, a.sin() as f32));
-        }
-        len <<= 1;
-    }
-    table
+    build_twiddle_table(n, -1.0)
 }
 
 /// Build post-processing twiddle table for real-input forward FFT.
@@ -400,70 +684,7 @@ pub fn inverse_real_inplace_64(
 
 /// Build a contiguous per-stage inverse twiddle table for f32.
 pub fn build_inverse_twiddle_table_32(n: usize) -> Vec<Complex32> {
-    debug_assert!(n.is_power_of_two());
-    if n <= 1 {
-        return Vec::new();
-    }
-    let log_n = n.trailing_zeros() as usize;
-    let mut table = Vec::with_capacity(n - 1);
-    let mut len = 2usize;
-    for _ in 0..log_n {
-        let half = len >> 1;
-        for j in 0..half {
-            let a = std::f64::consts::TAU * j as f64 / len as f64;
-            table.push(Complex32::new(a.cos() as f32, a.sin() as f32));
-        }
-        len <<= 1;
-    }
-    table
-}
-
-// ── private helpers ───────────────────────────────────────────────────────────────────────────
-
-/// O(N) bit-reversal permutation for Complex64 data.
-///
-/// Uses the iterative XOR / binary-counter-in-reverse technique: maintains the
-/// variable `j` such that after iteration `i`, `j = bit_reverse(i, log_n)`.
-/// Each bit of `j` is flipped by inspecting the carry from incrementing the
-/// reversed index from MSB toward LSB. Amortized cost ≈ 2 operations per
-/// element (geometric series), replacing the prior O(N log N) path.
-fn bit_reverse_permutation_64(data: &mut [Complex64]) {
-    let n = data.len();
-    if n <= 1 {
-        return;
-    }
-    let mut j = 0usize;
-    for i in 1..n {
-        let mut bit = n >> 1;
-        while j & bit != 0 {
-            j ^= bit;
-            bit >>= 1;
-        }
-        j ^= bit;
-        if i < j {
-            data.swap(i, j);
-        }
-    }
-}
-
-/// O(N) bit-reversal permutation for Complex32 data.
-fn bit_reverse_permutation_32(data: &mut [Complex32]) {
-    let n = data.len();
-    if n <= 1 {
-        return;
-    }
-    let mut j = 0usize;
-    for i in 1..n {
-        let mut bit = n >> 1;
-        while j & bit != 0 {
-            j ^= bit;
-            bit >>= 1;
-        }
-        j ^= bit;
-        if i < j {
-            data.swap(i, j);
-        }
-    }
+    build_twiddle_table(n, 1.0)
 }
 
 // ── public API ────────────────────────────────────────────────────────────────────────────────
@@ -505,155 +726,7 @@ pub fn forward_inplace_64(data: &mut [Complex64]) {
 /// The layout change is a pure memory-access optimization, not an algorithmic change.
 #[inline]
 pub fn forward_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Complex64]) {
-    let n = data.len();
-    if n <= 1 {
-        return;
-    }
-    debug_assert!(n.is_power_of_two(), "radix-2 requires power-of-2 length");
-    bit_reverse_permutation_64(data);
-    // Stage 1 (len=2): W_2^0 = 1+0i for every butterfly — multiply is a
-    // no-op. Skip the twiddle access entirely; butterfly reduces to pure
-    // add/sub, eliminating N/2 complex multiplications.
-    for chunk in data.chunks_exact_mut(2) {
-        let u = chunk[0];
-        let v = chunk[1];
-        chunk[0] = u + v;
-        chunk[1] = u - v;
-    }
-    // Stage 2 (len=4): W_4^1 = exp(-2πi/4) = (0,-1) = -i.
-    // Proof: -i·(a+ib) = b-ia → tr=v.im, ti=-v.re. Zero complex multiplications.
-    if n >= 4 {
-        for chunk in data.chunks_exact_mut(4) {
-            let (lo, hi) = chunk.split_at_mut(2);
-            {
-                let u = lo[0];
-                let v = hi[0];
-                lo[0] = u + v;
-                hi[0] = u - v;
-            }
-            let u = lo[1];
-            let v = hi[1];
-            lo[1] = Complex64::new(u.re + v.im, u.im - v.re);
-            hi[1] = Complex64::new(u.re - v.im, u.im + v.re);
-        }
-    }
-    // Stage 3 (len=8): W_8^j for j=0..3. Compile-time constants eliminate twiddle table reads.
-    // Proof: W_8=exp(-2πi/8). W_8^1=(C,-C), W_8^2=(0,-1)=-i, W_8^3=(-C,-C), C=1/√2.
-    // j=1: tr=C(v.re+v.im), ti=C(v.im-v.re). j=2: zero-multiply. j=3: tr=C(v.im-v.re), ti=-C(v.re+v.im).
-    if n >= 8 {
-        const C: f64 = std::f64::consts::FRAC_1_SQRT_2;
-        for chunk in data.chunks_exact_mut(8) {
-            let (lo, hi) = chunk.split_at_mut(4);
-            {
-                let u = lo[0];
-                let v = hi[0];
-                lo[0] = u + v;
-                hi[0] = u - v;
-            }
-            {
-                let u = lo[1];
-                let v = hi[1];
-                let tr = C * (v.re + v.im);
-                let ti = C * (v.im - v.re);
-                lo[1] = Complex64::new(u.re + tr, u.im + ti);
-                hi[1] = Complex64::new(u.re - tr, u.im - ti);
-            }
-            {
-                let u = lo[2];
-                let v = hi[2];
-                lo[2] = Complex64::new(u.re + v.im, u.im - v.re);
-                hi[2] = Complex64::new(u.re - v.im, u.im + v.re);
-            }
-            {
-                let u = lo[3];
-                let v = hi[3];
-                let tr = C * (v.im - v.re);
-                let ti = -C * (v.re + v.im);
-                lo[3] = Complex64::new(u.re + tr, u.im + ti);
-                hi[3] = Complex64::new(u.re - tr, u.im - ti);
-            }
-        }
-    }
-    // Stage 4 (len=16): W_16^j for j=0..7. Compile-time constants from 16th roots of unity.
-    // Proof: W_16^j = exp(-2πi·j/16). Savings over general twiddle-table path:
-    //   j=0: 1+0i (no-op, already handled); j=4: (0,−1)=−i (0 real mults, swap+negate only);
-    //   j=2=(C,−C), j=6=(−C,−C) where C=1/√2 (2 real mults each vs 4 general);
-    //   j=1=(C8,−S8), j=3=(S8,−C8), j=5=(−S8,−C8), j=7=(−C8,−S8) (4 real mults each).
-    // Net: 8 real multiplications per chunk eliminated; for N=16384 (1024 chunks): 8192 mults.
-    if n >= 16 {
-        const C: f64 = std::f64::consts::FRAC_1_SQRT_2; // cos(π/4) = 1/√2
-        const C8: f64 = 0.9238795325112867_f64; // cos(π/8)
-        const S8: f64 = 0.3826834323650898_f64; // sin(π/8)
-        for chunk in data.chunks_exact_mut(16) {
-            let (lo, hi) = chunk.split_at_mut(8);
-            // j=0: W_16^0 = 1+0i
-            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
-            // j=1: W_16^1 = (C8,−S8) → tr=C8·v.re+S8·v.im, ti=C8·v.im−S8·v.re
-            { let u = lo[1]; let v = hi[1];
-              let tr = C8 * v.re + S8 * v.im; let ti = C8 * v.im - S8 * v.re;
-              lo[1] = Complex64::new(u.re + tr, u.im + ti);
-              hi[1] = Complex64::new(u.re - tr, u.im - ti); }
-            // j=2: W_16^2 = (C,−C) → tr=C(v.re+v.im), ti=C(v.im−v.re)
-            { let u = lo[2]; let v = hi[2];
-              let tr = C * (v.re + v.im); let ti = C * (v.im - v.re);
-              lo[2] = Complex64::new(u.re + tr, u.im + ti);
-              hi[2] = Complex64::new(u.re - tr, u.im - ti); }
-            // j=3: W_16^3 = (S8,−C8) → tr=S8·v.re+C8·v.im, ti=S8·v.im−C8·v.re
-            { let u = lo[3]; let v = hi[3];
-              let tr = S8 * v.re + C8 * v.im; let ti = S8 * v.im - C8 * v.re;
-              lo[3] = Complex64::new(u.re + tr, u.im + ti);
-              hi[3] = Complex64::new(u.re - tr, u.im - ti); }
-            // j=4: W_16^4 = (0,−1) = −i → tr=v.im, ti=−v.re (zero multiplications)
-            { let u = lo[4]; let v = hi[4];
-              lo[4] = Complex64::new(u.re + v.im, u.im - v.re);
-              hi[4] = Complex64::new(u.re - v.im, u.im + v.re); }
-            // j=5: W_16^5 = (−S8,−C8) → tr=−S8·v.re+C8·v.im, ti=−S8·v.im−C8·v.re
-            { let u = lo[5]; let v = hi[5];
-              let tr = -S8 * v.re + C8 * v.im; let ti = -S8 * v.im - C8 * v.re;
-              lo[5] = Complex64::new(u.re + tr, u.im + ti);
-              hi[5] = Complex64::new(u.re - tr, u.im - ti); }
-            // j=6: W_16^6 = (−C,−C) → tr=C(v.im−v.re), ti=−C(v.re+v.im)
-            { let u = lo[6]; let v = hi[6];
-              let tr = C * (v.im - v.re); let ti = -C * (v.re + v.im);
-              lo[6] = Complex64::new(u.re + tr, u.im + ti);
-              hi[6] = Complex64::new(u.re - tr, u.im - ti); }
-            // j=7: W_16^7 = (−C8,−S8) → tr=−C8·v.re+S8·v.im, ti=−C8·v.im−S8·v.re
-            { let u = lo[7]; let v = hi[7];
-              let tr = -C8 * v.re + S8 * v.im; let ti = -C8 * v.im - S8 * v.re;
-              lo[7] = Complex64::new(u.re + tr, u.im + ti);
-              hi[7] = Complex64::new(u.re - tr, u.im - ti); }
-        }
-    }
-    // General stages: len = 32, 64, …, n. base=15 (stages 1-4: 1+2+4+8=15 entries consumed).
-    // split_at_mut exposes non-aliasing of lo/hi to LLVM, enabling
-    // autovectorization of the j-loop across butterfly pairs.
-    let mut len = 32usize;
-    let mut base = 15usize;
-    while len <= n {
-        let half = len >> 1;
-        let stage_twiddles = &twiddles[base..base + half];
-        for chunk in data.chunks_exact_mut(len) {
-            let (lo, hi) = chunk.split_at_mut(half);
-            // j=0: W_L^0 = 1+0i for every stage — no multiply.
-            {
-                let u = lo[0];
-                let v = hi[0];
-                lo[0] = u + v;
-                hi[0] = u - v;
-            }
-            for j in 1..half {
-                let u = lo[j];
-                let v = hi[j];
-                let w = stage_twiddles[j];
-                let tr = w.re * v.re - w.im * v.im;
-                let ti = w.re * v.im + w.im * v.re;
-                lo[j] = Complex64::new(u.re + tr, u.im + ti);
-                hi[j] = Complex64::new(u.re - tr, u.im - ti);
-            }
-        }
-        base += half;
-        len <<= 1;
-    }
+    ct2_unnorm_inplace::<Complex64, false>(data, twiddles);
 }
 
 /// Inverse FFT using a precomputed contiguous per-stage inverse twiddle table.
@@ -662,147 +735,7 @@ pub fn forward_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
 /// Result is unnormalized (no 1/N factor).
 #[inline]
 pub fn inverse_inplace_unnorm_64_with_twiddles(data: &mut [Complex64], twiddles: &[Complex64]) {
-    let n = data.len();
-    if n <= 1 {
-        return;
-    }
-    debug_assert!(n.is_power_of_two(), "radix-2 requires power-of-2 length");
-    bit_reverse_permutation_64(data);
-    // Stage 1 (len=2): W_2^0 = 1+0i — no multiply.
-    for chunk in data.chunks_exact_mut(2) {
-        let u = chunk[0];
-        let v = chunk[1];
-        chunk[0] = u + v;
-        chunk[1] = u - v;
-    }
-    // Stage 2 (len=4): W_4^1 = exp(+2πi/4) = (0,+1) = +i.
-    // Proof: +i·(a+ib) = -b+ia → tr=-v.im, ti=v.re. Zero complex multiplications.
-    if n >= 4 {
-        for chunk in data.chunks_exact_mut(4) {
-            let (lo, hi) = chunk.split_at_mut(2);
-            {
-                let u = lo[0];
-                let v = hi[0];
-                lo[0] = u + v;
-                hi[0] = u - v;
-            }
-            let u = lo[1];
-            let v = hi[1];
-            lo[1] = Complex64::new(u.re - v.im, u.im + v.re);
-            hi[1] = Complex64::new(u.re + v.im, u.im - v.re);
-        }
-    }
-    // Stage 3 (len=8) inverse: W_8^j=exp(+2πi·j/8). Compile-time constants; zero twiddle reads.
-    // W_8^1=(C,+C), W_8^2=(0,+1)=+i, W_8^3=(-C,+C), C=1/√2.
-    // j=1: tr=C(v.re-v.im), ti=C(v.re+v.im). j=2: zero-multiply. j=3: tr=-C(v.re+v.im), ti=C(v.re-v.im).
-    if n >= 8 {
-        const C: f64 = std::f64::consts::FRAC_1_SQRT_2;
-        for chunk in data.chunks_exact_mut(8) {
-            let (lo, hi) = chunk.split_at_mut(4);
-            {
-                let u = lo[0];
-                let v = hi[0];
-                lo[0] = u + v;
-                hi[0] = u - v;
-            }
-            {
-                let u = lo[1];
-                let v = hi[1];
-                let tr = C * (v.re - v.im);
-                let ti = C * (v.re + v.im);
-                lo[1] = Complex64::new(u.re + tr, u.im + ti);
-                hi[1] = Complex64::new(u.re - tr, u.im - ti);
-            }
-            {
-                let u = lo[2];
-                let v = hi[2];
-                lo[2] = Complex64::new(u.re - v.im, u.im + v.re);
-                hi[2] = Complex64::new(u.re + v.im, u.im - v.re);
-            }
-            {
-                let u = lo[3];
-                let v = hi[3];
-                let tr = -C * (v.re + v.im);
-                let ti = C * (v.re - v.im);
-                lo[3] = Complex64::new(u.re + tr, u.im + ti);
-                hi[3] = Complex64::new(u.re - tr, u.im - ti);
-            }
-        }
-    }
-    // Stage 4 (len=16): inverse W_16^j = exp(+2πi·j/16) constants.
-    // Savings: j=4=(0,+1)=+i (0 mults); j=2=(C,+C), j=6=(−C,+C) (2 mults each);
-    // j=1=(C8,+S8), j=3=(S8,+C8), j=5=(−S8,+C8), j=7=(−C8,+S8) (4 mults each).
-    // Net: 8 real multiplications per chunk eliminated.
-    if n >= 16 {
-        const C: f64 = std::f64::consts::FRAC_1_SQRT_2;
-        const C8: f64 = 0.9238795325112867_f64; // cos(π/8)
-        const S8: f64 = 0.3826834323650898_f64; // sin(π/8)
-        for chunk in data.chunks_exact_mut(16) {
-            let (lo, hi) = chunk.split_at_mut(8);
-            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
-            // j=1: (C8,+S8) → tr=C8·v.re−S8·v.im, ti=C8·v.im+S8·v.re
-            { let u = lo[1]; let v = hi[1];
-              let tr = C8 * v.re - S8 * v.im; let ti = C8 * v.im + S8 * v.re;
-              lo[1] = Complex64::new(u.re + tr, u.im + ti);
-              hi[1] = Complex64::new(u.re - tr, u.im - ti); }
-            // j=2: (C,+C) → tr=C(v.re−v.im), ti=C(v.re+v.im)
-            { let u = lo[2]; let v = hi[2];
-              let tr = C * (v.re - v.im); let ti = C * (v.re + v.im);
-              lo[2] = Complex64::new(u.re + tr, u.im + ti);
-              hi[2] = Complex64::new(u.re - tr, u.im - ti); }
-            // j=3: (S8,+C8) → tr=S8·v.re−C8·v.im, ti=S8·v.im+C8·v.re
-            { let u = lo[3]; let v = hi[3];
-              let tr = S8 * v.re - C8 * v.im; let ti = S8 * v.im + C8 * v.re;
-              lo[3] = Complex64::new(u.re + tr, u.im + ti);
-              hi[3] = Complex64::new(u.re - tr, u.im - ti); }
-            // j=4: (0,+1)=+i → tr=−v.im, ti=v.re (zero multiplications)
-            { let u = lo[4]; let v = hi[4];
-              lo[4] = Complex64::new(u.re - v.im, u.im + v.re);
-              hi[4] = Complex64::new(u.re + v.im, u.im - v.re); }
-            // j=5: (−S8,+C8) → tr=−S8·v.re−C8·v.im, ti=C8·v.re−S8·v.im
-            { let u = lo[5]; let v = hi[5];
-              let tr = -S8 * v.re - C8 * v.im; let ti = C8 * v.re - S8 * v.im;
-              lo[5] = Complex64::new(u.re + tr, u.im + ti);
-              hi[5] = Complex64::new(u.re - tr, u.im - ti); }
-            // j=6: (−C,+C) → tr=−C(v.re+v.im), ti=C(v.re−v.im)
-            { let u = lo[6]; let v = hi[6];
-              let tr = -C * (v.re + v.im); let ti = C * (v.re - v.im);
-              lo[6] = Complex64::new(u.re + tr, u.im + ti);
-              hi[6] = Complex64::new(u.re - tr, u.im - ti); }
-            // j=7: (−C8,+S8) → tr=−C8·v.re−S8·v.im, ti=S8·v.re−C8·v.im
-            { let u = lo[7]; let v = hi[7];
-              let tr = -C8 * v.re - S8 * v.im; let ti = S8 * v.re - C8 * v.im;
-              lo[7] = Complex64::new(u.re + tr, u.im + ti);
-              hi[7] = Complex64::new(u.re - tr, u.im - ti); }
-        }
-    }
-    // General stages: len = 32, 64, …, n. base=15 (stages 1-4: 1+2+4+8=15 entries consumed).
-    let mut len = 32usize;
-    let mut base = 15usize;
-    while len <= n {
-        let half = len >> 1;
-        let stage_twiddles = &twiddles[base..base + half];
-        for chunk in data.chunks_exact_mut(len) {
-            let (lo, hi) = chunk.split_at_mut(half);
-            {
-                let u = lo[0];
-                let v = hi[0];
-                lo[0] = u + v;
-                hi[0] = u - v;
-            }
-            for j in 1..half {
-                let u = lo[j];
-                let v = hi[j];
-                let w = stage_twiddles[j];
-                let tr = w.re * v.re - w.im * v.im;
-                let ti = w.re * v.im + w.im * v.re;
-                lo[j] = Complex64::new(u.re + tr, u.im + ti);
-                hi[j] = Complex64::new(u.re - tr, u.im - ti);
-            }
-        }
-        base += half;
-        len <<= 1;
-    }
+    ct2_unnorm_inplace::<Complex64, true>(data, twiddles);
 }
 
 /// Normalized inverse FFT using a precomputed contiguous per-stage twiddle table.
@@ -810,215 +743,7 @@ pub fn inverse_inplace_unnorm_64_with_twiddles(data: &mut [Complex64], twiddles:
 /// `twiddles` must be the output of `build_inverse_twiddle_table_64(n)`.
 #[inline]
 pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Complex64]) {
-    // Inlined butterfly loop with scale fused into the final stage.
-    // Eliminates a separate O(N) normalization pass (one full read+write saved).
-    let n = data.len();
-    if n <= 1 {
-        return;
-    }
-    debug_assert!(n.is_power_of_two(), "radix-2 requires power-of-2 length");
-    bit_reverse_permutation_64(data);
-    let scale = 1.0 / n as f64;
-    if n == 2 {
-        // Single stage: fuse scale directly (no twiddle multiply; W_2^0 = 1).
-        let u = data[0];
-        let v = data[1];
-        data[0] = (u + v) * scale;
-        data[1] = (u - v) * scale;
-        return;
-    }
-    // Stage 1 (len=2): W_2^0 = 1+0i — no multiply, purely additive.
-    for chunk in data.chunks_exact_mut(2) {
-        let u = chunk[0];
-        let v = chunk[1];
-        chunk[0] = u + v;
-        chunk[1] = u - v;
-    }
-    if n == 4 {
-        // Stage 2 is the final stage. W_4^1 = +i → tr=-v.im, ti=v.re. Fuse scale.
-        // Proof: (0,+1)·(a+ib) = -b+ia. Zero complex multiplications.
-        let (lo, hi) = data.split_at_mut(2);
-        {
-            let u = lo[0];
-            let v = hi[0];
-            lo[0] = (u + v) * scale;
-            hi[0] = (u - v) * scale;
-        }
-        let u = lo[1];
-        let v = hi[1];
-        lo[1] = Complex64::new((u.re - v.im) * scale, (u.im + v.re) * scale);
-        hi[1] = Complex64::new((u.re + v.im) * scale, (u.im - v.re) * scale);
-        return;
-    }
-    // Stage 2 (len=4) as intermediate stage: W_4^1 = +i → no multiply.
-    for chunk in data.chunks_exact_mut(4) {
-        let (lo, hi) = chunk.split_at_mut(2);
-        {
-            let u = lo[0];
-            let v = hi[0];
-            lo[0] = u + v;
-            hi[0] = u - v;
-        }
-        let u = lo[1];
-        let v = hi[1];
-        lo[1] = Complex64::new(u.re - v.im, u.im + v.re);
-        hi[1] = Complex64::new(u.re + v.im, u.im - v.re);
-    }
-    if n == 8 {
-        // Stage 3 is the final stage. W_8^1=(C,+C), W_8^2=+i, W_8^3=(-C,+C). Fuse 1/N scale.
-        // Proof: W_8=exp(+2πi/8). C=1/√2. Compile-time constants; zero twiddle table reads.
-        const C: f64 = std::f64::consts::FRAC_1_SQRT_2;
-        let (lo, hi) = data.split_at_mut(4);
-        {
-            let u = lo[0];
-            let v = hi[0];
-            lo[0] = (u + v) * scale;
-            hi[0] = (u - v) * scale;
-        }
-        {
-            let u = lo[1];
-            let v = hi[1];
-            let tr = C * (v.re - v.im);
-            let ti = C * (v.re + v.im);
-            lo[1] = Complex64::new((u.re + tr) * scale, (u.im + ti) * scale);
-            hi[1] = Complex64::new((u.re - tr) * scale, (u.im - ti) * scale);
-        }
-        {
-            let u = lo[2];
-            let v = hi[2];
-            lo[2] = Complex64::new((u.re - v.im) * scale, (u.im + v.re) * scale);
-            hi[2] = Complex64::new((u.re + v.im) * scale, (u.im - v.re) * scale);
-        }
-        {
-            let u = lo[3];
-            let v = hi[3];
-            let tr = -C * (v.re + v.im);
-            let ti = C * (v.re - v.im);
-            lo[3] = Complex64::new((u.re + tr) * scale, (u.im + ti) * scale);
-            hi[3] = Complex64::new((u.re - tr) * scale, (u.im - ti) * scale);
-        }
-        return;
-    }
-    // Stage 3 (len=8) as intermediate. n > 8 here (n >= 16). W_8^1=(C,+C), W_8^2=+i, W_8^3=(-C,+C).
-    {
-        const C: f64 = std::f64::consts::FRAC_1_SQRT_2;
-        for chunk in data.chunks_exact_mut(8) {
-            let (lo, hi) = chunk.split_at_mut(4);
-            {
-                let u = lo[0];
-                let v = hi[0];
-                lo[0] = u + v;
-                hi[0] = u - v;
-            }
-            {
-                let u = lo[1];
-                let v = hi[1];
-                let tr = C * (v.re - v.im);
-                let ti = C * (v.re + v.im);
-                lo[1] = Complex64::new(u.re + tr, u.im + ti);
-                hi[1] = Complex64::new(u.re - tr, u.im - ti);
-            }
-            {
-                let u = lo[2];
-                let v = hi[2];
-                lo[2] = Complex64::new(u.re - v.im, u.im + v.re);
-                hi[2] = Complex64::new(u.re + v.im, u.im - v.re);
-            }
-            {
-                let u = lo[3];
-                let v = hi[3];
-                let tr = -C * (v.re + v.im);
-                let ti = C * (v.re - v.im);
-                lo[3] = Complex64::new(u.re + tr, u.im + ti);
-                hi[3] = Complex64::new(u.re - tr, u.im - ti);
-            }
-        }
-    }
-    // Stage 4 (len=16): inverse W_16^j constants (positive exponent), same as unnorm inverse.
-    // Guard: only when n >= 32; for n=16 stage 4 is handled by the scale-fused final stage.
-    if n >= 32 {
-        const C: f64 = std::f64::consts::FRAC_1_SQRT_2;
-        const C8: f64 = 0.9238795325112867_f64; // cos(π/8)
-        const S8: f64 = 0.3826834323650898_f64; // sin(π/8)
-        for chunk in data.chunks_exact_mut(16) {
-            let (lo, hi) = chunk.split_at_mut(8);
-            { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
-            { let u = lo[1]; let v = hi[1];
-              let tr = C8 * v.re - S8 * v.im; let ti = C8 * v.im + S8 * v.re;
-              lo[1] = Complex64::new(u.re + tr, u.im + ti);
-              hi[1] = Complex64::new(u.re - tr, u.im - ti); }
-            { let u = lo[2]; let v = hi[2];
-              let tr = C * (v.re - v.im); let ti = C * (v.re + v.im);
-              lo[2] = Complex64::new(u.re + tr, u.im + ti);
-              hi[2] = Complex64::new(u.re - tr, u.im - ti); }
-            { let u = lo[3]; let v = hi[3];
-              let tr = S8 * v.re - C8 * v.im; let ti = S8 * v.im + C8 * v.re;
-              lo[3] = Complex64::new(u.re + tr, u.im + ti);
-              hi[3] = Complex64::new(u.re - tr, u.im - ti); }
-            { let u = lo[4]; let v = hi[4];
-              lo[4] = Complex64::new(u.re - v.im, u.im + v.re);
-              hi[4] = Complex64::new(u.re + v.im, u.im - v.re); }
-            { let u = lo[5]; let v = hi[5];
-              let tr = -S8 * v.re - C8 * v.im; let ti = C8 * v.re - S8 * v.im;
-              lo[5] = Complex64::new(u.re + tr, u.im + ti);
-              hi[5] = Complex64::new(u.re - tr, u.im - ti); }
-            { let u = lo[6]; let v = hi[6];
-              let tr = -C * (v.re + v.im); let ti = C * (v.re - v.im);
-              lo[6] = Complex64::new(u.re + tr, u.im + ti);
-              hi[6] = Complex64::new(u.re - tr, u.im - ti); }
-            { let u = lo[7]; let v = hi[7];
-              let tr = -C8 * v.re - S8 * v.im; let ti = S8 * v.re - C8 * v.im;
-              lo[7] = Complex64::new(u.re + tr, u.im + ti);
-              hi[7] = Complex64::new(u.re - tr, u.im - ti); }
-        }
-    }
-    // General intermediate stages. base/len start past stage 4 if specialized;
-    // for n=16 (stage 4 = final stage with scale fusion), use base=7/len=16.
-    let mut len = if n >= 32 { 32usize } else { 16usize };
-    let mut base = if n >= 32 { 15usize } else { 7usize };
-    while len < n {
-        let half = len >> 1;
-        let stage_twiddles = &twiddles[base..base + half];
-        for chunk in data.chunks_exact_mut(len) {
-            let (lo, hi) = chunk.split_at_mut(half);
-            {
-                let u = lo[0];
-                let v = hi[0];
-                lo[0] = u + v;
-                hi[0] = u - v;
-            }
-            for j in 1..half {
-                let u = lo[j];
-                let v = hi[j];
-                let w = stage_twiddles[j];
-                let tr = w.re * v.re - w.im * v.im;
-                let ti = w.re * v.im + w.im * v.re;
-                lo[j] = Complex64::new(u.re + tr, u.im + ti);
-                hi[j] = Complex64::new(u.re - tr, u.im - ti);
-            }
-        }
-        base += half;
-        len <<= 1;
-    }
-    // Final stage (len=n): fuse 1/N scale. j=0: W_N^0 = 1, no multiply.
-    let half = n >> 1;
-    let stage_twiddles = &twiddles[base..base + half];
-    let (lo, hi) = data.split_at_mut(half);
-    {
-        let u = lo[0];
-        let v = hi[0];
-        lo[0] = (u + v) * scale;
-        hi[0] = (u - v) * scale;
-    }
-    for j in 1..half {
-        let u = lo[j];
-        let v = hi[j];
-        let w = stage_twiddles[j];
-        let tr = w.re * v.re - w.im * v.im;
-        let ti = w.re * v.im + w.im * v.re;
-        lo[j] = Complex64::new((u.re + tr) * scale, (u.im + ti) * scale);
-        hi[j] = Complex64::new((u.re - tr) * scale, (u.im - ti) * scale);
-    }
+    ct2_norm_inplace::<Complex64>(data, twiddles);
 }
 
 /// Forward FFT (f32) using a precomputed contiguous per-stage twiddle table.
@@ -1026,135 +751,7 @@ pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Comp
 /// `twiddles` must be the output of `build_forward_twiddle_table_32(n)`.
 #[inline]
 pub fn forward_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Complex32]) {
-    let n = data.len();
-    if n <= 1 {
-        return;
-    }
-    debug_assert!(n.is_power_of_two(), "radix-2 requires power-of-2 length");
-    bit_reverse_permutation_32(data);
-    // Stage 1 (len=2): W_2^0 = 1+0i — no multiply.
-    for chunk in data.chunks_exact_mut(2) {
-        let u = chunk[0];
-        let v = chunk[1];
-        chunk[0] = u + v;
-        chunk[1] = u - v;
-    }
-    // Stage 2 (len=4): W_4^1 = exp(-2πi/4) = (0,-1) = -i.
-    // Proof: -i·(a+ib) = b-ia → tr=v.im, ti=-v.re. Zero complex multiplications.
-    if n >= 4 {
-        for chunk in data.chunks_exact_mut(4) {
-            let (lo, hi) = chunk.split_at_mut(2);
-            {
-                let u = lo[0];
-                let v = hi[0];
-                lo[0] = u + v;
-                hi[0] = u - v;
-            }
-            let u = lo[1];
-            let v = hi[1];
-            lo[1] = Complex32::new(u.re + v.im, u.im - v.re);
-            hi[1] = Complex32::new(u.re - v.im, u.im + v.re);
-        }
-    }
-    // Stage 3 (len=8) f32: W_8^1=(C,-C), W_8^2=-i, W_8^3=(-C,-C), C=1/√2. Compile-time constants.
-    if n >= 8 {
-        const C: f32 = std::f32::consts::FRAC_1_SQRT_2;
-        for chunk in data.chunks_exact_mut(8) {
-            let (lo, hi) = chunk.split_at_mut(4);
-            {
-                let u = lo[0];
-                let v = hi[0];
-                lo[0] = u + v;
-                hi[0] = u - v;
-            }
-            {
-                let u = lo[1];
-                let v = hi[1];
-                let tr = C * (v.re + v.im);
-                let ti = C * (v.im - v.re);
-                lo[1] = Complex32::new(u.re + tr, u.im + ti);
-                hi[1] = Complex32::new(u.re - tr, u.im - ti);
-            }
-            {
-                let u = lo[2];
-                let v = hi[2];
-                lo[2] = Complex32::new(u.re + v.im, u.im - v.re);
-                hi[2] = Complex32::new(u.re - v.im, u.im + v.re);
-            }
-            {
-                let u = lo[3];
-                let v = hi[3];
-                let tr = C * (v.im - v.re);
-                let ti = -C * (v.re + v.im);
-                lo[3] = Complex32::new(u.re + tr, u.im + ti);
-                hi[3] = Complex32::new(u.re - tr, u.im - ti);
-            }
-        }
-    }
-        // Stage 4 (len=16) f32: W_16^j for j=0..7. Compile-time constants.
-        // Same structure as the f64 stage-4 specialization, adapted to f32.
-        if n >= 16 {
-                const C: f32 = std::f32::consts::FRAC_1_SQRT_2; // cos(π/4)
-                const C8: f32 = 0.9238795_f32; // cos(π/8)
-                const S8: f32 = 0.38268343_f32; // sin(π/8)
-                for chunk in data.chunks_exact_mut(16) {
-                        let (lo, hi) = chunk.split_at_mut(8);
-                        { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
-                        { let u = lo[1]; let v = hi[1];
-                            let tr = C8 * v.re + S8 * v.im; let ti = C8 * v.im - S8 * v.re;
-                            lo[1] = Complex32::new(u.re + tr, u.im + ti);
-                            hi[1] = Complex32::new(u.re - tr, u.im - ti); }
-                        { let u = lo[2]; let v = hi[2];
-                            let tr = C * (v.re + v.im); let ti = C * (v.im - v.re);
-                            lo[2] = Complex32::new(u.re + tr, u.im + ti);
-                            hi[2] = Complex32::new(u.re - tr, u.im - ti); }
-                        { let u = lo[3]; let v = hi[3];
-                            let tr = S8 * v.re + C8 * v.im; let ti = S8 * v.im - C8 * v.re;
-                            lo[3] = Complex32::new(u.re + tr, u.im + ti);
-                            hi[3] = Complex32::new(u.re - tr, u.im - ti); }
-                        { let u = lo[4]; let v = hi[4];
-                            lo[4] = Complex32::new(u.re + v.im, u.im - v.re);
-                            hi[4] = Complex32::new(u.re - v.im, u.im + v.re); }
-                        { let u = lo[5]; let v = hi[5];
-                            let tr = -S8 * v.re + C8 * v.im; let ti = -S8 * v.im - C8 * v.re;
-                            lo[5] = Complex32::new(u.re + tr, u.im + ti);
-                            hi[5] = Complex32::new(u.re - tr, u.im - ti); }
-                        { let u = lo[6]; let v = hi[6];
-                            let tr = C * (v.im - v.re); let ti = -C * (v.re + v.im);
-                            lo[6] = Complex32::new(u.re + tr, u.im + ti);
-                            hi[6] = Complex32::new(u.re - tr, u.im - ti); }
-                        { let u = lo[7]; let v = hi[7];
-                            let tr = -C8 * v.re + S8 * v.im; let ti = -C8 * v.im - S8 * v.re;
-                            lo[7] = Complex32::new(u.re + tr, u.im + ti);
-                            hi[7] = Complex32::new(u.re - tr, u.im - ti); }
-                }
-        }
-        let mut len = 32usize;
-        let mut base = 15usize;
-    while len <= n {
-        let half = len >> 1;
-        let stage_twiddles = &twiddles[base..base + half];
-        for chunk in data.chunks_exact_mut(len) {
-            let (lo, hi) = chunk.split_at_mut(half);
-            {
-                let u = lo[0];
-                let v = hi[0];
-                lo[0] = u + v;
-                hi[0] = u - v;
-            }
-            for j in 1..half {
-                let u = lo[j];
-                let v = hi[j];
-                let w = stage_twiddles[j];
-                let tr = w.re * v.re - w.im * v.im;
-                let ti = w.re * v.im + w.im * v.re;
-                lo[j] = Complex32::new(u.re + tr, u.im + ti);
-                hi[j] = Complex32::new(u.re - tr, u.im - ti);
-            }
-        }
-        base += half;
-        len <<= 1;
-    }
+    ct2_unnorm_inplace::<Complex32, false>(data, twiddles);
 }
 
 /// Inverse FFT (f32, unnormalized) using a precomputed contiguous per-stage twiddle table.
@@ -1162,134 +759,7 @@ pub fn forward_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Comp
 /// `twiddles` must be the output of `build_inverse_twiddle_table_32(n)`.
 #[inline]
 pub fn inverse_inplace_unnorm_32_with_twiddles(data: &mut [Complex32], twiddles: &[Complex32]) {
-    let n = data.len();
-    if n <= 1 {
-        return;
-    }
-    debug_assert!(n.is_power_of_two(), "radix-2 requires power-of-2 length");
-    bit_reverse_permutation_32(data);
-    // Stage 1 (len=2): W_2^0 = 1+0i — no multiply.
-    for chunk in data.chunks_exact_mut(2) {
-        let u = chunk[0];
-        let v = chunk[1];
-        chunk[0] = u + v;
-        chunk[1] = u - v;
-    }
-    // Stage 2 (len=4): W_4^1 = exp(+2πi/4) = (0,+1) = +i.
-    // Proof: +i·(a+ib) = -b+ia → tr=-v.im, ti=v.re. Zero complex multiplications.
-    if n >= 4 {
-        for chunk in data.chunks_exact_mut(4) {
-            let (lo, hi) = chunk.split_at_mut(2);
-            {
-                let u = lo[0];
-                let v = hi[0];
-                lo[0] = u + v;
-                hi[0] = u - v;
-            }
-            let u = lo[1];
-            let v = hi[1];
-            lo[1] = Complex32::new(u.re - v.im, u.im + v.re);
-            hi[1] = Complex32::new(u.re + v.im, u.im - v.re);
-        }
-    }
-    // Stage 3 (len=8) inverse f32: W_8^1=(C,+C), W_8^2=+i, W_8^3=(-C,+C), C=1/√2.
-    if n >= 8 {
-        const C: f32 = std::f32::consts::FRAC_1_SQRT_2;
-        for chunk in data.chunks_exact_mut(8) {
-            let (lo, hi) = chunk.split_at_mut(4);
-            {
-                let u = lo[0];
-                let v = hi[0];
-                lo[0] = u + v;
-                hi[0] = u - v;
-            }
-            {
-                let u = lo[1];
-                let v = hi[1];
-                let tr = C * (v.re - v.im);
-                let ti = C * (v.re + v.im);
-                lo[1] = Complex32::new(u.re + tr, u.im + ti);
-                hi[1] = Complex32::new(u.re - tr, u.im - ti);
-            }
-            {
-                let u = lo[2];
-                let v = hi[2];
-                lo[2] = Complex32::new(u.re - v.im, u.im + v.re);
-                hi[2] = Complex32::new(u.re + v.im, u.im - v.re);
-            }
-            {
-                let u = lo[3];
-                let v = hi[3];
-                let tr = -C * (v.re + v.im);
-                let ti = C * (v.re - v.im);
-                lo[3] = Complex32::new(u.re + tr, u.im + ti);
-                hi[3] = Complex32::new(u.re - tr, u.im - ti);
-            }
-        }
-    }
-        // Stage 4 (len=16) inverse f32: W_16^j = exp(+2πi·j/16) constants.
-        if n >= 16 {
-                const C: f32 = std::f32::consts::FRAC_1_SQRT_2;
-                const C8: f32 = 0.9238795_f32;
-                const S8: f32 = 0.38268343_f32;
-                for chunk in data.chunks_exact_mut(16) {
-                        let (lo, hi) = chunk.split_at_mut(8);
-                        { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
-                        { let u = lo[1]; let v = hi[1];
-                            let tr = C8 * v.re - S8 * v.im; let ti = C8 * v.im + S8 * v.re;
-                            lo[1] = Complex32::new(u.re + tr, u.im + ti);
-                            hi[1] = Complex32::new(u.re - tr, u.im - ti); }
-                        { let u = lo[2]; let v = hi[2];
-                            let tr = C * (v.re - v.im); let ti = C * (v.re + v.im);
-                            lo[2] = Complex32::new(u.re + tr, u.im + ti);
-                            hi[2] = Complex32::new(u.re - tr, u.im - ti); }
-                        { let u = lo[3]; let v = hi[3];
-                            let tr = S8 * v.re - C8 * v.im; let ti = S8 * v.im + C8 * v.re;
-                            lo[3] = Complex32::new(u.re + tr, u.im + ti);
-                            hi[3] = Complex32::new(u.re - tr, u.im - ti); }
-                        { let u = lo[4]; let v = hi[4];
-                            lo[4] = Complex32::new(u.re - v.im, u.im + v.re);
-                            hi[4] = Complex32::new(u.re + v.im, u.im - v.re); }
-                        { let u = lo[5]; let v = hi[5];
-                            let tr = -S8 * v.re - C8 * v.im; let ti = C8 * v.re - S8 * v.im;
-                            lo[5] = Complex32::new(u.re + tr, u.im + ti);
-                            hi[5] = Complex32::new(u.re - tr, u.im - ti); }
-                        { let u = lo[6]; let v = hi[6];
-                            let tr = -C * (v.re + v.im); let ti = C * (v.re - v.im);
-                            lo[6] = Complex32::new(u.re + tr, u.im + ti);
-                            hi[6] = Complex32::new(u.re - tr, u.im - ti); }
-                        { let u = lo[7]; let v = hi[7];
-                            let tr = -C8 * v.re - S8 * v.im; let ti = S8 * v.re - C8 * v.im;
-                            lo[7] = Complex32::new(u.re + tr, u.im + ti);
-                            hi[7] = Complex32::new(u.re - tr, u.im - ti); }
-                }
-        }
-        let mut len = 32usize;
-        let mut base = 15usize;
-    while len <= n {
-        let half = len >> 1;
-        let stage_twiddles = &twiddles[base..base + half];
-        for chunk in data.chunks_exact_mut(len) {
-            let (lo, hi) = chunk.split_at_mut(half);
-            {
-                let u = lo[0];
-                let v = hi[0];
-                lo[0] = u + v;
-                hi[0] = u - v;
-            }
-            for j in 1..half {
-                let u = lo[j];
-                let v = hi[j];
-                let w = stage_twiddles[j];
-                let tr = w.re * v.re - w.im * v.im;
-                let ti = w.re * v.im + w.im * v.re;
-                lo[j] = Complex32::new(u.re + tr, u.im + ti);
-                hi[j] = Complex32::new(u.re - tr, u.im - ti);
-            }
-        }
-        base += half;
-        len <<= 1;
-    }
+    ct2_unnorm_inplace::<Complex32, true>(data, twiddles);
 }
 
 /// Normalized inverse FFT using a precomputed contiguous per-stage twiddle table.
@@ -1297,209 +767,7 @@ pub fn inverse_inplace_unnorm_32_with_twiddles(data: &mut [Complex32], twiddles:
 /// `twiddles` must be the output of `build_inverse_twiddle_table_32(n)`.
 #[inline]
 pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Complex32]) {
-    // Inlined butterfly with fused final-stage normalization.
-    let n = data.len();
-    if n <= 1 {
-        return;
-    }
-    debug_assert!(n.is_power_of_two(), "radix-2 requires power-of-2 length");
-    bit_reverse_permutation_32(data);
-    let scale = 1.0f32 / n as f32;
-    if n == 2 {
-        let u = data[0];
-        let v = data[1];
-        data[0] = (u + v) * scale;
-        data[1] = (u - v) * scale;
-        return;
-    }
-    for chunk in data.chunks_exact_mut(2) {
-        let u = chunk[0];
-        let v = chunk[1];
-        chunk[0] = u + v;
-        chunk[1] = u - v;
-    }
-    if n == 4 {
-        // Stage 2 is the final stage. W_4^1 = +i → tr=-v.im, ti=v.re. Fuse scale.
-        // Proof: (0,+1)·(a+ib) = -b+ia. Zero complex multiplications.
-        let (lo, hi) = data.split_at_mut(2);
-        {
-            let u = lo[0];
-            let v = hi[0];
-            lo[0] = (u + v) * scale;
-            hi[0] = (u - v) * scale;
-        }
-        let u = lo[1];
-        let v = hi[1];
-        lo[1] = Complex32::new((u.re - v.im) * scale, (u.im + v.re) * scale);
-        hi[1] = Complex32::new((u.re + v.im) * scale, (u.im - v.re) * scale);
-        return;
-    }
-    // Stage 2 (len=4) as intermediate stage: W_4^1 = +i → no multiply.
-    for chunk in data.chunks_exact_mut(4) {
-        let (lo, hi) = chunk.split_at_mut(2);
-        {
-            let u = lo[0];
-            let v = hi[0];
-            lo[0] = u + v;
-            hi[0] = u - v;
-        }
-        let u = lo[1];
-        let v = hi[1];
-        lo[1] = Complex32::new(u.re - v.im, u.im + v.re);
-        hi[1] = Complex32::new(u.re + v.im, u.im - v.re);
-    }
-    if n == 8 {
-        // Stage 3 is the final stage. W_8^1=(C,+C), W_8^2=+i, W_8^3=(-C,+C). Fuse 1/N scale.
-        const C: f32 = std::f32::consts::FRAC_1_SQRT_2;
-        let (lo, hi) = data.split_at_mut(4);
-        {
-            let u = lo[0];
-            let v = hi[0];
-            lo[0] = (u + v) * scale;
-            hi[0] = (u - v) * scale;
-        }
-        {
-            let u = lo[1];
-            let v = hi[1];
-            let tr = C * (v.re - v.im);
-            let ti = C * (v.re + v.im);
-            lo[1] = Complex32::new((u.re + tr) * scale, (u.im + ti) * scale);
-            hi[1] = Complex32::new((u.re - tr) * scale, (u.im - ti) * scale);
-        }
-        {
-            let u = lo[2];
-            let v = hi[2];
-            lo[2] = Complex32::new((u.re - v.im) * scale, (u.im + v.re) * scale);
-            hi[2] = Complex32::new((u.re + v.im) * scale, (u.im - v.re) * scale);
-        }
-        {
-            let u = lo[3];
-            let v = hi[3];
-            let tr = -C * (v.re + v.im);
-            let ti = C * (v.re - v.im);
-            lo[3] = Complex32::new((u.re + tr) * scale, (u.im + ti) * scale);
-            hi[3] = Complex32::new((u.re - tr) * scale, (u.im - ti) * scale);
-        }
-        return;
-    }
-    // Stage 3 (len=8) as intermediate. n > 8 here. W_8^1=(C,+C), W_8^2=+i, W_8^3=(-C,+C).
-    {
-        const C: f32 = std::f32::consts::FRAC_1_SQRT_2;
-        for chunk in data.chunks_exact_mut(8) {
-            let (lo, hi) = chunk.split_at_mut(4);
-            {
-                let u = lo[0];
-                let v = hi[0];
-                lo[0] = u + v;
-                hi[0] = u - v;
-            }
-            {
-                let u = lo[1];
-                let v = hi[1];
-                let tr = C * (v.re - v.im);
-                let ti = C * (v.re + v.im);
-                lo[1] = Complex32::new(u.re + tr, u.im + ti);
-                hi[1] = Complex32::new(u.re - tr, u.im - ti);
-            }
-            {
-                let u = lo[2];
-                let v = hi[2];
-                lo[2] = Complex32::new(u.re - v.im, u.im + v.re);
-                hi[2] = Complex32::new(u.re + v.im, u.im - v.re);
-            }
-            {
-                let u = lo[3];
-                let v = hi[3];
-                let tr = -C * (v.re + v.im);
-                let ti = C * (v.re - v.im);
-                lo[3] = Complex32::new(u.re + tr, u.im + ti);
-                hi[3] = Complex32::new(u.re - tr, u.im - ti);
-            }
-        }
-    }
-        // Stage 4 (len=16) inverse f32 constants.
-        // Guard: only when n >= 32; for n=16 this stage is fused with final scaling.
-        if n >= 32 {
-                const C: f32 = std::f32::consts::FRAC_1_SQRT_2;
-                const C8: f32 = 0.9238795_f32;
-                const S8: f32 = 0.38268343_f32;
-                for chunk in data.chunks_exact_mut(16) {
-                        let (lo, hi) = chunk.split_at_mut(8);
-                        { let u = lo[0]; let v = hi[0]; lo[0] = u + v; hi[0] = u - v; }
-                        { let u = lo[1]; let v = hi[1];
-                            let tr = C8 * v.re - S8 * v.im; let ti = C8 * v.im + S8 * v.re;
-                            lo[1] = Complex32::new(u.re + tr, u.im + ti);
-                            hi[1] = Complex32::new(u.re - tr, u.im - ti); }
-                        { let u = lo[2]; let v = hi[2];
-                            let tr = C * (v.re - v.im); let ti = C * (v.re + v.im);
-                            lo[2] = Complex32::new(u.re + tr, u.im + ti);
-                            hi[2] = Complex32::new(u.re - tr, u.im - ti); }
-                        { let u = lo[3]; let v = hi[3];
-                            let tr = S8 * v.re - C8 * v.im; let ti = S8 * v.im + C8 * v.re;
-                            lo[3] = Complex32::new(u.re + tr, u.im + ti);
-                            hi[3] = Complex32::new(u.re - tr, u.im - ti); }
-                        { let u = lo[4]; let v = hi[4];
-                            lo[4] = Complex32::new(u.re - v.im, u.im + v.re);
-                            hi[4] = Complex32::new(u.re + v.im, u.im - v.re); }
-                        { let u = lo[5]; let v = hi[5];
-                            let tr = -S8 * v.re - C8 * v.im; let ti = C8 * v.re - S8 * v.im;
-                            lo[5] = Complex32::new(u.re + tr, u.im + ti);
-                            hi[5] = Complex32::new(u.re - tr, u.im - ti); }
-                        { let u = lo[6]; let v = hi[6];
-                            let tr = -C * (v.re + v.im); let ti = C * (v.re - v.im);
-                            lo[6] = Complex32::new(u.re + tr, u.im + ti);
-                            hi[6] = Complex32::new(u.re - tr, u.im - ti); }
-                        { let u = lo[7]; let v = hi[7];
-                            let tr = -C8 * v.re - S8 * v.im; let ti = S8 * v.re - C8 * v.im;
-                            lo[7] = Complex32::new(u.re + tr, u.im + ti);
-                            hi[7] = Complex32::new(u.re - tr, u.im - ti); }
-                }
-        }
-        // General intermediate stages. Start after stage 4 when specialized.
-        let mut len = if n >= 32 { 32usize } else { 16usize };
-        let mut base = if n >= 32 { 15usize } else { 7usize };
-    while len < n {
-        let half = len >> 1;
-        let stage_twiddles = &twiddles[base..base + half];
-        for chunk in data.chunks_exact_mut(len) {
-            let (lo, hi) = chunk.split_at_mut(half);
-            {
-                let u = lo[0];
-                let v = hi[0];
-                lo[0] = u + v;
-                hi[0] = u - v;
-            }
-            for j in 1..half {
-                let u = lo[j];
-                let v = hi[j];
-                let w = stage_twiddles[j];
-                let tr = w.re * v.re - w.im * v.im;
-                let ti = w.re * v.im + w.im * v.re;
-                lo[j] = Complex32::new(u.re + tr, u.im + ti);
-                hi[j] = Complex32::new(u.re - tr, u.im - ti);
-            }
-        }
-        base += half;
-        len <<= 1;
-    }
-    let half = n >> 1;
-    let stage_twiddles = &twiddles[base..base + half];
-    let (lo, hi) = data.split_at_mut(half);
-    {
-        let u = lo[0];
-        let v = hi[0];
-        lo[0] = (u + v) * scale;
-        hi[0] = (u - v) * scale;
-    }
-    for j in 1..half {
-        let u = lo[j];
-        let v = hi[j];
-        let w = stage_twiddles[j];
-        let tr = w.re * v.re - w.im * v.im;
-        let ti = w.re * v.im + w.im * v.re;
-        lo[j] = Complex32::new((u.re + tr) * scale, (u.im + ti) * scale);
-        hi[j] = Complex32::new((u.re - tr) * scale, (u.im - ti) * scale);
-    }
+    ct2_norm_inplace::<Complex32>(data, twiddles);
 }
 
 /// Iterative radix-2 DIT inverse FFT (unnormalized, f64).
@@ -1578,20 +846,7 @@ pub fn inverse_inplace_32(data: &mut [Complex32]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn max_abs_err_64(a: &[Complex64], b: &[Complex64]) -> f64 {
-        a.iter()
-            .zip(b.iter())
-            .map(|(x, y)| (x - y).norm())
-            .fold(0.0f64, f64::max)
-    }
-
-    fn max_abs_err_32(a: &[Complex32], b: &[Complex32]) -> f32 {
-        a.iter()
-            .zip(b.iter())
-            .map(|(x, y)| (x - y).norm())
-            .fold(0.0f32, f32::max)
-    }
+    use super::super::test_utils::{max_abs_err_64, max_abs_err_32};
 
     /// X[0] = x[0]+x[1] = 3, X[1] = x[0]-x[1] = -1.
     #[test]

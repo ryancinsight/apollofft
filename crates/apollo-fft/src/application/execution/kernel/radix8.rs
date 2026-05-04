@@ -21,252 +21,51 @@
 //! - Winograd, S. (1978). On computing the discrete Fourier transform.
 //!   *Mathematics of Computation*, 32(141), 175-199.
 
-use super::{radix2, winograd};
+use super::kernel_api::radix_kernel_api;
+use super::radix_shape::is_power_of_eight;
+use super::radix_stage;
+use super::{winograd};
+use super::radix2_f16::Cf16;
 use num_complex::{Complex32, Complex64};
-
-#[inline]
-fn is_power_of_eight(n: usize) -> bool {
-    n > 0 && n.is_power_of_two() && (n.trailing_zeros() % 3 == 0)
-}
-
-// ── digit-reverse permutation (base 8) ───────────────────────────────────────
-
-#[inline]
-fn reverse_base8(mut v: usize, digits: u32) -> usize {
-    let mut r = 0;
-    for _ in 0..digits {
-        r = (r << 3) | (v & 7);
-        v >>= 3;
-    }
-    r
-}
-
-fn digit_reverse_64(data: &mut [Complex64]) {
-    let digits = data.len().trailing_zeros() / 3;
-    for i in 0..data.len() {
-        let j = reverse_base8(i, digits);
-        if j > i {
-            data.swap(i, j);
-        }
-    }
-}
-
-fn digit_reverse_32(data: &mut [Complex32]) {
-    let digits = data.len().trailing_zeros() / 3;
-    for i in 0..data.len() {
-        let j = reverse_base8(i, digits);
-        if j > i {
-            data.swap(i, j);
-        }
-    }
-}
 
 // ── core Winograd-radix-8 in-place kernel ─────────────────────────────────────
 
-fn winograd_r8_inplace_64(data: &mut [Complex64], twiddles: Option<&[Complex64]>, inverse: bool) {
+fn winograd_r8_inplace_64(data: &mut [Complex64], inverse: bool, twiddles: Option<&[Complex64]>) {
     debug_assert!(is_power_of_eight(data.len()));
-    if data.len() <= 1 {
-        return;
-    }
-    digit_reverse_64(data);
-
-    let n = data.len();
-    let mut len = 8usize;
-    while len <= n {
-        let eighth = len >> 3;
-        // Stage twiddle slice: same layout as radix2 table (half - 1)..(half - 1 + half)
-        let half = len >> 1;
-        let stage = twiddles.map(|t| &t[(half - 1)..(half - 1 + half)]);
-
-        for chunk in data.chunks_exact_mut(len) {
-            for j in 0..eighth {
-                // Apply inter-group twiddles W_len^{p*j} for p = 0..8.
-                // W_len^0 = 1 (no-op). For p ≥ 1, compute by recurrence.
-                let step = if let Some(s) = stage {
-                    s[j]
-                } else {
-                    let a = if inverse {
-                        std::f64::consts::TAU * j as f64 / len as f64
-                    } else {
-                        -std::f64::consts::TAU * j as f64 / len as f64
-                    };
-                    Complex64::new(a.cos(), a.sin())
-                };
-                let mut buf = [Complex64::new(0.0, 0.0); 8];
-                // p=0 has twiddle factor 1, so avoid an unnecessary complex multiply.
-                buf[0] = chunk[j];
-                let mut tw = step;
-                for p in 1..8 {
-                    buf[p] = winograd::apply_twiddle_64(chunk[j + p * eighth], tw);
-                    tw = winograd::apply_twiddle_64(tw, step);
-                }
-                winograd::dft8_64(&mut buf, inverse);
-                for p in 0..8 {
-                    chunk[j + p * eighth] = buf[p];
-                }
-            }
-        }
-        len <<= 3;
-    }
+    radix_stage::radix_winograd_inplace::<8, Complex64, _>(
+        data,
+        inverse,
+        twiddles,
+        &|buf: &mut [Complex64; 8], inv| winograd::dft8(buf, inv),
+        None,
+    );
 }
 
-fn winograd_r8_inplace_32(data: &mut [Complex32], twiddles: Option<&[Complex32]>, inverse: bool) {
+fn winograd_r8_inplace_32(data: &mut [Complex32], inverse: bool, twiddles: Option<&[Complex32]>) {
     debug_assert!(is_power_of_eight(data.len()));
-    if data.len() <= 1 {
-        return;
-    }
-    digit_reverse_32(data);
-
-    let n = data.len();
-    let mut len = 8usize;
-    while len <= n {
-        let eighth = len >> 3;
-        let half = len >> 1;
-        let stage = twiddles.map(|t| &t[(half - 1)..(half - 1 + half)]);
-
-        for chunk in data.chunks_exact_mut(len) {
-            for j in 0..eighth {
-                let step = if let Some(s) = stage {
-                    s[j]
-                } else {
-                    let a = if inverse {
-                        std::f64::consts::TAU * j as f64 / len as f64
-                    } else {
-                        -std::f64::consts::TAU * j as f64 / len as f64
-                    };
-                    Complex32::new(a.cos() as f32, a.sin() as f32)
-                };
-                let mut buf = [Complex32::new(0.0, 0.0); 8];
-                buf[0] = chunk[j];
-                let mut tw = step;
-                for p in 1..8 {
-                    buf[p] = winograd::apply_twiddle_32(chunk[j + p * eighth], tw);
-                    tw = winograd::apply_twiddle_32(tw, step);
-                }
-                winograd::dft8_32(&mut buf, inverse);
-                for p in 0..8 {
-                    chunk[j + p * eighth] = buf[p];
-                }
-            }
-        }
-        len <<= 3;
-    }
+    radix_stage::radix_winograd_inplace::<8, Complex32, _>(
+        data,
+        inverse,
+        twiddles,
+        &|buf: &mut [Complex32; 8], inv| winograd::dft8(buf, inv),
+        None,
+    );
 }
 
 // ── public API ────────────────────────────────────────────────────────────────
 
-/// Forward FFT (unnormalized) for power-of-eight lengths using caller-provided twiddles.
-#[inline]
-pub fn forward_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Complex64]) {
-    if data.len() <= 1 { return; }
-    debug_assert!(is_power_of_eight(data.len()));
-    winograd_r8_inplace_64(data, Some(twiddles), false);
-}
-
-/// Inverse FFT (unnormalized) for power-of-eight lengths using caller-provided twiddles.
-#[inline]
-pub fn inverse_inplace_unnorm_64_with_twiddles(data: &mut [Complex64], twiddles: &[Complex64]) {
-    if data.len() <= 1 { return; }
-    debug_assert!(is_power_of_eight(data.len()));
-    winograd_r8_inplace_64(data, Some(twiddles), true);
-}
-
-/// Inverse FFT normalized by 1/N for power-of-eight lengths using caller-provided twiddles.
-#[inline]
-pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: &[Complex64]) {
-    if data.len() <= 1 { return; }
-    debug_assert!(is_power_of_eight(data.len()));
-    winograd_r8_inplace_64(data, Some(twiddles), true);
-    let inv_n = 1.0 / data.len() as f64;
-    for v in data.iter_mut() { *v *= inv_n; }
-}
-
-/// Forward FFT (unnormalized) for power-of-eight lengths.
-pub fn forward_inplace_64(data: &mut [Complex64]) {
-    if data.len() <= 1 { return; }
-    debug_assert!(is_power_of_eight(data.len()));
-    let twiddles = radix2::build_forward_twiddle_table_64(data.len());
-    winograd_r8_inplace_64(data, Some(&twiddles), false);
-}
-
-/// Inverse FFT (unnormalized) for power-of-eight lengths.
-pub fn inverse_inplace_unnorm_64(data: &mut [Complex64]) {
-    if data.len() <= 1 { return; }
-    debug_assert!(is_power_of_eight(data.len()));
-    let twiddles = radix2::build_inverse_twiddle_table_64(data.len());
-    winograd_r8_inplace_64(data, Some(&twiddles), true);
-}
-
-/// Inverse FFT normalized by 1/N for power-of-eight lengths.
-pub fn inverse_inplace_64(data: &mut [Complex64]) {
-    if data.len() <= 1 { return; }
-    debug_assert!(is_power_of_eight(data.len()));
-    let twiddles = radix2::build_inverse_twiddle_table_64(data.len());
-    winograd_r8_inplace_64(data, Some(&twiddles), true);
-    let inv_n = 1.0 / data.len() as f64;
-    for v in data.iter_mut() { *v *= inv_n; }
-}
-
-/// Forward FFT (unnormalized, f32) for power-of-eight lengths using caller-provided twiddles.
-#[inline]
-pub fn forward_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Complex32]) {
-    if data.len() <= 1 { return; }
-    debug_assert!(is_power_of_eight(data.len()));
-    winograd_r8_inplace_32(data, Some(twiddles), false);
-}
-
-/// Inverse FFT (unnormalized, f32) for power-of-eight lengths using caller-provided twiddles.
-#[inline]
-pub fn inverse_inplace_unnorm_32_with_twiddles(data: &mut [Complex32], twiddles: &[Complex32]) {
-    if data.len() <= 1 { return; }
-    debug_assert!(is_power_of_eight(data.len()));
-    winograd_r8_inplace_32(data, Some(twiddles), true);
-}
-
-/// Inverse FFT normalized by 1/N (f32) for power-of-eight lengths using caller-provided twiddles.
-#[inline]
-pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: &[Complex32]) {
-    if data.len() <= 1 { return; }
-    debug_assert!(is_power_of_eight(data.len()));
-    winograd_r8_inplace_32(data, Some(twiddles), true);
-    let inv_n = 1.0f32 / data.len() as f32;
-    for v in data.iter_mut() { *v *= inv_n; }
-}
-
-/// Forward FFT (unnormalized, f32) for power-of-eight lengths.
-pub fn forward_inplace_32(data: &mut [Complex32]) {
-    if data.len() <= 1 { return; }
-    debug_assert!(is_power_of_eight(data.len()));
-    let twiddles = radix2::build_forward_twiddle_table_32(data.len());
-    winograd_r8_inplace_32(data, Some(&twiddles), false);
-}
-
-/// Inverse FFT (unnormalized, f32) for power-of-eight lengths.
-pub fn inverse_inplace_unnorm_32(data: &mut [Complex32]) {
-    if data.len() <= 1 { return; }
-    debug_assert!(is_power_of_eight(data.len()));
-    let twiddles = radix2::build_inverse_twiddle_table_32(data.len());
-    winograd_r8_inplace_32(data, Some(&twiddles), true);
-}
-
-/// Inverse FFT normalized by 1/N (f32) for power-of-eight lengths.
-pub fn inverse_inplace_32(data: &mut [Complex32]) {
-    if data.len() <= 1 { return; }
-    debug_assert!(is_power_of_eight(data.len()));
-    let twiddles = radix2::build_inverse_twiddle_table_32(data.len());
-    winograd_r8_inplace_32(data, Some(&twiddles), true);
-    let inv_n = 1.0f32 / data.len() as f32;
-    for v in data.iter_mut() { *v *= inv_n; }
+radix_kernel_api! {
+    check       = is_power_of_eight,
+    inplace64   = winograd_r8_inplace_64,
+    inplace32   = winograd_r8_inplace_32,
+    description = "power-of-eight",
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::application::execution::kernel::direct::{dft_forward_64, dft_inverse_64};
-
-    fn max_abs_err_64(a: &[Complex64], b: &[Complex64]) -> f64 {
-        a.iter().zip(b.iter()).map(|(x, y)| (*x - *y).norm()).fold(0.0f64, f64::max)
-    }
+    use super::super::test_utils::max_abs_err_64;
 
     #[test]
     fn radix8_forward_n8_matches_direct() {

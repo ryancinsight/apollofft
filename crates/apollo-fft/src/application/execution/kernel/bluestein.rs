@@ -9,18 +9,8 @@
 //! and M = next_pow2(2N-1).
 
 use super::radix2;
+use super::radix_stage::normalize_inplace;
 use num_complex::{Complex32, Complex64};
-
-fn next_pow2(n: usize) -> usize {
-    if n == 0 {
-        return 1;
-    }
-    let mut p = 1usize;
-    while p < n {
-        p <<= 1;
-    }
-    p
-}
 
 /// Precomputed context for arbitrary-length Bluestein chirp-Z transform.
 /// Eliminates `O(N)` dynamic memory allocations per kernel evaluation.
@@ -44,7 +34,7 @@ pub struct BluesteinPlan64 {
 impl BluesteinPlan64 {
     /// Initialize a new Bluestein plan for length `n`.
     pub fn new(n: usize) -> Self {
-        let m = next_pow2(2 * n.saturating_sub(1).max(1));
+        let m = (2 * n.saturating_sub(1).max(1)).next_power_of_two();
         let chirp: Vec<Complex64> = (0..n)
             .map(|k| {
                 let angle = -std::f64::consts::PI * (k * k) as f64 / n as f64;
@@ -170,10 +160,7 @@ pub fn inverse_inplace_unnorm_64(data: &mut [Complex64]) {
 /// transformation and applying a $1/N$ scaling factor.
 pub fn inverse_inplace_64(data: &mut [Complex64]) {
     inverse_inplace_unnorm_64(data);
-    let scale = 1.0 / data.len() as f64;
-    for x in data.iter_mut() {
-        *x *= scale;
-    }
+    normalize_inplace(data, 1.0 / data.len() as f64);
 }
 
 /// In-place forward Bluestein chirp-Z transform for `Complex32`.
@@ -227,23 +214,14 @@ pub fn inverse_inplace_unnorm_32(data: &mut [Complex32]) {
 /// Sequentially computes the unnormalized inverse and scales by $1/N$.
 pub fn inverse_inplace_32(data: &mut [Complex32]) {
     inverse_inplace_unnorm_32(data);
-    let scale = 1.0f32 / data.len() as f32;
-    for x in data.iter_mut() {
-        *x *= scale;
-    }
+    normalize_inplace(data, 1.0f32 / data.len() as f32);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::application::execution::kernel::direct::{dft_forward_64, dft_inverse_64};
-
-    fn max_abs_err(a: &[Complex64], b: &[Complex64]) -> f64 {
-        a.iter()
-            .zip(b.iter())
-            .map(|(x, y)| (x - y).norm())
-            .fold(0.0f64, f64::max)
-    }
+    use super::super::test_utils::max_abs_err_64 as max_abs_err;
 
     fn sig(n: usize) -> Vec<Complex64> {
         (0..n)

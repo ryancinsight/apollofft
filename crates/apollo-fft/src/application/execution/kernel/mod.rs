@@ -17,15 +17,25 @@
 
 pub mod bluestein;
 pub mod direct;
+pub(crate) mod f16_bridge;
+pub(crate) mod kernel_api;
 pub mod mixed_radix;
 pub mod radix2;
 pub mod radix2_f16;
+pub(crate) mod radix_permute;
+pub(crate) mod radix_shape;
+pub(crate) mod radix_stage;
 pub mod radix16;
 pub mod radix32;
 pub mod radix4;
 pub mod radix64;
 pub mod radix8;
+pub(crate) mod tuning;
+pub(crate) mod twiddle_table;
 pub mod winograd;
+
+#[cfg(test)]
+pub(crate) mod test_utils;
 
 pub use direct::{
     dft_forward_32, dft_forward_64, dft_inverse_32, dft_inverse_64, forward_owned_64,
@@ -33,17 +43,8 @@ pub use direct::{
 };
 pub use radix2_f16::Cf16;
 
+use self::radix_shape::{is_power_of_eight, is_power_of_four};
 use num_complex::{Complex32, Complex64};
-
-#[inline]
-fn is_power_of_four(n: usize) -> bool {
-    n.is_power_of_two() && (n.trailing_zeros() % 2 == 0)
-}
-
-#[inline]
-fn is_power_of_eight(n: usize) -> bool {
-    n.is_power_of_two() && (n.trailing_zeros() % 3 == 0)
-}
 
 /// Auto-selecting forward FFT (unnormalized).
 /// Uses radix-2 for power-of-2 sizes, Bluestein otherwise.
@@ -138,56 +139,17 @@ pub fn fft_inverse_unnorm_32(data: &mut [Complex32]) {
 ///   (radix/mixed-radix/Bluestein as appropriate), then quantize back to f16.
 #[inline]
 pub fn fft_forward_f16(data: &mut [Cf16]) {
-    if data.len().is_power_of_two() {
-        radix2_f16::forward_inplace_f16(data);
-        return;
-    }
-
-    let mut promoted: Vec<Complex32> = data
-        .iter()
-        .map(|value| Complex32::new(value.re.to_f32(), value.im.to_f32()))
-        .collect();
-    fft_forward_32(&mut promoted);
-    for (dst, src) in data.iter_mut().zip(promoted.into_iter()) {
-        dst.re = half::f16::from_f32(src.re);
-        dst.im = half::f16::from_f32(src.im);
-    }
+    mixed_radix::forward_inplace_f16(data);
 }
 
 /// Auto-selecting inverse FFT over `Cf16`, normalized by 1/N.
 #[inline]
 pub fn fft_inverse_f16(data: &mut [Cf16]) {
-    if data.len().is_power_of_two() {
-        radix2_f16::inverse_inplace_f16(data);
-        return;
-    }
-
-    let mut promoted: Vec<Complex32> = data
-        .iter()
-        .map(|value| Complex32::new(value.re.to_f32(), value.im.to_f32()))
-        .collect();
-    fft_inverse_32(&mut promoted);
-    for (dst, src) in data.iter_mut().zip(promoted.into_iter()) {
-        dst.re = half::f16::from_f32(src.re);
-        dst.im = half::f16::from_f32(src.im);
-    }
+    mixed_radix::inverse_inplace_f16(data);
 }
 
 /// Auto-selecting inverse FFT over `Cf16`, unnormalized.
 #[inline]
 pub fn fft_inverse_unnorm_f16(data: &mut [Cf16]) {
-    if data.len().is_power_of_two() {
-        radix2_f16::inverse_inplace_unnorm_f16(data);
-        return;
-    }
-
-    let mut promoted: Vec<Complex32> = data
-        .iter()
-        .map(|value| Complex32::new(value.re.to_f32(), value.im.to_f32()))
-        .collect();
-    fft_inverse_unnorm_32(&mut promoted);
-    for (dst, src) in data.iter_mut().zip(promoted.into_iter()) {
-        dst.re = half::f16::from_f32(src.re);
-        dst.im = half::f16::from_f32(src.im);
-    }
+    mixed_radix::inverse_inplace_unnorm_f16(data);
 }

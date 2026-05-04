@@ -29,6 +29,25 @@ fn signal_f16(len: usize) -> Vec<Cf16> {
         .collect()
 }
 
+fn max_abs_err_f16_vs_f64(input: &[Cf16], f16_kernel: fn(&mut [Cf16])) -> f64 {
+    let mut f16_buf = input.to_vec();
+    f16_kernel(&mut f16_buf);
+    let mut f64_buf: Vec<Complex64> = input
+        .iter()
+        .map(|v| Complex64::new(v.re.to_f32() as f64, v.im.to_f32() as f64))
+        .collect();
+    fft_forward_64(&mut f64_buf);
+    f16_buf
+        .iter()
+        .zip(f64_buf.iter())
+        .map(|(a, b)| {
+            let ar = a.re.to_f32() as f64;
+            let ai = a.im.to_f32() as f64;
+            ((ar - b.re).powi(2) + (ai - b.im).powi(2)).sqrt()
+        })
+        .fold(0.0f64, f64::max)
+}
+
 /// Benchmark direct-DFT, radix strategies, mixed-radix, auto-selector and Bluestein.
 fn bench_fft_kernels(c: &mut Criterion) {
     let mut group = c.benchmark_group("fft_kernel_strategy");
@@ -179,6 +198,117 @@ fn bench_fft_kernels(c: &mut Criterion) {
                 });
             },
         );
+    }
+
+    // f16 radix family benchmark coverage.
+    for len in [64usize, 256, 1024] {
+        let input = signal_f16(len);
+        if len.is_power_of_two() && (len.trailing_zeros() % 2 == 0) {
+            group.bench_with_input(
+                BenchmarkId::new("radix4_inplace_f16", len),
+                &input,
+                |bench, input| {
+                    bench.iter(|| {
+                        let mut data = input.clone();
+                        radix4::forward_inplace_f16(black_box(&mut data));
+                        black_box(data);
+                    });
+                },
+            );
+        }
+        if len.is_power_of_two() && (len.trailing_zeros() % 3 == 0) {
+            group.bench_with_input(
+                BenchmarkId::new("radix8_inplace_f16", len),
+                &input,
+                |bench, input| {
+                    bench.iter(|| {
+                        let mut data = input.clone();
+                        radix8::forward_inplace_f16(black_box(&mut data));
+                        black_box(data);
+                    });
+                },
+            );
+        }
+        if len.is_power_of_two() && (len.trailing_zeros() % 4 == 0) {
+            group.bench_with_input(
+                BenchmarkId::new("radix16_inplace_f16", len),
+                &input,
+                |bench, input| {
+                    bench.iter(|| {
+                        let mut data = input.clone();
+                        radix16::forward_inplace_f16(black_box(&mut data));
+                        black_box(data);
+                    });
+                },
+            );
+        }
+        if len.is_power_of_two() && (len.trailing_zeros() % 5 == 0) {
+            group.bench_with_input(
+                BenchmarkId::new("radix32_inplace_f16", len),
+                &input,
+                |bench, input| {
+                    bench.iter(|| {
+                        let mut data = input.clone();
+                        radix32::forward_inplace_f16(black_box(&mut data));
+                        black_box(data);
+                    });
+                },
+            );
+        }
+        if len.is_power_of_two() && (len.trailing_zeros() % 6 == 0) {
+            group.bench_with_input(
+                BenchmarkId::new("radix64_inplace_f16", len),
+                &input,
+                |bench, input| {
+                    bench.iter(|| {
+                        let mut data = input.clone();
+                        radix64::forward_inplace_f16(black_box(&mut data));
+                        black_box(data);
+                    });
+                },
+            );
+        }
+    }
+
+    // Accuracy comparisons for new f16 radix entrypoints against f64 selector reference.
+    for len in [64usize, 256, 1024] {
+        let input = signal_f16(len);
+        if len.is_power_of_two() && (len.trailing_zeros() % 3 == 0) {
+            group.bench_with_input(
+                BenchmarkId::new("accuracy_f16_radix8_vs_f64", len),
+                &input,
+                |bench, input| {
+                    bench.iter(|| black_box(max_abs_err_f16_vs_f64(input, radix8::forward_inplace_f16)));
+                },
+            );
+        }
+        if len.is_power_of_two() && (len.trailing_zeros() % 4 == 0) {
+            group.bench_with_input(
+                BenchmarkId::new("accuracy_f16_radix16_vs_f64", len),
+                &input,
+                |bench, input| {
+                    bench.iter(|| black_box(max_abs_err_f16_vs_f64(input, radix16::forward_inplace_f16)));
+                },
+            );
+        }
+        if len.is_power_of_two() && (len.trailing_zeros() % 5 == 0) {
+            group.bench_with_input(
+                BenchmarkId::new("accuracy_f16_radix32_vs_f64", len),
+                &input,
+                |bench, input| {
+                    bench.iter(|| black_box(max_abs_err_f16_vs_f64(input, radix32::forward_inplace_f16)));
+                },
+            );
+        }
+        if len.is_power_of_two() && (len.trailing_zeros() % 6 == 0) {
+            group.bench_with_input(
+                BenchmarkId::new("accuracy_f16_radix64_vs_f64", len),
+                &input,
+                |bench, input| {
+                    bench.iter(|| black_box(max_abs_err_f16_vs_f64(input, radix64::forward_inplace_f16)));
+                },
+            );
+        }
     }
 
     group.finish();

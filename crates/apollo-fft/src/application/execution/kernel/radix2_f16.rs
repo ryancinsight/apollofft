@@ -36,6 +36,8 @@
 
 use half::f16;
 use rayon::prelude::*;
+use super::radix_permute::bit_reverse_permute;
+use super::twiddle_table::build_twiddle_table;
 
 /// Minimum transform size for enabling stage-level Rayon MIMD chunking.
 ///
@@ -87,71 +89,20 @@ impl Cf16 {
 
 /// Build contiguous per-stage forward twiddle table stored as `Cf16`.
 ///
-/// Twiddles are computed at f64 precision and rounded to f16 on store.
-/// Stage s (group length `len = 2^s`) occupies `half = len/2` entries at
-/// base position `2^(s-1) - 1`. Total length = N − 1 entries.
+/// Delegates to the generic SSOT in `twiddle_table`. Twiddles are computed
+/// at f64 precision and rounded to f16 on store.
 pub fn build_forward_twiddle_table_f16(n: usize) -> Vec<Cf16> {
-    debug_assert!(n.is_power_of_two());
-    if n <= 1 {
-        return Vec::new();
-    }
-    let log_n = n.trailing_zeros() as usize;
-    let mut table = Vec::with_capacity(n - 1);
-    let mut len = 2usize;
-    for _ in 0..log_n {
-        let half = len >> 1;
-        for j in 0..half {
-            let a = -std::f64::consts::TAU * j as f64 / len as f64;
-            table.push(Cf16::from_f32_pair(a.cos() as f32, a.sin() as f32));
-        }
-        len <<= 1;
-    }
-    table
+    build_twiddle_table(n, -1.0)
 }
 
 /// Build contiguous per-stage inverse twiddle table stored as `Cf16`.
 ///
-/// Identical layout to the forward table but with positive exponent sign
-/// (exp(+2πi·j/len) for each twiddle position j, len).
+/// Identical layout to the forward table but with positive exponent sign.
 pub fn build_inverse_twiddle_table_f16(n: usize) -> Vec<Cf16> {
-    debug_assert!(n.is_power_of_two());
-    if n <= 1 {
-        return Vec::new();
-    }
-    let log_n = n.trailing_zeros() as usize;
-    let mut table = Vec::with_capacity(n - 1);
-    let mut len = 2usize;
-    for _ in 0..log_n {
-        let half = len >> 1;
-        for j in 0..half {
-            let a = std::f64::consts::TAU * j as f64 / len as f64;
-            table.push(Cf16::from_f32_pair(a.cos() as f32, a.sin() as f32));
-        }
-        len <<= 1;
-    }
-    table
+    build_twiddle_table(n, 1.0)
 }
 
 // ── Bit-reversal permutation ──────────────────────────────────────────────────
-
-fn bit_reverse_permutation_f16(data: &mut [Cf16]) {
-    let n = data.len();
-    if n <= 1 {
-        return;
-    }
-    let mut j = 0usize;
-    for i in 1..n {
-        let mut bit = n >> 1;
-        while j & bit != 0 {
-            j ^= bit;
-            bit >>= 1;
-        }
-        j ^= bit;
-        if i < j {
-            data.swap(i, j);
-        }
-    }
-}
 
 // ── Scalar butterfly ──────────────────────────────────────────────────────────
 
@@ -198,7 +149,7 @@ fn process_stage_chunk_scalar(chunk: &mut [Cf16], stage_tw: &[Cf16]) {
 
 fn run_butterfly_stages_f16_scalar(data: &mut [Cf16], twiddles: &[Cf16]) {
     let n = data.len();
-    bit_reverse_permutation_f16(data);
+    bit_reverse_permute(data);
 
     // Stage 1 (len=2): W_2^0 = 1 for every butterfly — pure add/sub.
     if n >= RAYON_THRESHOLD {
@@ -318,7 +269,7 @@ unsafe fn process_stage_chunk_avx2(chunk: &mut [Cf16], stage_tw: &[Cf16]) {
 #[target_feature(enable = "avx,f16c,fma")]
 unsafe fn run_butterfly_stages_f16_avx2(data: &mut [Cf16], twiddles: &[Cf16]) {
     let n = data.len();
-    bit_reverse_permutation_f16(data);
+    bit_reverse_permute(data);
 
     // Stage 1 (len=2): W_2^0 = 1, scalar (2 elements per chunk, SIMD overhead not worth it).
     if n >= RAYON_THRESHOLD {
@@ -391,6 +342,29 @@ pub fn forward_inplace_f16_with_twiddles(data: &mut [Cf16], twiddles: &[Cf16]) {
     }
     debug_assert!(data.len().is_power_of_two(), "radix-2 f16 requires power-of-2 length");
     run_butterfly_stages_f16(data, twiddles);
+}
+
+/// Inverse FFT using a precomputed contiguous per-stage twiddle table (unnormalized).
+pub fn inverse_inplace_unnorm_f16_with_twiddles(data: &mut [Cf16], twiddles: &[Cf16]) {
+    if data.len() <= 1 {
+        return;
+    }
+    debug_assert!(data.len().is_power_of_two(), "radix-2 f16 requires power-of-2 length");
+    run_butterfly_stages_f16(data, twiddles);
+}
+
+/// Inverse FFT using a precomputed contiguous per-stage twiddle table, normalized by 1/N.
+pub fn inverse_inplace_f16_with_twiddles(data: &mut [Cf16], twiddles: &[Cf16]) {
+    if data.len() <= 1 {
+        return;
+    }
+    debug_assert!(data.len().is_power_of_two(), "radix-2 f16 requires power-of-2 length");
+    run_butterfly_stages_f16(data, twiddles);
+    let inv_n = 1.0f32 / data.len() as f32;
+    for c in data.iter_mut() {
+        let (r, i) = c.to_f32_pair();
+        *c = Cf16::from_f32_pair(r * inv_n, i * inv_n);
+    }
 }
 
 /// Iterative radix-2 DIT inverse FFT on `Cf16` data, normalized by 1/N.
