@@ -23,14 +23,9 @@ thiserror = "1.0"
 approx = "0.5"
 criterion = { workspace = true }
 proptest = "1.6"
-rustfft = { workspace = true }
 
 [[bench]]
 name = "kernel_strategy"
-harness = false
-
-[[bench]]
-name = "vs_rustfft"
 harness = false
 
 [lints]

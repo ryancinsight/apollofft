@@ -1,5 +1,12 @@
 //! Criterion benchmarks comparing Apollo FFT against RustFFT.
 //!
+//! Gated on the `external-references` feature of `apollo-validation`, which
+//! makes `rustfft` an explicit optional dependency.  Run with:
+//!
+//! ```text
+//! cargo bench -p apollo-validation --features external-references --bench vs_rustfft
+//! ```
+//!
 //! Both implementations operate on `Complex<f64>` (f64) and `Complex<f32>` (f32)
 //! in-place buffers.  RustFFT planning is performed once outside the measured
 //! loop — matching production usage where a plan is reused across many transforms.
@@ -10,6 +17,7 @@
 //! - Power-of-two (radix path): 64, 256, 1024, 4096, 16384, 65536, 262144
 //! - Arbitrary/non-power-of-two (Bluestein path): 100, 1000, 10000
 
+#![cfg(feature = "external-references")]
 #![allow(missing_docs)]
 
 use apollo_fft::application::execution::kernel::{fft_forward_32, fft_forward_64};
@@ -17,7 +25,7 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use num_complex::{Complex32, Complex64};
 use rustfft::FftPlanner;
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────────────
 
 fn signal_f64(len: usize) -> Vec<Complex64> {
     (0..len)
@@ -44,8 +52,6 @@ fn bench_f64(c: &mut Criterion) {
     const ARB: &[usize] = &[100, 1_000, 10_000];
 
     let mut group = c.benchmark_group("apollo_vs_rustfft_f64");
-    // Criterion sample size: keep default (100) for small sizes; reduce for
-    // large so wall-time stays reasonable.
     group.sample_size(50);
 
     for &len in POT.iter().chain(ARB.iter()) {
@@ -64,7 +70,7 @@ fn bench_f64(c: &mut Criterion) {
             },
         );
 
-        // RustFFT — plan once, process many.  scratch buffer reused per iter.
+        // RustFFT — plan once, process many.  Scratch buffer reused per iter.
         {
             let mut planner: FftPlanner<f64> = FftPlanner::new();
             let fft = planner.plan_fft_forward(len);
@@ -72,7 +78,7 @@ fn bench_f64(c: &mut Criterion) {
                 rustfft::num_complex::Complex::new(0.0_f64, 0.0_f64);
                 fft.get_inplace_scratch_len()
             ];
-            // Convert apollo Complex64 → rustfft Complex<f64> (same ABI, different type path).
+            // rustfft::num_complex::Complex<f64> has the same ABI as num_complex::Complex64.
             let input_rft: Vec<rustfft::num_complex::Complex<f64>> = input
                 .iter()
                 .map(|c| rustfft::num_complex::Complex::new(c.re, c.im))
