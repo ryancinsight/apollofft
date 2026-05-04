@@ -176,14 +176,7 @@ pub fn forward_inplace_32(data: &mut [Complex32]) {
         radix2::forward_inplace_32(data);
         return;
     }
-    let mut tmp: Vec<Complex64> = data
-        .iter()
-        .map(|&c| Complex64::new(c.re as f64, c.im as f64))
-        .collect();
-    forward_inplace_64(&mut tmp);
-    for (c32, c64) in data.iter_mut().zip(tmp.iter()) {
-        *c32 = Complex32::new(c64.re as f32, c64.im as f32);
-    }
+    bluestein_via_f64(data, forward_inplace_64);
 }
 
 /// In-place unnormalized inverse Bluestein chirp-Z transform for `Complex32`.
@@ -199,14 +192,7 @@ pub fn inverse_inplace_unnorm_32(data: &mut [Complex32]) {
         radix2::inverse_inplace_unnorm_32(data);
         return;
     }
-    let mut tmp: Vec<Complex64> = data
-        .iter()
-        .map(|&c| Complex64::new(c.re as f64, c.im as f64))
-        .collect();
-    inverse_inplace_unnorm_64(&mut tmp);
-    for (c32, c64) in data.iter_mut().zip(tmp.iter()) {
-        *c32 = Complex32::new(c64.re as f32, c64.im as f32);
-    }
+    bluestein_via_f64(data, inverse_inplace_unnorm_64);
 }
 
 /// In-place normalized inverse Bluestein chirp-Z transform for `Complex32`.
@@ -215,6 +201,22 @@ pub fn inverse_inplace_unnorm_32(data: &mut [Complex32]) {
 pub fn inverse_inplace_32(data: &mut [Complex32]) {
     inverse_inplace_unnorm_32(data);
     normalize_inplace(data, 1.0f32 / data.len() as f32);
+}
+
+/// Promote `data` to `Complex64`, apply `op`, and demote back.
+///
+/// SSOT for the upcast-run-f64-downcast pattern shared by the three f32 Bluestein entry
+/// points. Allocates exactly one temporary buffer of length `data.len()`.
+#[inline]
+fn bluestein_via_f64<F: Fn(&mut [Complex64])>(data: &mut [Complex32], op: F) {
+    let mut buf: Vec<Complex64> = data
+        .iter()
+        .map(|c| Complex64::new(c.re as f64, c.im as f64))
+        .collect();
+    op(&mut buf);
+    for (dst, src) in data.iter_mut().zip(buf.iter()) {
+        *dst = Complex32::new(src.re as f32, src.im as f32);
+    }
 }
 
 #[cfg(test)]

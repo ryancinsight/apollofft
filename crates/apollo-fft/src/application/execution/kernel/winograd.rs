@@ -166,58 +166,31 @@ pub(crate) fn dft8<C: WinogradComplex>(data: &mut [C; 8], inverse: bool) {
 /// Precomputed forward twiddle factors for the 16-point DFT stage.
 ///
 /// `W_16^k = exp(-2πi·k/16)` for `k = 0..7`.
-/// Stored as `(cos(2πk/16), -sin(2πk/16))`.
-/// Only k=0..7 are needed (k=0 is trivial; k=1..7 are non-trivial).
-fn twiddle16_fwd(k: usize) -> Complex64 {
-    // Exact values for 16th roots of unity.
-    match k {
-        0 => Complex64::new(1.0, 0.0),
-        1 => {
-            // cos(π/8), -sin(π/8)
-            let c = (2.0f64 + 2.0f64.sqrt()).sqrt() * 0.5;
-            let s = (2.0f64 - 2.0f64.sqrt()).sqrt() * 0.5;
-            Complex64::new(c, -s)
-        }
-        2 => {
-            // cos(π/4), -sin(π/4)
-            const SQ2O2: f64 = std::f64::consts::FRAC_1_SQRT_2;
-            Complex64::new(SQ2O2, -SQ2O2)
-        }
-        3 => {
-            // cos(3π/8), -sin(3π/8)
-            let c = (2.0f64 - 2.0f64.sqrt()).sqrt() * 0.5;
-            let s = (2.0f64 + 2.0f64.sqrt()).sqrt() * 0.5;
-            Complex64::new(c, -s)
-        }
-        4 => Complex64::new(0.0, -1.0),
-        5 => {
-            let c = (2.0f64 - 2.0f64.sqrt()).sqrt() * 0.5;
-            let s = (2.0f64 + 2.0f64.sqrt()).sqrt() * 0.5;
-            Complex64::new(-c, -s)
-        }
-        6 => {
-            const SQ2O2: f64 = std::f64::consts::FRAC_1_SQRT_2;
-            Complex64::new(-SQ2O2, -SQ2O2)
-        }
-        7 => {
-            let c = (2.0f64 + 2.0f64.sqrt()).sqrt() * 0.5;
-            let s = (2.0f64 - 2.0f64.sqrt()).sqrt() * 0.5;
-            Complex64::new(-c, -s)
-        }
-        _ => unreachable!(),
-    }
-}
-
-fn twiddle16_inv(k: usize) -> Complex64 {
-    let w = twiddle16_fwd(k);
-    Complex64::new(w.re, -w.im)
-}
+/// Precomputed constants eliminate 7 runtime branch evaluations and all sqrt
+/// arithmetic from the hot inner loop of every `dft16` call.
+///
+/// Values: `(cos(2πk/16), -sin(2πk/16))` for k = 0..8 (k=8 not needed; split at half).
+const TWIDDLE16_FWD_64: [Complex64; 8] = [
+    Complex64::new(1.0,                       0.0),
+    Complex64::new(0.9238795325112867,  -0.3826834323650898),
+    Complex64::new(0.7071067811865476,  -0.7071067811865475),
+    Complex64::new(0.3826834323650898,  -0.9238795325112867),
+    Complex64::new(0.0,                 -1.0),
+    Complex64::new(-0.3826834323650898, -0.9238795325112867),
+    Complex64::new(-0.7071067811865476, -0.7071067811865475),
+    Complex64::new(-0.9238795325112867, -0.3826834323650898),
+];
 
 /// Generic twiddle factor for DFT-16, cast to element precision via `WinogradComplex::from_f64_pair`.
 #[inline(always)]
 fn twiddle16<C: WinogradComplex>(k: usize, inverse: bool) -> C {
-    let w = if inverse { twiddle16_inv(k) } else { twiddle16_fwd(k) };
-    C::from_f64_pair(w.re, w.im)
+    debug_assert!(k < 8, "twiddle16 index must be 0..7, got {k}");
+    let w = TWIDDLE16_FWD_64[k];
+    if inverse {
+        C::from_f64_pair(w.re, -w.im)
+    } else {
+        C::from_f64_pair(w.re, w.im)
+    }
 }
 
 /// In-place Winograd DFT-16.
