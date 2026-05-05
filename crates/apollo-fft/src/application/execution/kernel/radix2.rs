@@ -95,14 +95,12 @@ use num_complex::{Complex32, Complex64};
 /// (static cfg check, zero runtime overhead with `target-cpu=native`).
 #[inline]
 fn butterfly_f64(lo: &mut [Complex64], hi: &mut [Complex64], tw: &[Complex64]) {
-    #[cfg(all(
-        target_arch = "x86_64",
-        target_feature = "avx",
-        target_feature = "fma"
-    ))]
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
     {
         // SAFETY: cfg guard ensures AVX and FMA are available at compile time.
-        unsafe { return butterfly_f64_avx_fma(lo, hi, tw); }
+        unsafe {
+            return butterfly_f64_avx_fma(lo, hi, tw);
+        }
     }
     #[allow(unreachable_code)]
     butterfly_f64_scalar(lo, hi, tw);
@@ -114,13 +112,11 @@ fn butterfly_f64(lo: &mut [Complex64], hi: &mut [Complex64], tw: &[Complex64]) {
 /// (used to fuse the 1/N normalization into the final inverse stage).
 #[inline]
 fn butterfly_f64_scaled(lo: &mut [Complex64], hi: &mut [Complex64], tw: &[Complex64], scale: f64) {
-    #[cfg(all(
-        target_arch = "x86_64",
-        target_feature = "avx",
-        target_feature = "fma"
-    ))]
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
     {
-        unsafe { return butterfly_f64_scaled_avx_fma(lo, hi, tw, scale); }
+        unsafe {
+            return butterfly_f64_scaled_avx_fma(lo, hi, tw, scale);
+        }
     }
     #[allow(unreachable_code)]
     butterfly_f64_scaled_scalar(lo, hi, tw, scale);
@@ -131,13 +127,11 @@ fn butterfly_f64_scaled(lo: &mut [Complex64], hi: &mut [Complex64], tw: &[Comple
 /// Dispatches to AVX+FMA for f32 when the build target supports it.
 #[inline]
 fn butterfly_f32(lo: &mut [Complex32], hi: &mut [Complex32], tw: &[Complex32]) {
-    #[cfg(all(
-        target_arch = "x86_64",
-        target_feature = "avx",
-        target_feature = "fma"
-    ))]
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
     {
-        unsafe { return butterfly_f32_avx_fma(lo, hi, tw); }
+        unsafe {
+            return butterfly_f32_avx_fma(lo, hi, tw);
+        }
     }
     #[allow(unreachable_code)]
     butterfly_f32_scalar(lo, hi, tw);
@@ -146,13 +140,11 @@ fn butterfly_f32(lo: &mut [Complex32], hi: &mut [Complex32], tw: &[Complex32]) {
 /// Scaled f32 butterfly (fuse 1/N into final inverse stage).
 #[inline]
 fn butterfly_f32_scaled(lo: &mut [Complex32], hi: &mut [Complex32], tw: &[Complex32], scale: f32) {
-    #[cfg(all(
-        target_arch = "x86_64",
-        target_feature = "avx",
-        target_feature = "fma"
-    ))]
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
     {
-        unsafe { return butterfly_f32_scaled_avx_fma(lo, hi, tw, scale); }
+        unsafe {
+            return butterfly_f32_scaled_avx_fma(lo, hi, tw, scale);
+        }
     }
     #[allow(unreachable_code)]
     butterfly_f32_scaled_scalar(lo, hi, tw, scale);
@@ -316,8 +308,8 @@ unsafe fn butterfly_f64_scaled_avx_fma(
 /// Caller must guarantee AVX and FMA are available (enforced by cfg guard).
 unsafe fn butterfly_f32_avx_fma(lo: &mut [Complex32], hi: &mut [Complex32], tw: &[Complex32]) {
     use std::arch::x86_64::{
-        _mm256_add_ps, _mm256_fmaddsub_ps, _mm256_loadu_ps, _mm256_movehdup_ps,
-        _mm256_moveldup_ps, _mm256_mul_ps, _mm256_permute_ps, _mm256_storeu_ps, _mm256_sub_ps,
+        _mm256_add_ps, _mm256_fmaddsub_ps, _mm256_loadu_ps, _mm256_movehdup_ps, _mm256_moveldup_ps,
+        _mm256_mul_ps, _mm256_permute_ps, _mm256_storeu_ps, _mm256_sub_ps,
     };
     debug_assert_eq!(lo.len(), hi.len());
     debug_assert_eq!(lo.len(), tw.len());
@@ -359,9 +351,8 @@ unsafe fn butterfly_f32_scaled_avx_fma(
     scale: f32,
 ) {
     use std::arch::x86_64::{
-        _mm256_add_ps, _mm256_fmaddsub_ps, _mm256_loadu_ps, _mm256_movehdup_ps,
-        _mm256_moveldup_ps, _mm256_mul_ps, _mm256_permute_ps, _mm256_set1_ps, _mm256_storeu_ps,
-        _mm256_sub_ps,
+        _mm256_add_ps, _mm256_fmaddsub_ps, _mm256_loadu_ps, _mm256_movehdup_ps, _mm256_moveldup_ps,
+        _mm256_mul_ps, _mm256_permute_ps, _mm256_set1_ps, _mm256_storeu_ps, _mm256_sub_ps,
     };
     let scale_v = _mm256_set1_ps(scale);
     let count = lo.len();
@@ -378,8 +369,14 @@ unsafe fn butterfly_f32_scaled_avx_fma(
         let w_im = _mm256_movehdup_ps(w);
         let v_swap = _mm256_permute_ps(v, 0xB1);
         let tw_vec = _mm256_fmaddsub_ps(w_re, v, _mm256_mul_ps(w_im, v_swap));
-        _mm256_storeu_ps(lo_f.add(f), _mm256_mul_ps(_mm256_add_ps(u, tw_vec), scale_v));
-        _mm256_storeu_ps(hi_f.add(f), _mm256_mul_ps(_mm256_sub_ps(u, tw_vec), scale_v));
+        _mm256_storeu_ps(
+            lo_f.add(f),
+            _mm256_mul_ps(_mm256_add_ps(u, tw_vec), scale_v),
+        );
+        _mm256_storeu_ps(
+            hi_f.add(f),
+            _mm256_mul_ps(_mm256_sub_ps(u, tw_vec), scale_v),
+        );
     }
     let tail = batches * 4;
     butterfly_f32_scaled_scalar(&mut lo[tail..], &mut hi[tail..], &tw[tail..], scale);

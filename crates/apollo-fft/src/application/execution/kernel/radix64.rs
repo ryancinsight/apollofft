@@ -12,8 +12,8 @@
 //! - Winograd, S. (1978). On computing the discrete Fourier transform.
 //!   *Mathematics of Computation*, 32(141), 175–199.
 
-use super::{f16_bridge, radix2, winograd};
 use super::radix2_f16::Cf16;
+use super::{f16_bridge, radix2, winograd};
 use num_complex::{Complex32, Complex64};
 use rayon::prelude::*;
 
@@ -162,14 +162,18 @@ pub fn inverse_inplace_32(data: &mut [Complex32]) {
 
 /// Forward FFT (f16 storage) for power-of-sixty-four lengths via f32 upcast.
 pub fn forward_inplace_f16(data: &mut [Cf16]) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     debug_assert!(is_power_of_sixty_four(data.len()));
     f16_bridge::run_f16_via_f32(data, forward_inplace_32);
 }
 
 /// Forward FFT (f16 storage) for power-of-sixty-four lengths using caller-provided twiddles.
 pub fn forward_inplace_f16_with_twiddles(data: &mut [Cf16], twiddles: &[Cf16]) {
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     debug_assert!(is_power_of_sixty_four(data.len()));
     f16_bridge::run_f16_via_f32_with_twiddles(data, twiddles, forward_inplace_32_with_twiddles);
 }

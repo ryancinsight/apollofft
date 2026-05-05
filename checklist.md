@@ -1,4 +1,19 @@
 # Apollo Checklist
+## Closure XLII — FFT RustFFT Comparator and Short-Winograd Selector Fast Path [patch]
+Sprint target version: 0.13.3
+
+- [x] Add `rustfft` as an `apollo-fft` dev-dependency for direct Criterion comparison.
+- [x] Add `rustfft_forward_inplace` benchmark rows using a planned RustFFT instance.
+- [x] Add Apollo allocation-free rows for caller-supplied twiddle execution.
+- [x] Add exact Winograd short-kernel benchmark row for 64-point transforms.
+- [x] Replace f16 benchmark references to absent radix16/radix32/radix64 APIs with exported f16 kernels.
+- [x] Dispatch exact f64/f32 lengths 2/4/8/16/32/64 through Winograd short kernels in `mixed_radix`.
+- [x] Preserve staged radix dispatch for larger power-of-two transforms and Bluestein dispatch for non-power-of-two transforms.
+- [x] `cargo test -p apollo-fft`: 124 passed, 0 failed.
+- [x] `cargo bench -p apollo-fft --bench kernel_strategy --no-run`: passed.
+- [x] Focused Criterion evidence captured for N=16/32/64 and N=256 against RustFFT.
+- [x] Sync PM artifacts: CHANGELOG.md, backlog.md, checklist.md, gap_audit.md.
+
 ## Closure XLI — DHT CPU 2D/3D; FWHT CPU 2D/3D; FFT fftfreq/rfftfreq/fftshift/ifftshift [minor]
 Sprint target version: 0.13.2
 

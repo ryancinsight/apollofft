@@ -27,12 +27,14 @@
 use super::f16_bridge::run_f16_via_f32;
 use super::radix2_f16::Cf16;
 use super::radix_shape::{is_power_of_eight, is_power_of_four};
-use super::{bluestein, radix2, radix2_f16, radix4, radix8};
+use super::radix_stage::normalize_inplace;
+use super::{bluestein, radix2, radix2_f16, radix4, radix8, winograd};
 use num_complex::{Complex32, Complex64};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::sync::Arc;
 
 // ── Global backing caches (cross-thread sharing, written once per size) ───────
@@ -166,7 +168,6 @@ pub(crate) fn cached_twiddle_inv_f16(n: usize) -> Arc<[Cf16]> {
         radix2_f16::build_inverse_twiddle_table_f16,
     )
 }
-
 // ── SSOT dispatch macro ───────────────────────────────────────────────────────
 
 /// Emit the dispatch body for a `_with_twiddles` function that is already
@@ -223,12 +224,119 @@ macro_rules! pow2_dispatch_no_r8 {
     }};
 }
 
+#[inline(always)]
+fn forward_short_winograd_64(data: &mut [Complex64]) -> bool {
+    match data.len() {
+        2 => {
+            let (left, right) = data.split_at_mut(1);
+            winograd::dft2_64(&mut left[0], &mut right[0]);
+            true
+        }
+        4 => {
+            winograd::dft4_64(data.try_into().expect("length checked"), false);
+            true
+        }
+        8 => {
+            winograd::dft8_64(data.try_into().expect("length checked"), false);
+            true
+        }
+        16 => {
+            winograd::dft16_64(data.try_into().expect("length checked"), false);
+            true
+        }
+        32 => {
+            winograd::dft32_64(data.try_into().expect("length checked"), false);
+            true
+        }
+        64 => {
+            winograd::dft64_64(data.try_into().expect("length checked"), false);
+            true
+        }
+        _ => false,
+    }
+}
+
+#[inline(always)]
+fn inverse_short_winograd_64(data: &mut [Complex64], normalize: bool) -> bool {
+    match data.len() {
+        2 => {
+            let (left, right) = data.split_at_mut(1);
+            winograd::dft2_64(&mut left[0], &mut right[0]);
+        }
+        4 => winograd::dft4_64(data.try_into().expect("length checked"), true),
+        8 => winograd::dft8_64(data.try_into().expect("length checked"), true),
+        16 => winograd::dft16_64(data.try_into().expect("length checked"), true),
+        32 => winograd::dft32_64(data.try_into().expect("length checked"), true),
+        64 => winograd::dft64_64(data.try_into().expect("length checked"), true),
+        _ => return false,
+    }
+    if normalize {
+        normalize_inplace(data, 1.0 / data.len() as f64);
+    }
+    true
+}
+
+#[inline(always)]
+fn forward_short_winograd_32(data: &mut [Complex32]) -> bool {
+    match data.len() {
+        2 => {
+            let (left, right) = data.split_at_mut(1);
+            winograd::dft2_32(&mut left[0], &mut right[0]);
+            true
+        }
+        4 => {
+            winograd::dft4_32(data.try_into().expect("length checked"), false);
+            true
+        }
+        8 => {
+            winograd::dft8_32(data.try_into().expect("length checked"), false);
+            true
+        }
+        16 => {
+            winograd::dft16_32(data.try_into().expect("length checked"), false);
+            true
+        }
+        32 => {
+            winograd::dft32_32(data.try_into().expect("length checked"), false);
+            true
+        }
+        64 => {
+            winograd::dft64_32(data.try_into().expect("length checked"), false);
+            true
+        }
+        _ => false,
+    }
+}
+
+#[inline(always)]
+fn inverse_short_winograd_32(data: &mut [Complex32], normalize: bool) -> bool {
+    match data.len() {
+        2 => {
+            let (left, right) = data.split_at_mut(1);
+            winograd::dft2_32(&mut left[0], &mut right[0]);
+        }
+        4 => winograd::dft4_32(data.try_into().expect("length checked"), true),
+        8 => winograd::dft8_32(data.try_into().expect("length checked"), true),
+        16 => winograd::dft16_32(data.try_into().expect("length checked"), true),
+        32 => winograd::dft32_32(data.try_into().expect("length checked"), true),
+        64 => winograd::dft64_32(data.try_into().expect("length checked"), true),
+        _ => return false,
+    }
+    if normalize {
+        normalize_inplace(data, 1.0f32 / data.len() as f32);
+    }
+    true
+}
+
 // ── f64 ───────────────────────────────────────────────────────────────────────
 
 /// In-place forward FFT (unnormalized, f64) with optional precomputed twiddles.
 #[inline]
 pub fn forward_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: Option<&[Complex64]>) {
     if data.len() <= 1 {
+        return;
+    }
+    if forward_short_winograd_64(data) {
         return;
     }
     if data.len().is_power_of_two() {
@@ -262,6 +370,9 @@ pub fn inverse_inplace_unnorm_64_with_twiddles(
     if data.len() <= 1 {
         return;
     }
+    if inverse_short_winograd_64(data, false) {
+        return;
+    }
     if data.len().is_power_of_two() {
         pow2_dispatch!(
             data,
@@ -288,6 +399,9 @@ pub fn inverse_inplace_unnorm_64_with_twiddles(
 #[inline]
 pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: Option<&[Complex64]>) {
     if data.len() <= 1 {
+        return;
+    }
+    if inverse_short_winograd_64(data, true) {
         return;
     }
     if data.len().is_power_of_two() {
@@ -359,6 +473,9 @@ pub fn forward_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: Option
     if data.len() <= 1 {
         return;
     }
+    if forward_short_winograd_32(data) {
+        return;
+    }
     if data.len().is_power_of_two() {
         pow2_dispatch!(
             data,
@@ -390,6 +507,9 @@ pub fn inverse_inplace_unnorm_32_with_twiddles(
     if data.len() <= 1 {
         return;
     }
+    if inverse_short_winograd_32(data, false) {
+        return;
+    }
     if data.len().is_power_of_two() {
         pow2_dispatch!(
             data,
@@ -416,6 +536,9 @@ pub fn inverse_inplace_unnorm_32_with_twiddles(
 #[inline]
 pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: Option<&[Complex32]>) {
     if data.len() <= 1 {
+        return;
+    }
+    if inverse_short_winograd_32(data, true) {
         return;
     }
     if data.len().is_power_of_two() {

@@ -8,6 +8,11 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ## [Unreleased]
 ### Added
+- `apollo-fft` / `benches/kernel_strategy.rs`:
+  - Added planned RustFFT comparator rows (`rustfft_forward_inplace`) for direct throughput
+    comparison against Apollo kernels.
+  - Added allocation-free Apollo rows for caller-supplied twiddle execution.
+  - Added direct `winograd_dft64` benchmark coverage for fixed-size short-kernel evidence.
 - `apollo-fft` / `application/execution/kernel/winograd.rs` (new module):
   - Algebraic Winograd short-DFT kernels for sizes 2, 4, 8, 16, 32, and 64 (f64 and f32).
   - DFT-2: 0 multiplications (pure add/subtract butterfly).
@@ -21,6 +26,14 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
   - 23 unit tests covering forward, inverse, roundtrip, and boundary cases for all sizes.
 
 ### Changed
+- `apollo-fft` / `application/execution/kernel/mixed_radix.rs`:
+  - Exact f64/f32 lengths 2, 4, 8, 16, 32, and 64 now dispatch through Winograd short-DFT
+    kernels before staged radix execution.
+  - Larger power-of-two lengths continue through the existing staged radix selector, and
+    non-power-of-two lengths continue through Bluestein.
+- `apollo-fft` / `benches/kernel_strategy.rs`:
+  - Corrected f16 benchmark coverage to exported f16 kernels only (`radix2_f16`, `radix4`,
+    `radix8`, and auto-selector).
 - `apollo-fft` / `application/execution/kernel/mod.rs`:
   - Registered `pub mod winograd;` in the kernel module tree.
 - `apollo-fft` / `application/execution/kernel/radix8.rs`:
@@ -78,6 +91,22 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
     auto-selector throughput on both power-of-two and non-power-of-two lengths.
 
 ### Verification
+- `cargo test -p apollo-fft`: **124/124 tests pass**.
+- `cargo bench -p apollo-fft --bench kernel_strategy --no-run`: benchmark harness compiles.
+- `cargo bench -p apollo-fft --bench kernel_strategy -- "fft_kernel_strategy/(apollo_auto_selector_precomputed_twiddles|rustfft_forward_inplace)/(16|32|64|256)" --sample-size 10 --warm-up-time 1 --measurement-time 1`:
+  - `apollo_auto_selector_precomputed_twiddles/16`: 65.111 ns median.
+  - `rustfft_forward_inplace/16`: 42.777 ns median.
+  - `apollo_auto_selector_precomputed_twiddles/32`: 115.54 ns median.
+  - `rustfft_forward_inplace/32`: 109.43 ns median.
+  - `apollo_auto_selector_precomputed_twiddles/64`: 241.74 ns median.
+  - `rustfft_forward_inplace/64`: 197.61 ns median.
+  - `apollo_auto_selector_precomputed_twiddles/256`: 949.09 ns median.
+  - `rustfft_forward_inplace/256`: 494.17 ns median.
+- `cargo bench -p apollo-fft --bench kernel_strategy -- "fft_kernel_strategy/(radix4_inplace_precomputed_twiddles|radix16_inplace_precomputed_twiddles|apollo_auto_selector_precomputed_twiddles|rustfft_forward_inplace)/256" --sample-size 10 --warm-up-time 1 --measurement-time 1`:
+  - `radix4_inplace_precomputed_twiddles/256`: 1.2513 µs median.
+  - `radix16_inplace_precomputed_twiddles/256`: 1.7692 µs median.
+  - `apollo_auto_selector_precomputed_twiddles/256`: 1.2361 µs median.
+  - `rustfft_forward_inplace/256`: 753.13 ns median.
 - `cargo test -p apollo-fft`: **112/112 tests pass** (includes mixed-precision non-power-of-two
   output-comparison and roundtrip regressions).
 - `cargo test -p apollo-fft -- winograd`: 25/25 Winograd unit tests pass.

@@ -212,27 +212,25 @@ fn winograd_r8_inplace_64(data: &mut [Complex64], twiddles: Option<&[Complex64]>
                         .zip(g6.par_iter_mut())
                         .zip(g7.par_iter_mut())
                         .zip(stage_slice.par_iter())
-                        .for_each(
-                            |(((((((  (a0, a1), a2), a3), a4), a5), a6), a7), step)| {
-                                let mut buf = [Complex64::new(0.0, 0.0); 8];
-                                buf[0] = *a0;
-                                let srcs = [*a1, *a2, *a3, *a4, *a5, *a6, *a7];
-                                let mut tw = *step;
-                                for p in 1..8usize {
-                                    buf[p] = winograd::apply_twiddle_64(srcs[p - 1], tw);
-                                    tw = winograd::apply_twiddle_64(tw, *step);
-                                }
-                                winograd::dft8_64(&mut buf, inverse);
-                                *a0 = buf[0];
-                                *a1 = buf[1];
-                                *a2 = buf[2];
-                                *a3 = buf[3];
-                                *a4 = buf[4];
-                                *a5 = buf[5];
-                                *a6 = buf[6];
-                                *a7 = buf[7];
-                            },
-                        );
+                        .for_each(|((((((((a0, a1), a2), a3), a4), a5), a6), a7), step)| {
+                            let mut buf = [Complex64::new(0.0, 0.0); 8];
+                            buf[0] = *a0;
+                            let srcs = [*a1, *a2, *a3, *a4, *a5, *a6, *a7];
+                            let mut tw = *step;
+                            for p in 1..8usize {
+                                buf[p] = winograd::apply_twiddle_64(srcs[p - 1], tw);
+                                tw = winograd::apply_twiddle_64(tw, *step);
+                            }
+                            winograd::dft8_64(&mut buf, inverse);
+                            *a0 = buf[0];
+                            *a1 = buf[1];
+                            *a2 = buf[2];
+                            *a3 = buf[3];
+                            *a4 = buf[4];
+                            *a5 = buf[5];
+                            *a6 = buf[6];
+                            *a7 = buf[7];
+                        });
                 }
             } else {
                 // No twiddle table: fall back to sequential (only hits _no variants).
@@ -293,27 +291,25 @@ fn winograd_r8_inplace_32(data: &mut [Complex32], twiddles: Option<&[Complex32]>
                         .zip(g6.par_iter_mut())
                         .zip(g7.par_iter_mut())
                         .zip(stage_slice.par_iter())
-                        .for_each(
-                            |(((((((  (a0, a1), a2), a3), a4), a5), a6), a7), step)| {
-                                let mut buf = [Complex32::new(0.0, 0.0); 8];
-                                buf[0] = *a0;
-                                let srcs = [*a1, *a2, *a3, *a4, *a5, *a6, *a7];
-                                let mut tw = *step;
-                                for p in 1..8usize {
-                                    buf[p] = winograd::apply_twiddle_32(srcs[p - 1], tw);
-                                    tw = winograd::apply_twiddle_32(tw, *step);
-                                }
-                                winograd::dft8_32(&mut buf, inverse);
-                                *a0 = buf[0];
-                                *a1 = buf[1];
-                                *a2 = buf[2];
-                                *a3 = buf[3];
-                                *a4 = buf[4];
-                                *a5 = buf[5];
-                                *a6 = buf[6];
-                                *a7 = buf[7];
-                            },
-                        );
+                        .for_each(|((((((((a0, a1), a2), a3), a4), a5), a6), a7), step)| {
+                            let mut buf = [Complex32::new(0.0, 0.0); 8];
+                            buf[0] = *a0;
+                            let srcs = [*a1, *a2, *a3, *a4, *a5, *a6, *a7];
+                            let mut tw = *step;
+                            for p in 1..8usize {
+                                buf[p] = winograd::apply_twiddle_32(srcs[p - 1], tw);
+                                tw = winograd::apply_twiddle_32(tw, *step);
+                            }
+                            winograd::dft8_32(&mut buf, inverse);
+                            *a0 = buf[0];
+                            *a1 = buf[1];
+                            *a2 = buf[2];
+                            *a3 = buf[3];
+                            *a4 = buf[4];
+                            *a5 = buf[5];
+                            *a6 = buf[6];
+                            *a7 = buf[7];
+                        });
                 }
             } else {
                 for chunk in data.chunks_exact_mut(len) {

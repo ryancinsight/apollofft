@@ -62,7 +62,9 @@ where
 {
     BLUESTEIN_SCRATCH_64.with(|map_cell| {
         let mut map = map_cell.borrow_mut();
-        let scratch = map.entry(m).or_insert_with(|| vec![Complex64::new(0.0, 0.0); m]);
+        let scratch = map
+            .entry(m)
+            .or_insert_with(|| vec![Complex64::new(0.0, 0.0); m]);
         if scratch.len() != m {
             scratch.resize(m, Complex64::new(0.0, 0.0));
         }
@@ -78,7 +80,9 @@ where
 {
     BLUESTEIN_SCRATCH_32.with(|map_cell| {
         let mut map = map_cell.borrow_mut();
-        let scratch = map.entry(m).or_insert_with(|| vec![Complex32::new(0.0, 0.0); m]);
+        let scratch = map
+            .entry(m)
+            .or_insert_with(|| vec![Complex32::new(0.0, 0.0); m]);
         if scratch.len() != m {
             scratch.resize(m, Complex32::new(0.0, 0.0));
         }
@@ -171,7 +175,10 @@ impl BluesteinPlan64 {
         assert_eq!(data.len(), self.n);
         assert_eq!(scratch_a.len(), self.m);
 
-        for (dst, (&x, &c)) in scratch_a[..self.n].iter_mut().zip(data.iter().zip(self.chirp.iter())) {
+        for (dst, (&x, &c)) in scratch_a[..self.n]
+            .iter_mut()
+            .zip(data.iter().zip(self.chirp.iter()))
+        {
             *dst = x * c;
         }
         if self.n < scratch_a.len() {
@@ -287,7 +294,10 @@ impl BluesteinPlan32 {
         assert_eq!(data.len(), self.n);
         assert_eq!(scratch_a.len(), self.m);
 
-        for (dst, (&x, &c)) in scratch_a[..self.n].iter_mut().zip(data.iter().zip(self.chirp.iter())) {
+        for (dst, (&x, &c)) in scratch_a[..self.n]
+            .iter_mut()
+            .zip(data.iter().zip(self.chirp.iter()))
+        {
             *dst = x * c;
         }
         if self.n < scratch_a.len() {

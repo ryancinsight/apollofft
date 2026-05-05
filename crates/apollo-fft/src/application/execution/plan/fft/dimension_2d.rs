@@ -29,13 +29,11 @@
 //! scattering them back.
 
 use crate::application::execution::kernel::mixed_radix::{
-    cached_twiddle_fwd_32, cached_twiddle_fwd_64, cached_twiddle_inv_32,
-    cached_twiddle_inv_64,
+    cached_twiddle_fwd_32, cached_twiddle_fwd_64, cached_twiddle_inv_32, cached_twiddle_inv_64,
 };
 use crate::application::execution::kernel::radix2::{
-    forward_inplace_32_with_twiddles,
-    forward_inplace_64_with_twiddles, inverse_inplace_32_with_twiddles,
-    inverse_inplace_64_with_twiddles,
+    forward_inplace_32_with_twiddles, forward_inplace_64_with_twiddles,
+    inverse_inplace_32_with_twiddles, inverse_inplace_64_with_twiddles,
 };
 use crate::application::execution::kernel::{
     fft_forward_32, fft_forward_64, fft_inverse_32, fft_inverse_64,
@@ -55,8 +53,8 @@ use crate::domain::metadata::shape::Shape2D;
 use half::f16;
 use ndarray::{Array2, Axis, Zip};
 use num_complex::{Complex32, Complex64};
-use std::sync::Arc;
 use rayon::prelude::*;
+use std::sync::Arc;
 
 /// Reusable 2D FFT plan.
 ///

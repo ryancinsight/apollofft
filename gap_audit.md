@@ -2,6 +2,10 @@
 
 ## Open Gaps
 
+- **FFT RustFFT parity**: allocation-free Apollo `mixed_radix` execution now has direct Criterion
+  comparator rows against planned RustFFT, but sampled N=64 and N=256 runs still show RustFFT faster
+  on the slice selector path. The fixed `[Complex64; 64]` Winograd kernel can beat RustFFT in a narrow
+  run, but the public slice selector has remaining dispatch/conversion/kernel-arithmetic overhead.
 - `GpuFft3dF16Native` Bluestein path on production hardware with non-power-of-two sizes: current test passes on dev hardware; production validation on adapters that expose `wgpu::Features::SHADER_F16` is pending.
 - Criterion buffer-reuse bench results on representative GPU hardware: allocation-vs-reuse speedup ratios for FFT/NUFFT/STFT/Radon WGPU benchmark suites are not yet recorded as numbers. Closure XXII added the manual self-hosted GPU workflow and runner script; the residual gap is the first benchmark execution on real labeled hardware and publication of the measured ratios.
 - **NUFFT 2D CPU**: `apollo-nufft` has 1D and 3D; 2D separable NUFFT not yet implemented.
@@ -44,6 +48,24 @@ by design and will not be implemented.
 | GPU FFT 1D/2D | ✗ | ✗ | ✗ | Open |
 
 ## Closed Gaps
+### Closure XLII — FFT RustFFT Comparator and Short-Winograd Selector Fast Path [patch]
+- **Gap**: `apollo-fft` benchmarks did not directly compare planned Apollo execution against planned
+  RustFFT, and short mixed-radix transforms still paid staged radix dispatch overhead where exact
+  Winograd kernels already existed.
+- **Closed by**:
+  - Added RustFFT as an `apollo-fft` dev-dependency and added planned `rustfft_forward_inplace`
+    Criterion rows.
+  - Added allocation-free Apollo benchmark rows using caller-supplied twiddle tables.
+  - Routed exact f64/f32 lengths 2, 4, 8, 16, 32, and 64 through Winograd short kernels in
+    `mixed_radix` before staged radix dispatch.
+  - Corrected f16 benchmark coverage to exported f16 public kernels only.
+- **Verification**:
+  - `cargo test -p apollo-fft`: 124 passed.
+  - `cargo bench -p apollo-fft --bench kernel_strategy --no-run`: passed.
+  - Focused Criterion N=64: `apollo_auto_selector_precomputed_twiddles/64` median 241.74 ns,
+    `rustfft_forward_inplace/64` median 197.61 ns after the selector fast path; residual parity gap
+    remains open.
+
 ### Closure XLI — DHT CPU 2D/3D; FWHT CPU 2D/3D; FFT fftfreq/rfftfreq/fftshift/ifftshift [minor]
 - **Gap**: DHT 2D/3D absent; FWHT 2D/3D absent; numpy-compatible fftfreq/rfftfreq/fftshift/ifftshift absent.
 - **Closed by**:

@@ -1,5 +1,16 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure XLII phase)
+- [x] [patch] Add RustFFT comparator coverage to `apollo-fft` kernel Criterion benchmarks.
+- [x] [patch] Add allocation-free benchmark rows for Apollo caller-supplied twiddle paths.
+- [x] [patch] Route exact 2/4/8/16/32/64-point f64 and f32 mixed-radix transforms through
+  Winograd short-DFT kernels before staged radix dispatch.
+- [x] [patch] Remove f16 benchmark references to nonexistent radix16/radix32/radix64 public entrypoints;
+  benchmark actual f16 surfaces (`radix2_f16`, `radix4`, `radix8`, auto-selector).
+- Final state: `cargo test -p apollo-fft` 124 passed; `cargo bench -p apollo-fft --bench kernel_strategy --no-run` passed;
+  post-rebase focused Criterion run measured `apollo_auto_selector_precomputed_twiddles/64` at 241.74 ns and
+  `rustfft_forward_inplace/64` at 197.61 ns, leaving RustFFT parity as an open kernel-arithmetic gap.
+
 ## Closed in this sprint (Closure XLI phase)
 - [x] [minor] Add separable CPU 2D DHT: `DhtPlan::forward_2d`, `inverse_2d` (N×N, involutory scaling 1/N²).
 - [x] [minor] Add separable CPU 3D DHT: `DhtPlan::forward_3d`, `inverse_3d` (N×N×N, involutory scaling 1/N³).

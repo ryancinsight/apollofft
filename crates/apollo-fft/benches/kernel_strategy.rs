@@ -3,11 +3,12 @@
 #![allow(missing_docs)]
 
 use apollo_fft::application::execution::kernel::{
-    bluestein, direct, fft_forward_64, fft_forward_f16, mixed_radix, radix16, radix2, radix32,
-    radix4, radix64, radix8, Cf16,
+    bluestein, direct, fft_forward_64, fft_forward_f16, mixed_radix, radix16, radix2, radix2_f16,
+    radix32, radix4, radix64, radix8, winograd, Cf16,
 };
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
+use rustfft::{num_complex::Complex as RustFftComplex, FftPlanner};
 
 /// Generate a deterministic complex sinusoidal test signal of the given length.
 fn signal(len: usize) -> Vec<Complex64> {
@@ -48,12 +49,143 @@ fn max_abs_err_f16_vs_f64(input: &[Cf16], f16_kernel: fn(&mut [Cf16])) -> f64 {
         .fold(0.0f64, f64::max)
 }
 
+fn bench_inplace_apollo(
+    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    name: &str,
+    len: usize,
+    input: &[Complex64],
+    kernel: fn(&mut [Complex64]),
+) {
+    group.bench_with_input(BenchmarkId::new(name, len), input, |bench, input| {
+        bench.iter_batched_ref(
+            || input.to_vec(),
+            |data| {
+                kernel(black_box(data.as_mut_slice()));
+                black_box(data);
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+}
+
+fn bench_inplace_rustfft(
+    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    len: usize,
+    input: &[Complex64],
+) {
+    let mut planner = FftPlanner::<f64>::new();
+    let fft = planner.plan_fft_forward(len);
+    group.bench_with_input(
+        BenchmarkId::new("rustfft_forward_inplace", len),
+        input,
+        |bench, input| {
+            bench.iter_batched_ref(
+                || {
+                    input
+                        .iter()
+                        .map(|value| RustFftComplex::new(value.re, value.im))
+                        .collect::<Vec<_>>()
+                },
+                |data| {
+                    fft.process(black_box(data.as_mut_slice()));
+                    black_box(data);
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        },
+    );
+}
+
+fn bench_inplace_apollo_with_twiddles(
+    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    name: &str,
+    len: usize,
+    input: &[Complex64],
+    twiddles: &[Complex64],
+    kernel: fn(&mut [Complex64], Option<&[Complex64]>),
+) {
+    group.bench_with_input(BenchmarkId::new(name, len), input, |bench, input| {
+        bench.iter_batched_ref(
+            || input.to_vec(),
+            |data| {
+                kernel(black_box(data.as_mut_slice()), Some(black_box(twiddles)));
+                black_box(data);
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+}
+
+fn bench_inplace_apollo_twiddle_slice(
+    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    name: &str,
+    len: usize,
+    input: &[Complex64],
+    twiddles: &[Complex64],
+    kernel: fn(&mut [Complex64], &[Complex64]),
+) {
+    group.bench_with_input(BenchmarkId::new(name, len), input, |bench, input| {
+        bench.iter_batched_ref(
+            || input.to_vec(),
+            |data| {
+                kernel(black_box(data.as_mut_slice()), black_box(twiddles));
+                black_box(data);
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+}
+
+fn bench_inplace_apollo_f16(
+    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    name: &str,
+    len: usize,
+    input: &[Cf16],
+    kernel: fn(&mut [Cf16]),
+) {
+    group.bench_with_input(BenchmarkId::new(name, len), input, |bench, input| {
+        bench.iter_batched_ref(
+            || input.to_vec(),
+            |data| {
+                kernel(black_box(data.as_mut_slice()));
+                black_box(data);
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+}
+
+fn bench_winograd64(
+    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    input: &[Complex64],
+) {
+    group.bench_with_input(
+        BenchmarkId::new("winograd_dft64", 64usize),
+        input,
+        |bench, input| {
+            bench.iter_batched_ref(
+                || {
+                    let mut data = [Complex64::new(0.0, 0.0); 64];
+                    data.copy_from_slice(input);
+                    data
+                },
+                |data| {
+                    winograd::dft64_64(black_box(data), false);
+                    black_box(data);
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        },
+    );
+}
+
 /// Benchmark direct-DFT, radix strategies, mixed-radix, auto-selector and Bluestein.
 fn bench_fft_kernels(c: &mut Criterion) {
     let mut group = c.benchmark_group("fft_kernel_strategy");
 
     for len in [16usize, 32, 64, 128, 256] {
         let input = signal(len);
+        let forward_twiddles = radix2::build_forward_twiddle_table_64(len);
         if len <= 128 {
             group.bench_with_input(
                 BenchmarkId::new("direct_dft", len),
@@ -66,108 +198,128 @@ fn bench_fft_kernels(c: &mut Criterion) {
                 },
             );
         }
+        if len == 64 {
+            bench_winograd64(&mut group, &input);
+        }
 
-        group.bench_with_input(
-            BenchmarkId::new("radix2_inplace", len),
+        bench_inplace_apollo(
+            &mut group,
+            "radix2_inplace",
+            len,
             &input,
-            |bench, input| {
-                bench.iter(|| {
-                    let mut data = input.clone();
-                    radix2::forward_inplace_64(black_box(&mut data));
-                    black_box(data);
-                });
-            },
+            radix2::forward_inplace_64,
         );
 
         if len.is_power_of_two() && (len.trailing_zeros() % 2 == 0) {
-            group.bench_with_input(
-                BenchmarkId::new("radix4_inplace", len),
+            bench_inplace_apollo(
+                &mut group,
+                "radix4_inplace",
+                len,
                 &input,
-                |bench, input| {
-                    bench.iter(|| {
-                        let mut data = input.clone();
-                        radix4::forward_inplace_64(black_box(&mut data));
-                        black_box(data);
-                    });
-                },
+                radix4::forward_inplace_64,
+            );
+            bench_inplace_apollo_twiddle_slice(
+                &mut group,
+                "radix4_inplace_precomputed_twiddles",
+                len,
+                &input,
+                &forward_twiddles,
+                radix4::forward_inplace_64_with_twiddles,
             );
         }
         if len.is_power_of_two() && (len.trailing_zeros() % 3 == 0) {
-            group.bench_with_input(
-                BenchmarkId::new("radix8_inplace", len),
+            bench_inplace_apollo(
+                &mut group,
+                "radix8_inplace",
+                len,
                 &input,
-                |bench, input| {
-                    bench.iter(|| {
-                        let mut data = input.clone();
-                        radix8::forward_inplace_64(black_box(&mut data));
-                        black_box(data);
-                    });
-                },
+                radix8::forward_inplace_64,
+            );
+            bench_inplace_apollo_twiddle_slice(
+                &mut group,
+                "radix8_inplace_precomputed_twiddles",
+                len,
+                &input,
+                &forward_twiddles,
+                radix8::forward_inplace_64_with_twiddles,
             );
         }
         if len.is_power_of_two() && (len.trailing_zeros() % 4 == 0) {
-            group.bench_with_input(
-                BenchmarkId::new("radix16_inplace", len),
+            bench_inplace_apollo(
+                &mut group,
+                "radix16_inplace",
+                len,
                 &input,
-                |bench, input| {
-                    bench.iter(|| {
-                        let mut data = input.clone();
-                        radix16::forward_inplace_64(black_box(&mut data));
-                        black_box(data);
-                    });
-                },
+                radix16::forward_inplace_64,
+            );
+            bench_inplace_apollo_twiddle_slice(
+                &mut group,
+                "radix16_inplace_precomputed_twiddles",
+                len,
+                &input,
+                &forward_twiddles,
+                radix16::forward_inplace_64_with_twiddles,
             );
         }
         if len.is_power_of_two() && (len.trailing_zeros() % 5 == 0) {
-            group.bench_with_input(
-                BenchmarkId::new("radix32_inplace", len),
+            bench_inplace_apollo(
+                &mut group,
+                "radix32_inplace",
+                len,
                 &input,
-                |bench, input| {
-                    bench.iter(|| {
-                        let mut data = input.clone();
-                        radix32::forward_inplace_64(black_box(&mut data));
-                        black_box(data);
-                    });
-                },
+                radix32::forward_inplace_64,
+            );
+            bench_inplace_apollo_twiddle_slice(
+                &mut group,
+                "radix32_inplace_precomputed_twiddles",
+                len,
+                &input,
+                &forward_twiddles,
+                radix32::forward_inplace_64_with_twiddles,
             );
         }
         if len.is_power_of_two() && (len.trailing_zeros() % 6 == 0) {
-            group.bench_with_input(
-                BenchmarkId::new("radix64_inplace", len),
+            bench_inplace_apollo(
+                &mut group,
+                "radix64_inplace",
+                len,
                 &input,
-                |bench, input| {
-                    bench.iter(|| {
-                        let mut data = input.clone();
-                        radix64::forward_inplace_64(black_box(&mut data));
-                        black_box(data);
-                    });
-                },
+                radix64::forward_inplace_64,
+            );
+            bench_inplace_apollo_twiddle_slice(
+                &mut group,
+                "radix64_inplace_precomputed_twiddles",
+                len,
+                &input,
+                &forward_twiddles,
+                radix64::forward_inplace_64_with_twiddles,
             );
         }
 
-        group.bench_with_input(
-            BenchmarkId::new("mixed_radix_inplace", len),
+        bench_inplace_apollo(
+            &mut group,
+            "mixed_radix_inplace",
+            len,
             &input,
-            |bench, input| {
-                bench.iter(|| {
-                    let mut data = input.clone();
-                    mixed_radix::forward_inplace_64(black_box(&mut data));
-                    black_box(data);
-                });
-            },
+            mixed_radix::forward_inplace_64,
         );
 
-        group.bench_with_input(
-            BenchmarkId::new("auto_selector", len),
+        bench_inplace_apollo(
+            &mut group,
+            "apollo_auto_selector",
+            len,
             &input,
-            |bench, input| {
-                bench.iter(|| {
-                    let mut data = input.clone();
-                    fft_forward_64(black_box(&mut data));
-                    black_box(data);
-                });
-            },
+            fft_forward_64,
         );
+        bench_inplace_apollo_with_twiddles(
+            &mut group,
+            "apollo_auto_selector_precomputed_twiddles",
+            len,
+            &input,
+            &forward_twiddles,
+            mixed_radix::forward_inplace_64_with_twiddles,
+        );
+        bench_inplace_rustfft(&mut group, len, &input);
     }
 
     for len in [31usize, 63, 127] {
@@ -200,119 +352,69 @@ fn bench_fft_kernels(c: &mut Criterion) {
         );
     }
 
-    // f16 radix family benchmark coverage.
+    // f16 radix family benchmark coverage follows the exported public kernels.
     for len in [64usize, 256, 1024] {
         let input = signal_f16(len);
+        bench_inplace_apollo_f16(
+            &mut group,
+            "radix2_inplace_f16",
+            len,
+            &input,
+            radix2_f16::forward_inplace_f16,
+        );
         if len.is_power_of_two() && (len.trailing_zeros() % 2 == 0) {
-            group.bench_with_input(
-                BenchmarkId::new("radix4_inplace_f16", len),
+            bench_inplace_apollo_f16(
+                &mut group,
+                "radix4_inplace_f16",
+                len,
                 &input,
-                |bench, input| {
-                    bench.iter(|| {
-                        let mut data = input.clone();
-                        radix4::forward_inplace_32(black_box(&mut data));
-                        black_box(data);
-                    });
-                },
+                radix4::forward_inplace_f16,
             );
         }
         if len.is_power_of_two() && (len.trailing_zeros() % 3 == 0) {
-            group.bench_with_input(
-                BenchmarkId::new("radix8_inplace_f16", len),
+            bench_inplace_apollo_f16(
+                &mut group,
+                "radix8_inplace_f16",
+                len,
                 &input,
-                |bench, input| {
-                    bench.iter(|| {
-                        let mut data = input.clone();
-                        radix8::forward_inplace_32(black_box(&mut data));
-                        black_box(data);
-                    });
-                },
-            );
-        }
-        if len.is_power_of_two() && (len.trailing_zeros() % 4 == 0) {
-            group.bench_with_input(
-                BenchmarkId::new("radix16_inplace_f16", len),
-                &input,
-                |bench, input| {
-                    bench.iter(|| {
-                        let mut data = input.clone();
-                        radix16::forward_inplace_32(black_box(&mut data));
-                        black_box(data);
-                    });
-                },
-            );
-        }
-        if len.is_power_of_two() && (len.trailing_zeros() % 5 == 0) {
-            group.bench_with_input(
-                BenchmarkId::new("radix32_inplace_f16", len),
-                &input,
-                |bench, input| {
-                    bench.iter(|| {
-                        let mut data = input.clone();
-                        radix32::forward_inplace_32(black_box(&mut data));
-                        black_box(data);
-                    });
-                },
-            );
-        }
-        if len.is_power_of_two() && (len.trailing_zeros() % 6 == 0) {
-            group.bench_with_input(
-                BenchmarkId::new("radix64_inplace_f16", len),
-                &input,
-                |bench, input| {
-                    bench.iter(|| {
-                        let mut data = input.clone();
-                        radix64::forward_inplace_32(black_box(&mut data));
-                        black_box(data);
-                    });
-                },
+                radix8::forward_inplace_f16,
             );
         }
     }
 
-    // Accuracy comparisons for new f16 radix entrypoints against f64 selector reference.
+    // Accuracy comparisons for f16 radix entrypoints against f64 selector reference.
     for len in [64usize, 256, 1024] {
         let input = signal_f16(len);
+        group.bench_with_input(
+            BenchmarkId::new("accuracy_f16_radix2_vs_f64", len),
+            &input,
+            |bench, input| {
+                bench.iter(|| {
+                    black_box(max_abs_err_f16_vs_f64(
+                        input,
+                        radix2_f16::forward_inplace_f16,
+                    ))
+                });
+            },
+        );
+        if len.is_power_of_two() && (len.trailing_zeros() % 2 == 0) {
+            group.bench_with_input(
+                BenchmarkId::new("accuracy_f16_radix4_vs_f64", len),
+                &input,
+                |bench, input| {
+                    bench.iter(|| {
+                        black_box(max_abs_err_f16_vs_f64(input, radix4::forward_inplace_f16))
+                    });
+                },
+            );
+        }
         if len.is_power_of_two() && (len.trailing_zeros() % 3 == 0) {
             group.bench_with_input(
                 BenchmarkId::new("accuracy_f16_radix8_vs_f64", len),
                 &input,
                 |bench, input| {
                     bench.iter(|| {
-                        black_box(max_abs_err_f16_vs_f64(input, radix8::forward_inplace_32))
-                    });
-                },
-            );
-        }
-        if len.is_power_of_two() && (len.trailing_zeros() % 4 == 0) {
-            group.bench_with_input(
-                BenchmarkId::new("accuracy_f16_radix16_vs_f64", len),
-                &input,
-                |bench, input| {
-                    bench.iter(|| {
-                        black_box(max_abs_err_f16_vs_f64(input, radix16::forward_inplace_32))
-                    });
-                },
-            );
-        }
-        if len.is_power_of_two() && (len.trailing_zeros() % 5 == 0) {
-            group.bench_with_input(
-                BenchmarkId::new("accuracy_f16_radix32_vs_f64", len),
-                &input,
-                |bench, input| {
-                    bench.iter(|| {
-                        black_box(max_abs_err_f16_vs_f64(input, radix32::forward_inplace_32))
-                    });
-                },
-            );
-        }
-        if len.is_power_of_two() && (len.trailing_zeros() % 6 == 0) {
-            group.bench_with_input(
-                BenchmarkId::new("accuracy_f16_radix64_vs_f64", len),
-                &input,
-                |bench, input| {
-                    bench.iter(|| {
-                        black_box(max_abs_err_f16_vs_f64(input, radix64::forward_inplace_32))
+                        black_box(max_abs_err_f16_vs_f64(input, radix8::forward_inplace_f16))
                     });
                 },
             );

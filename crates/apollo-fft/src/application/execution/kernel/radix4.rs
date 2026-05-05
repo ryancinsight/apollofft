@@ -32,7 +32,9 @@ where
 {
     let twiddles = twiddles.unwrap();
     debug_assert!(is_power_of_four(data.len()));
-    if data.len() <= 1 { return; }
+    if data.len() <= 1 {
+        return;
+    }
     digit_reverse_permute_pow2_radix::<4, _>(data);
     let n = data.len();
     let mut len = 4usize;
@@ -40,8 +42,13 @@ where
         let quarter = len >> 2;
         let half = len >> 1;
         let (maybe_curr, maybe_prev): (Option<&[C]>, Option<&[C]>) = if len > 4 {
-            (Some(&twiddles[(half-1)..(half-1+half)]), Some(&twiddles[(quarter-1)..(half-1)]))
-        } else { (None, None) };
+            (
+                Some(&twiddles[(half - 1)..(half - 1 + half)]),
+                Some(&twiddles[(quarter - 1)..(half - 1)]),
+            )
+        } else {
+            (None, None)
+        };
         for chunk in data.chunks_exact_mut(len) {
             let (lo, hi) = chunk.split_at_mut(half);
             let (s0, s1) = lo.split_at_mut(quarter);
@@ -49,22 +56,58 @@ where
             match (maybe_curr, maybe_prev) {
                 (Some(curr), Some(prev)) => {
                     // j=0: trivial twiddles, no multiplication needed.
-                    { let t0=s0[0]+s2[0]; let t1=s0[0]-s2[0]; let t2=s1[0]+s3[0]; let t3=s1[0]-s3[0];
-                      let (y1,y3) = if inverse { (t1+t3.rot_pos_i(),t1-t3.rot_pos_i()) } else { (t1+t3.rot_neg_i(),t1-t3.rot_neg_i()) };
-                      s0[0]=t0+t2; s1[0]=y1; s2[0]=t0-t2; s3[0]=y3; }
+                    {
+                        let t0 = s0[0] + s2[0];
+                        let t1 = s0[0] - s2[0];
+                        let t2 = s1[0] + s3[0];
+                        let t3 = s1[0] - s3[0];
+                        let (y1, y3) = if inverse {
+                            (t1 + t3.rot_pos_i(), t1 - t3.rot_pos_i())
+                        } else {
+                            (t1 + t3.rot_neg_i(), t1 - t3.rot_neg_i())
+                        };
+                        s0[0] = t0 + t2;
+                        s1[0] = y1;
+                        s2[0] = t0 - t2;
+                        s3[0] = y3;
+                    }
                     for j in 1..quarter {
-                        let tw1=curr[j]; let tw2=prev[j]; let tw3=tw1*tw2;
-                        let a1v=s1[j]*tw1; let a2v=s2[j]*tw2; let a3v=s3[j]*tw3;
-                        let t0=s0[j]+a2v; let t1=s0[j]-a2v; let t2=a1v+a3v; let t3=a1v-a3v;
-                        let (y1,y3) = if inverse { (t1+t3.rot_pos_i(),t1-t3.rot_pos_i()) } else { (t1+t3.rot_neg_i(),t1-t3.rot_neg_i()) };
-                        s0[j]=t0+t2; s1[j]=y1; s2[j]=t0-t2; s3[j]=y3;
+                        let tw1 = curr[j];
+                        let tw2 = prev[j];
+                        let tw3 = tw1 * tw2;
+                        let a1v = s1[j] * tw1;
+                        let a2v = s2[j] * tw2;
+                        let a3v = s3[j] * tw3;
+                        let t0 = s0[j] + a2v;
+                        let t1 = s0[j] - a2v;
+                        let t2 = a1v + a3v;
+                        let t3 = a1v - a3v;
+                        let (y1, y3) = if inverse {
+                            (t1 + t3.rot_pos_i(), t1 - t3.rot_pos_i())
+                        } else {
+                            (t1 + t3.rot_neg_i(), t1 - t3.rot_neg_i())
+                        };
+                        s0[j] = t0 + t2;
+                        s1[j] = y1;
+                        s2[j] = t0 - t2;
+                        s3[j] = y3;
                     }
                 }
                 _ => {
                     for j in 0..quarter {
-                        let t0=s0[j]+s2[j]; let t1=s0[j]-s2[j]; let t2=s1[j]+s3[j]; let t3=s1[j]-s3[j];
-                        let (y1,y3) = if inverse { (t1+t3.rot_pos_i(),t1-t3.rot_pos_i()) } else { (t1+t3.rot_neg_i(),t1-t3.rot_neg_i()) };
-                        s0[j]=t0+t2; s1[j]=y1; s2[j]=t0-t2; s3[j]=y3;
+                        let t0 = s0[j] + s2[j];
+                        let t1 = s0[j] - s2[j];
+                        let t2 = s1[j] + s3[j];
+                        let t3 = s1[j] - s3[j];
+                        let (y1, y3) = if inverse {
+                            (t1 + t3.rot_pos_i(), t1 - t3.rot_pos_i())
+                        } else {
+                            (t1 + t3.rot_neg_i(), t1 - t3.rot_neg_i())
+                        };
+                        s0[j] = t0 + t2;
+                        s1[j] = y1;
+                        s2[j] = t0 - t2;
+                        s3[j] = y3;
                     }
                 }
             }
@@ -75,7 +118,10 @@ where
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
 #[inline(always)]
-unsafe fn cmul2_f64(a: std::arch::x86_64::__m256d, b: std::arch::x86_64::__m256d) -> std::arch::x86_64::__m256d {
+unsafe fn cmul2_f64(
+    a: std::arch::x86_64::__m256d,
+    b: std::arch::x86_64::__m256d,
+) -> std::arch::x86_64::__m256d {
     let ar = _mm256_unpacklo_pd(a, a);
     let ai = _mm256_unpackhi_pd(a, a);
     let bsw = _mm256_permute_pd(b, 5);
@@ -141,7 +187,11 @@ fn radix4_inplace_64(data: &mut [Complex64], inverse: bool, twiddles: Option<&[C
                         s3[0] = y3;
                     }
 
-                    #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+                    #[cfg(all(
+                        target_arch = "x86_64",
+                        target_feature = "avx",
+                        target_feature = "fma"
+                    ))]
                     {
                         // SIMD j-loop: process two Complex64 values at a time.
                         let mut j = 1usize;
@@ -209,7 +259,11 @@ fn radix4_inplace_64(data: &mut [Complex64], inverse: bool, twiddles: Option<&[C
                         }
                     }
 
-                    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma")))]
+                    #[cfg(not(all(
+                        target_arch = "x86_64",
+                        target_feature = "avx",
+                        target_feature = "fma"
+                    )))]
                     {
                         for j in 1..quarter {
                             let tw1 = curr[j];
@@ -271,7 +325,9 @@ mod tests {
     #[test]
     fn radix4_forward_n16_matches_direct() {
         let n = 16usize;
-        let input: Vec<Complex64> = (0..n).map(|k| Complex64::new((k as f64*0.3).sin(),(k as f64*0.11).cos())).collect();
+        let input: Vec<Complex64> = (0..n)
+            .map(|k| Complex64::new((k as f64 * 0.3).sin(), (k as f64 * 0.11).cos()))
+            .collect();
         let mut got = input.clone();
         forward_inplace_64(&mut got);
         let expected = dft_forward_64(&input);
@@ -282,10 +338,15 @@ mod tests {
     #[test]
     fn radix4_inverse_unnorm_n16_matches_direct() {
         let n = 16usize;
-        let input: Vec<Complex64> = (0..n).map(|k| Complex64::new((k as f64*0.27).cos(),(k as f64*0.17).sin())).collect();
+        let input: Vec<Complex64> = (0..n)
+            .map(|k| Complex64::new((k as f64 * 0.27).cos(), (k as f64 * 0.17).sin()))
+            .collect();
         let mut got = input.clone();
         inverse_inplace_unnorm_64(&mut got);
-        let expected = dft_inverse_64(&input).into_iter().map(|x| x * n as f64).collect::<Vec<_>>();
+        let expected = dft_inverse_64(&input)
+            .into_iter()
+            .map(|x| x * n as f64)
+            .collect::<Vec<_>>();
         let err = max_abs_err_64(&got, &expected);
         assert!(err < 1e-10, "radix4 inverse mismatch err={err:.2e}");
     }

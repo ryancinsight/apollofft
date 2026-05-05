@@ -39,13 +39,11 @@
 //! - non-contiguous ndarray buffers panic when a contiguous slice is required
 
 use crate::application::execution::kernel::mixed_radix::{
-    cached_twiddle_fwd_32, cached_twiddle_fwd_64, cached_twiddle_inv_32,
-    cached_twiddle_inv_64,
+    cached_twiddle_fwd_32, cached_twiddle_fwd_64, cached_twiddle_inv_32, cached_twiddle_inv_64,
 };
 use crate::application::execution::kernel::radix2::{
-    forward_inplace_32_with_twiddles,
-    forward_inplace_64_with_twiddles, inverse_inplace_32_with_twiddles,
-    inverse_inplace_64_with_twiddles,
+    forward_inplace_32_with_twiddles, forward_inplace_64_with_twiddles,
+    inverse_inplace_32_with_twiddles, inverse_inplace_64_with_twiddles,
 };
 use crate::application::execution::kernel::{
     fft_forward_32, fft_forward_64, fft_inverse_32, fft_inverse_64,

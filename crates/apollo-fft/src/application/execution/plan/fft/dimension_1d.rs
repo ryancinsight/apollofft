@@ -1,13 +1,12 @@
 //! 1D FFT plan.
 
-use crate::application::execution::kernel::radix2::{
-    build_real_fwd_post_twiddles_64,
-    forward_inplace_32_with_twiddles, forward_inplace_64_with_twiddles, forward_real_inplace_64,
-    inverse_inplace_32_with_twiddles, inverse_inplace_64_with_twiddles, inverse_real_inplace_64,
-};
 use crate::application::execution::kernel::mixed_radix::{
-    cached_twiddle_fwd_32, cached_twiddle_fwd_64, cached_twiddle_inv_32,
-    cached_twiddle_inv_64,
+    cached_twiddle_fwd_32, cached_twiddle_fwd_64, cached_twiddle_inv_32, cached_twiddle_inv_64,
+};
+use crate::application::execution::kernel::radix2::{
+    build_real_fwd_post_twiddles_64, forward_inplace_32_with_twiddles,
+    forward_inplace_64_with_twiddles, forward_real_inplace_64, inverse_inplace_32_with_twiddles,
+    inverse_inplace_64_with_twiddles, inverse_real_inplace_64,
 };
 use crate::application::execution::kernel::{
     fft_forward_32, fft_forward_f16, fft_inverse_32, fft_inverse_f16, Cf16,
