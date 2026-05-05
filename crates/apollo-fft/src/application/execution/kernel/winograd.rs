@@ -53,6 +53,64 @@
 
 use num_complex::{Complex32, Complex64};
 
+#[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+use std::arch::x86_64::{_mm256_add_pd, _mm256_loadu_pd, _mm256_storeu_pd, _mm256_sub_pd};
+
+/// AVX-accelerated in-place DFT-8 for `Complex64`.
+///
+/// Strategy: scalar DFT-4 sub-transforms + scalar twiddle application (proven
+/// correct), then SIMD-vectorized 8-point butterfly combine (4×`__m256d` add/sub).
+/// This is numerically identical to `dft8_64`; the SIMD path accelerates the
+/// final 8-pair butterfly stage (16 doubles → 4 AVX ops).
+#[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+#[inline(always)]
+pub unsafe fn dft8_avx_fma_64(data: &mut [Complex64; 8], inverse: bool) {
+    // Step 1: scalar DFT-4 on even/odd sub-arrays (correct by existing dft4_64).
+    let mut even = [data[0], data[2], data[4], data[6]];
+    let mut odd = [data[1], data[3], data[5], data[7]];
+    dft4_64(&mut even, inverse);
+    dft4_64(&mut odd, inverse);
+
+    // Step 2: scalar twiddle application — identical to dft8_64.
+    const SQ2O2: f64 = std::f64::consts::FRAC_1_SQRT_2;
+    let o0 = odd[0];
+    let o1 = if inverse {
+        Complex64::new(SQ2O2 * (odd[1].re - odd[1].im), SQ2O2 * (odd[1].re + odd[1].im))
+    } else {
+        Complex64::new(SQ2O2 * (odd[1].re + odd[1].im), SQ2O2 * (odd[1].im - odd[1].re))
+    };
+    let o2 = if inverse {
+        Complex64::new(-odd[2].im, odd[2].re)
+    } else {
+        Complex64::new(odd[2].im, -odd[2].re)
+    };
+    let o3 = if inverse {
+        Complex64::new(
+            SQ2O2 * (-odd[3].re - odd[3].im),
+            SQ2O2 * (odd[3].re - odd[3].im),
+        )
+    } else {
+        Complex64::new(
+            SQ2O2 * (-odd[3].re + odd[3].im),
+            SQ2O2 * (-odd[3].re - odd[3].im),
+        )
+    };
+
+    // Step 3: AVX butterfly combine.
+    // Load even[0..4] and odd_twiddle[0..4] each as 2×__m256d (2 Complex64 per register).
+    let ev01 = _mm256_loadu_pd(even.as_ptr() as *const f64);
+    let ev23 = _mm256_loadu_pd(even.as_ptr().add(2) as *const f64);
+    let ot = [o0, o1, o2, o3];
+    let ot01 = _mm256_loadu_pd(ot.as_ptr() as *const f64);
+    let ot23 = _mm256_loadu_pd(ot.as_ptr().add(2) as *const f64);
+    // data[0..2] = even[0..2] + ot[0..2], data[2..4] = even[2..4] + ot[2..4]
+    _mm256_storeu_pd(data.as_mut_ptr() as *mut f64, _mm256_add_pd(ev01, ot01));
+    _mm256_storeu_pd(data.as_mut_ptr().add(2) as *mut f64, _mm256_add_pd(ev23, ot23));
+    // data[4..6] = even[0..2] - ot[0..2], data[6..8] = even[2..4] - ot[2..4]
+    _mm256_storeu_pd(data.as_mut_ptr().add(4) as *mut f64, _mm256_sub_pd(ev01, ot01));
+    _mm256_storeu_pd(data.as_mut_ptr().add(6) as *mut f64, _mm256_sub_pd(ev23, ot23));
+}
+
 // ── DFT-2 butterfly ───────────────────────────────────────────────────────────
 
 /// In-place Winograd DFT-2 (butterfly).

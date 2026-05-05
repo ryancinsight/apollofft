@@ -9,13 +9,16 @@
 //! and M = next_pow2(2N-1).
 
 use super::radix2;
+use super::mixed_radix;
 use super::radix_stage::normalize_inplace;
 use num_complex::{Complex32, Complex64};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::mem::size_of;
 use std::sync::Arc;
+use rayon::prelude::*;
 
 static BLUESTEIN_PLAN_CACHE_64: Lazy<RwLock<HashMap<usize, Arc<BluesteinPlan64>>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
@@ -23,36 +26,469 @@ static BLUESTEIN_PLAN_CACHE_32: Lazy<RwLock<HashMap<usize, Arc<BluesteinPlan32>>
     Lazy::new(|| RwLock::new(HashMap::new()));
 
 thread_local! {
+    static BLUESTEIN_PLAN_TL_64: RefCell<HashMap<usize, Arc<BluesteinPlan64>>> =
+        RefCell::new(HashMap::new());
+    static BLUESTEIN_PLAN_TL_32: RefCell<HashMap<usize, Arc<BluesteinPlan32>>> =
+        RefCell::new(HashMap::new());
     static BLUESTEIN_SCRATCH_64: RefCell<HashMap<usize, Vec<Complex64>>> =
         RefCell::new(HashMap::new());
     static BLUESTEIN_SCRATCH_32: RefCell<HashMap<usize, Vec<Complex32>>> =
         RefCell::new(HashMap::new());
 }
 
+const BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD: usize = 65_536;
+const BLUESTEIN_SIMD_POINTWISE_MIN: usize = 8;
+
+#[inline]
+fn zero_fill_complex64(dst: &mut [Complex64]) {
+    if dst.is_empty() {
+        return;
+    }
+    // Safety: `Complex64` is a plain two-`f64` POD type (no drop glue).
+    unsafe {
+        std::ptr::write_bytes(
+            dst.as_mut_ptr() as *mut u8,
+            0,
+            dst.len() * size_of::<Complex64>(),
+        );
+    }
+}
+
+#[inline]
+fn zero_fill_complex32(dst: &mut [Complex32]) {
+    if dst.is_empty() {
+        return;
+    }
+    // Safety: `Complex32` is a plain two-`f32` POD type (no drop glue).
+    unsafe {
+        std::ptr::write_bytes(
+            dst.as_mut_ptr() as *mut u8,
+            0,
+            dst.len() * size_of::<Complex32>(),
+        );
+    }
+}
+
+#[inline]
+fn fill_and_mul_from_input_64(
+    dst: &mut [Complex64],
+    input: &[Complex64],
+    factors: &[Complex64],
+) {
+    debug_assert_eq!(dst.len(), input.len());
+    debug_assert_eq!(dst.len(), factors.len());
+    if dst.len() >= BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD {
+        dst.par_iter_mut()
+            .enumerate()
+            .for_each(|(idx, out)| *out = input[idx] * factors[idx]);
+        return;
+    }
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+    if dst.len() >= BLUESTEIN_SIMD_POINTWISE_MIN {
+        unsafe {
+            mul_complex_pointwise_64_avx_from_input(dst, input, factors);
+            return;
+        }
+    }
+    for ((out, in_v), factor) in dst
+        .iter_mut()
+        .zip(input.iter())
+        .zip(factors.iter())
+    {
+        *out = *in_v * *factor;
+    }
+}
+
+#[inline]
+fn fill_and_mul_from_input_64_conj(
+    dst: &mut [Complex64],
+    input: &[Complex64],
+    factors: &[Complex64],
+) {
+    debug_assert_eq!(dst.len(), input.len());
+    debug_assert_eq!(dst.len(), factors.len());
+    if dst.is_empty() {
+        return;
+    }
+    if dst.len() >= BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD {
+        dst.par_iter_mut()
+            .enumerate()
+            .for_each(|(idx, out)| {
+                let factor = factors[idx];
+                let re = input[idx].re * factor.re + input[idx].im * factor.im;
+                let im = input[idx].im * factor.re - input[idx].re * factor.im;
+                *out = Complex64::new(re, im);
+            });
+        return;
+    }
+    for (out, (in_v, factor)) in dst.iter_mut().zip(input.iter().zip(factors.iter())) {
+        let re = in_v.re * factor.re + in_v.im * factor.im;
+        let im = in_v.im * factor.re - in_v.re * factor.im;
+        *out = Complex64::new(re, im);
+    }
+}
+
+#[inline]
+fn fill_and_mul_from_input_32(
+    dst: &mut [Complex32],
+    input: &[Complex32],
+    factors: &[Complex32],
+) {
+    debug_assert_eq!(dst.len(), input.len());
+    debug_assert_eq!(dst.len(), factors.len());
+    if dst.len() >= BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD {
+        dst.par_iter_mut()
+            .enumerate()
+            .for_each(|(idx, out)| *out = input[idx] * factors[idx]);
+        return;
+    }
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+    if dst.len() >= BLUESTEIN_SIMD_POINTWISE_MIN {
+        unsafe {
+            mul_complex_pointwise_32_avx_from_input(dst, input, factors);
+            return;
+        }
+    }
+    for ((out, in_v), factor) in dst
+        .iter_mut()
+        .zip(input.iter())
+        .zip(factors.iter())
+    {
+        *out = *in_v * *factor;
+    }
+}
+
+#[inline]
+fn fill_and_mul_from_input_32_conj(
+    dst: &mut [Complex32],
+    input: &[Complex32],
+    factors: &[Complex32],
+) {
+    debug_assert_eq!(dst.len(), input.len());
+    debug_assert_eq!(dst.len(), factors.len());
+    if dst.is_empty() {
+        return;
+    }
+    if dst.len() >= BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD {
+        dst.par_iter_mut()
+            .enumerate()
+            .for_each(|(idx, out)| {
+                let factor = factors[idx];
+                let re = input[idx].re * factor.re + input[idx].im * factor.im;
+                let im = input[idx].im * factor.re - input[idx].re * factor.im;
+                *out = Complex32::new(re, im);
+            });
+        return;
+    }
+    for (out, (in_v, factor)) in dst.iter_mut().zip(input.iter().zip(factors.iter())) {
+        let re = in_v.re * factor.re + in_v.im * factor.im;
+        let im = in_v.im * factor.re - in_v.re * factor.im;
+        *out = Complex32::new(re, im);
+    }
+}
+
+#[inline]
+fn mul_pointwise_64_with_twiddle(dst: &mut [Complex64], twiddle: &[Complex64]) {
+    debug_assert_eq!(dst.len(), twiddle.len());
+    if dst.is_empty() {
+        return;
+    }
+    if dst.len() >= BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD {
+        dst.par_iter_mut()
+            .zip(twiddle.par_iter())
+            .for_each(|(out, factor)| *out *= *factor);
+        return;
+    }
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+    if dst.len() >= BLUESTEIN_SIMD_POINTWISE_MIN {
+        unsafe {
+            mul_complex_pointwise_64_avx_inplace(dst, twiddle);
+            return;
+        }
+    }
+    for (out, factor) in dst.iter_mut().zip(twiddle.iter()) {
+        *out *= *factor;
+    }
+}
+
+#[inline]
+fn mul_pointwise_64_with_twiddle_inverse_kernel(dst: &mut [Complex64], twiddle: &[Complex64]) {
+    debug_assert_eq!(dst.len(), twiddle.len());
+    if dst.is_empty() {
+        return;
+    }
+    let len = dst.len();
+    if len >= BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD {
+        let (head, tail) = dst.split_at_mut(1);
+        if let Some(head) = head.first_mut() {
+            let factor = twiddle[0];
+            let re = head.re * factor.re - head.im * factor.im;
+            let im = head.im * factor.re + head.re * factor.im;
+            *head = Complex64::new(re, im);
+        }
+        tail.par_iter_mut().enumerate().for_each(|(idx, out)| {
+            let factor = twiddle[len - (idx + 1)];
+            let re = out.re * factor.re + out.im * factor.im;
+            let im = out.im * factor.re - out.re * factor.im;
+            *out = Complex64::new(re, im);
+        });
+        return;
+    }
+    let (head, tail) = dst.split_at_mut(1);
+    if let Some(head) = head.first_mut() {
+        let factor = twiddle[0];
+        let re = head.re * factor.re - head.im * factor.im;
+        let im = head.im * factor.re + head.re * factor.im;
+        *head = Complex64::new(re, im);
+    }
+    for (idx, out) in tail.iter_mut().enumerate() {
+        let factor = twiddle[len - (idx + 1)];
+        let re = out.re * factor.re + out.im * factor.im;
+        let im = out.im * factor.re - out.re * factor.im;
+        *out = Complex64::new(re, im);
+    }
+}
+
+#[inline]
+fn mul_pointwise_32_with_twiddle(dst: &mut [Complex32], twiddle: &[Complex32]) {
+    debug_assert_eq!(dst.len(), twiddle.len());
+    if dst.is_empty() {
+        return;
+    }
+    if dst.len() >= BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD {
+        dst.par_iter_mut()
+            .zip(twiddle.par_iter())
+            .for_each(|(out, factor)| *out *= *factor);
+        return;
+    }
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+    if dst.len() >= BLUESTEIN_SIMD_POINTWISE_MIN {
+        unsafe {
+            mul_complex_pointwise_32_avx_inplace(dst, twiddle);
+            return;
+        }
+    }
+    for (out, factor) in dst.iter_mut().zip(twiddle.iter()) {
+        *out *= *factor;
+    }
+}
+
+#[inline]
+fn mul_pointwise_32_with_twiddle_inverse_kernel(dst: &mut [Complex32], twiddle: &[Complex32]) {
+    debug_assert_eq!(dst.len(), twiddle.len());
+    if dst.is_empty() {
+        return;
+    }
+    let len = dst.len();
+    if len >= BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD {
+        let (head, tail) = dst.split_at_mut(1);
+        if let Some(head) = head.first_mut() {
+            let factor = twiddle[0];
+            let re = head.re * factor.re - head.im * factor.im;
+            let im = head.im * factor.re + head.re * factor.im;
+            *head = Complex32::new(re, im);
+        }
+        tail.par_iter_mut().enumerate().for_each(|(idx, out)| {
+            let factor = twiddle[len - (idx + 1)];
+            let re = out.re * factor.re + out.im * factor.im;
+            let im = out.im * factor.re - out.re * factor.im;
+            *out = Complex32::new(re, im);
+        });
+        return;
+    }
+    let (head, tail) = dst.split_at_mut(1);
+    if let Some(head) = head.first_mut() {
+        let factor = twiddle[0];
+        let re = head.re * factor.re - head.im * factor.im;
+        let im = head.im * factor.re + head.re * factor.im;
+        *head = Complex32::new(re, im);
+    }
+    for (idx, out) in tail.iter_mut().enumerate() {
+        let factor = twiddle[len - (idx + 1)];
+        let re = out.re * factor.re + out.im * factor.im;
+        let im = out.im * factor.re - out.re * factor.im;
+        *out = Complex32::new(re, im);
+    }
+}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+#[target_feature(enable = "avx,fma")]
+unsafe fn mul_complex_pointwise_64_avx_from_input(
+    dst: &mut [Complex64],
+    input: &[Complex64],
+    twiddle: &[Complex64],
+) {
+    use std::arch::x86_64::{
+        _mm256_fmaddsub_pd, _mm256_loadu_pd, _mm256_mul_pd, _mm256_permute_pd,
+        _mm256_storeu_pd, _mm256_unpackhi_pd, _mm256_unpacklo_pd,
+    };
+    debug_assert_eq!(dst.len(), input.len());
+    debug_assert_eq!(dst.len(), twiddle.len());
+
+    let count = dst.len();
+    let dst_f = dst.as_mut_ptr() as *mut f64;
+    let in_f = input.as_ptr() as *const f64;
+    let tw_f = twiddle.as_ptr() as *const f64;
+    let batches = count / 2;
+    for b in 0..batches {
+        let f = b * 4;
+        let x = _mm256_loadu_pd(in_f.add(f));
+        let w = _mm256_loadu_pd(tw_f.add(f));
+        let x_perm = _mm256_permute_pd(x, 5);
+        let ac = _mm256_unpacklo_pd(w, w);
+        let bd = _mm256_unpackhi_pd(w, w);
+        let yw = _mm256_fmaddsub_pd(ac, x, _mm256_mul_pd(bd, x_perm));
+        _mm256_storeu_pd(dst_f.add(f), yw);
+    }
+    let tail = batches * 2;
+    for i in tail..count {
+        dst[i] = input[i] * twiddle[i];
+    }
+}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+#[target_feature(enable = "avx,fma")]
+unsafe fn mul_complex_pointwise_64_avx_inplace(dst: &mut [Complex64], twiddle: &[Complex64]) {
+    use std::arch::x86_64::{
+        _mm256_fmaddsub_pd, _mm256_loadu_pd, _mm256_mul_pd, _mm256_permute_pd,
+        _mm256_storeu_pd, _mm256_unpackhi_pd, _mm256_unpacklo_pd,
+    };
+    debug_assert_eq!(dst.len(), twiddle.len());
+
+    let count = dst.len();
+    let dst_f = dst.as_mut_ptr() as *mut f64;
+    let tw_f = twiddle.as_ptr() as *const f64;
+    let batches = count / 2;
+    for b in 0..batches {
+        let f = b * 4;
+        let x = _mm256_loadu_pd(dst_f.add(f));
+        let w = _mm256_loadu_pd(tw_f.add(f));
+        let x_perm = _mm256_permute_pd(x, 5);
+        let ac = _mm256_unpacklo_pd(w, w);
+        let bd = _mm256_unpackhi_pd(w, w);
+        let yw = _mm256_fmaddsub_pd(ac, x, _mm256_mul_pd(bd, x_perm));
+        _mm256_storeu_pd(dst_f.add(f), yw);
+    }
+    let tail = batches * 2;
+    for i in tail..count {
+        dst[i] *= twiddle[i];
+    }
+}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+#[target_feature(enable = "avx,fma")]
+unsafe fn mul_complex_pointwise_32_avx_from_input(
+    dst: &mut [Complex32],
+    input: &[Complex32],
+    twiddle: &[Complex32],
+) {
+    use std::arch::x86_64::{
+        _mm256_fmaddsub_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_moveldup_ps,
+        _mm256_movehdup_ps, _mm256_permute_ps, _mm256_storeu_ps,
+    };
+    debug_assert_eq!(dst.len(), input.len());
+    debug_assert_eq!(dst.len(), twiddle.len());
+
+    let count = dst.len();
+    let dst_f = dst.as_mut_ptr() as *mut f32;
+    let in_f = input.as_ptr() as *const f32;
+    let tw_f = twiddle.as_ptr() as *const f32;
+    let batches = count / 4;
+    for b in 0..batches {
+        let f = b * 8;
+        let x = _mm256_loadu_ps(in_f.add(f));
+        let w = _mm256_loadu_ps(tw_f.add(f));
+        let w_re = _mm256_moveldup_ps(w);
+        let w_im = _mm256_movehdup_ps(w);
+        let x_perm = _mm256_permute_ps(x, 0xB1);
+        let yw = _mm256_fmaddsub_ps(w_re, x, _mm256_mul_ps(w_im, x_perm));
+        _mm256_storeu_ps(dst_f.add(f), yw);
+    }
+    let tail = batches * 4;
+    for i in tail..count {
+        dst[i] = input[i] * twiddle[i];
+    }
+}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+#[target_feature(enable = "avx,fma")]
+unsafe fn mul_complex_pointwise_32_avx_inplace(dst: &mut [Complex32], twiddle: &[Complex32]) {
+    use std::arch::x86_64::{
+        _mm256_fmaddsub_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_moveldup_ps,
+        _mm256_movehdup_ps, _mm256_permute_ps, _mm256_storeu_ps,
+    };
+    debug_assert_eq!(dst.len(), twiddle.len());
+
+    let count = dst.len();
+    let dst_f = dst.as_mut_ptr() as *mut f32;
+    let tw_f = twiddle.as_ptr() as *const f32;
+    let batches = count / 4;
+    for b in 0..batches {
+        let f = b * 8;
+        let x = _mm256_loadu_ps(dst_f.add(f));
+        let w = _mm256_loadu_ps(tw_f.add(f));
+        let w_re = _mm256_moveldup_ps(w);
+        let w_im = _mm256_movehdup_ps(w);
+        let x_perm = _mm256_permute_ps(x, 0xB1);
+        let yw = _mm256_fmaddsub_ps(w_re, x, _mm256_mul_ps(w_im, x_perm));
+        _mm256_storeu_ps(dst_f.add(f), yw);
+    }
+    let tail = batches * 4;
+    for i in tail..count {
+        dst[i] *= twiddle[i];
+    }
+}
+
 #[inline]
 fn cached_plan64(n: usize) -> Arc<BluesteinPlan64> {
-    if let Some(plan) = BLUESTEIN_PLAN_CACHE_64.read().get(&n).cloned() {
-        return plan;
-    }
-    let plan = Arc::new(BluesteinPlan64::new(n));
-    BLUESTEIN_PLAN_CACHE_64
-        .write()
-        .entry(n)
-        .or_insert_with(|| Arc::clone(&plan))
-        .clone()
+    BLUESTEIN_PLAN_TL_64.with(|plan_map| {
+        if let Some(plan) = plan_map.borrow().get(&n).cloned() {
+            return plan;
+        }
+
+        let plan = {
+            let maybe_cached = BLUESTEIN_PLAN_CACHE_64.read().get(&n).cloned();
+            if let Some(plan) = maybe_cached {
+                plan
+            } else {
+                let new_plan: Arc<BluesteinPlan64> = Arc::new(BluesteinPlan64::new(n));
+                BLUESTEIN_PLAN_CACHE_64
+                    .write()
+                    .entry(n)
+                    .or_insert_with(|| Arc::clone(&new_plan))
+                    .clone()
+            }
+        };
+
+        plan_map.borrow_mut().insert(n, Arc::clone(&plan));
+        plan
+    })
 }
 
 #[inline]
 fn cached_plan32(n: usize) -> Arc<BluesteinPlan32> {
-    if let Some(plan) = BLUESTEIN_PLAN_CACHE_32.read().get(&n).cloned() {
-        return plan;
-    }
-    let plan = Arc::new(BluesteinPlan32::new(n));
-    BLUESTEIN_PLAN_CACHE_32
-        .write()
-        .entry(n)
-        .or_insert_with(|| Arc::clone(&plan))
-        .clone()
+    BLUESTEIN_PLAN_TL_32.with(|plan_map| {
+        if let Some(plan) = plan_map.borrow().get(&n).cloned() {
+            return plan;
+        }
+
+        let plan = {
+            let maybe_cached = BLUESTEIN_PLAN_CACHE_32.read().get(&n).cloned();
+            if let Some(plan) = maybe_cached {
+                plan
+            } else {
+                let new_plan: Arc<BluesteinPlan32> = Arc::new(BluesteinPlan32::new(n));
+                BLUESTEIN_PLAN_CACHE_32
+                    .write()
+                    .entry(n)
+                    .or_insert_with(|| Arc::clone(&new_plan))
+                    .clone()
+            }
+        };
+
+        plan_map.borrow_mut().insert(n, Arc::clone(&plan));
+        plan
+    })
 }
 
 #[inline]
@@ -95,8 +531,6 @@ where
 /// - `chirp[k]` = `exp(-πi k²/N)` — forward chirp factor
 /// - `b_m` = FFT of filter `b[m] = chirp[m].conj()` = `exp(+πi m²/N)`,
 ///   used for the forward-transform convolution step
-/// - `b_m_forward` = FFT of filter `b[m] = chirp[m]` = `exp(-πi m²/N)`,
-///   used for the inverse-transform convolution step
 /// - `twiddle_fwd` = contiguous per-stage forward twiddle table for the M-point FFT,
 ///   cached in the plan so hot-path transforms bypass O(M log₂M / 2) trig calls.
 /// - `twiddle_inv` = contiguous per-stage inverse twiddle table for the M-point IFFT.
@@ -106,7 +540,6 @@ pub struct BluesteinPlan64 {
     m: usize,
     chirp: Vec<Complex64>,
     b_m: Vec<Complex64>,
-    b_m_forward: Vec<Complex64>,
     twiddle_fwd: Vec<Complex64>,
     twiddle_inv: Vec<Complex64>,
 }
@@ -137,23 +570,13 @@ impl BluesteinPlan64 {
             b_m[k] = bk;
             b_m[m - k] = bk;
         }
-        radix2::forward_inplace_64_with_twiddles(&mut b_m, &twiddle_fwd);
-
-        let mut b_m_forward = vec![Complex64::new(0.0, 0.0); m];
-        b_m_forward[0] = Complex64::new(1.0, 0.0);
-        for k in 1..n {
-            let bk = chirp[k];
-            b_m_forward[k] = bk;
-            b_m_forward[m - k] = bk;
-        }
-        radix2::forward_inplace_64_with_twiddles(&mut b_m_forward, &twiddle_fwd);
+        mixed_radix::forward_inplace_64_with_twiddles(&mut b_m, Some(&twiddle_fwd));
 
         Self {
             n,
             m,
             chirp,
             b_m,
-            b_m_forward,
             twiddle_fwd,
             twiddle_inv,
         }
@@ -171,22 +594,20 @@ impl BluesteinPlan64 {
         assert_eq!(data.len(), self.n);
         assert_eq!(scratch_a.len(), self.m);
 
-        for (dst, (&x, &c)) in scratch_a[..self.n].iter_mut().zip(data.iter().zip(self.chirp.iter())) {
-            *dst = x * c;
-        }
-        if self.n < scratch_a.len() {
-            scratch_a[self.n..].fill(Complex64::new(0.0, 0.0));
-        }
-        radix2::forward_inplace_64_with_twiddles(scratch_a, &self.twiddle_fwd);
+        {
+            let (scratch_head, scratch_tail) = scratch_a.split_at_mut(self.n);
+            fill_and_mul_from_input_64(scratch_head, data, &self.chirp);
+            if !scratch_tail.is_empty() {
+                zero_fill_complex64(scratch_tail);
+            }
+        } // scratch_head and scratch_tail borrows end here
 
-        for (a, b) in scratch_a.iter_mut().zip(self.b_m.iter()) {
-            *a *= b;
-        }
-        radix2::inverse_inplace_64_with_twiddles(scratch_a, &self.twiddle_inv);
+        mixed_radix::forward_inplace_64_with_twiddles(scratch_a, Some(&self.twiddle_fwd));
+        mul_pointwise_64_with_twiddle(scratch_a, &self.b_m);
+        mixed_radix::inverse_inplace_64_with_twiddles(scratch_a, Some(&self.twiddle_inv));
 
-        for (k, x_k) in data.iter_mut().enumerate() {
-            *x_k = self.chirp[k] * scratch_a[k];
-        }
+        let scratch_head = &scratch_a[..self.n];
+        fill_and_mul_from_input_64(data, scratch_head, &self.chirp);
     }
 
     /// Inverse unnormalized transform.
@@ -196,25 +617,20 @@ impl BluesteinPlan64 {
         assert_eq!(data.len(), self.n);
         assert_eq!(scratch_a.len(), self.m);
 
-        for (dst, (&x, &c)) in scratch_a[..self.n]
-            .iter_mut()
-            .zip(data.iter().zip(self.chirp.iter()))
         {
-            *dst = x * c.conj();
-        }
-        if self.n < scratch_a.len() {
-            scratch_a[self.n..].fill(Complex64::new(0.0, 0.0));
-        }
-        radix2::forward_inplace_64_with_twiddles(scratch_a, &self.twiddle_fwd);
+            let (scratch_head, scratch_tail) = scratch_a.split_at_mut(self.n);
+            fill_and_mul_from_input_64_conj(scratch_head, data, &self.chirp);
+            if !scratch_tail.is_empty() {
+                zero_fill_complex64(scratch_tail);
+            }
+        } // scratch_head and scratch_tail borrows end here
 
-        for (a, b) in scratch_a.iter_mut().zip(self.b_m_forward.iter()) {
-            *a *= b;
-        }
-        radix2::inverse_inplace_64_with_twiddles(scratch_a, &self.twiddle_inv);
+        mixed_radix::forward_inplace_64_with_twiddles(scratch_a, Some(&self.twiddle_fwd));
+        mul_pointwise_64_with_twiddle_inverse_kernel(scratch_a, &self.b_m);
+        mixed_radix::inverse_inplace_64_with_twiddles(scratch_a, Some(&self.twiddle_inv));
 
-        for (n_idx, y_n) in data.iter_mut().enumerate() {
-            *y_n = self.chirp[n_idx].conj() * scratch_a[n_idx];
-        }
+        let scratch_head = &scratch_a[..self.n];
+        fill_and_mul_from_input_64_conj(data, scratch_head, &self.chirp);
     }
 }
 
@@ -229,7 +645,6 @@ pub struct BluesteinPlan32 {
     m: usize,
     chirp: Vec<Complex32>,
     b_m: Vec<Complex32>,
-    b_m_forward: Vec<Complex32>,
     twiddle_fwd: Vec<Complex32>,
     twiddle_inv: Vec<Complex32>,
 }
@@ -255,23 +670,13 @@ impl BluesteinPlan32 {
             b_m[k] = bk;
             b_m[m - k] = bk;
         }
-        radix2::forward_inplace_32_with_twiddles(&mut b_m, &twiddle_fwd);
-
-        let mut b_m_forward = vec![Complex32::new(0.0, 0.0); m];
-        b_m_forward[0] = Complex32::new(1.0, 0.0);
-        for k in 1..n {
-            let bk = chirp[k];
-            b_m_forward[k] = bk;
-            b_m_forward[m - k] = bk;
-        }
-        radix2::forward_inplace_32_with_twiddles(&mut b_m_forward, &twiddle_fwd);
+        mixed_radix::forward_inplace_32_with_twiddles(&mut b_m, Some(&twiddle_fwd));
 
         Self {
             n,
             m,
             chirp,
             b_m,
-            b_m_forward,
             twiddle_fwd,
             twiddle_inv,
         }
@@ -287,22 +692,20 @@ impl BluesteinPlan32 {
         assert_eq!(data.len(), self.n);
         assert_eq!(scratch_a.len(), self.m);
 
-        for (dst, (&x, &c)) in scratch_a[..self.n].iter_mut().zip(data.iter().zip(self.chirp.iter())) {
-            *dst = x * c;
+        {
+            let (scratch_head, scratch_tail) = scratch_a.split_at_mut(self.n);
+            fill_and_mul_from_input_32(scratch_head, data, &self.chirp);
+            if !scratch_tail.is_empty() {
+                zero_fill_complex32(scratch_tail);
+            }
         }
-        if self.n < scratch_a.len() {
-            scratch_a[self.n..].fill(Complex32::new(0.0, 0.0));
-        }
-        radix2::forward_inplace_32_with_twiddles(scratch_a, &self.twiddle_fwd);
 
-        for (a, b) in scratch_a.iter_mut().zip(self.b_m.iter()) {
-            *a *= b;
-        }
-        radix2::inverse_inplace_32_with_twiddles(scratch_a, &self.twiddle_inv);
+        mixed_radix::forward_inplace_32_with_twiddles(scratch_a, Some(&self.twiddle_fwd));
+        mul_pointwise_32_with_twiddle(scratch_a, &self.b_m);
+        mixed_radix::inverse_inplace_32_with_twiddles(scratch_a, Some(&self.twiddle_inv));
 
-        for (k, x_k) in data.iter_mut().enumerate() {
-            *x_k = self.chirp[k] * scratch_a[k];
-        }
+        let scratch_head = &scratch_a[..self.n];
+        fill_and_mul_from_input_32(data, scratch_head, &self.chirp);
     }
 
     /// Forward inverse (unnormalized) transform using preallocated scratch.
@@ -310,25 +713,20 @@ impl BluesteinPlan32 {
         assert_eq!(data.len(), self.n);
         assert_eq!(scratch_a.len(), self.m);
 
-        for (dst, (&x, &c)) in scratch_a[..self.n]
-            .iter_mut()
-            .zip(data.iter().zip(self.chirp.iter()))
         {
-            *dst = x * c.conj();
+            let (scratch_head, scratch_tail) = scratch_a.split_at_mut(self.n);
+            fill_and_mul_from_input_32_conj(scratch_head, data, &self.chirp);
+            if !scratch_tail.is_empty() {
+                zero_fill_complex32(scratch_tail);
+            }
         }
-        if self.n < scratch_a.len() {
-            scratch_a[self.n..].fill(Complex32::new(0.0, 0.0));
-        }
-        radix2::forward_inplace_32_with_twiddles(scratch_a, &self.twiddle_fwd);
 
-        for (a, b) in scratch_a.iter_mut().zip(self.b_m_forward.iter()) {
-            *a *= b;
-        }
-        radix2::inverse_inplace_32_with_twiddles(scratch_a, &self.twiddle_inv);
+        mixed_radix::forward_inplace_32_with_twiddles(scratch_a, Some(&self.twiddle_fwd));
+        mul_pointwise_32_with_twiddle_inverse_kernel(scratch_a, &self.b_m);
+        mixed_radix::inverse_inplace_32_with_twiddles(scratch_a, Some(&self.twiddle_inv));
 
-        for (n_idx, y_n) in data.iter_mut().enumerate() {
-            *y_n = self.chirp[n_idx].conj() * scratch_a[n_idx];
-        }
+        let scratch_head = &scratch_a[..self.n];
+        fill_and_mul_from_input_32_conj(data, scratch_head, &self.chirp);
     }
 }
 
