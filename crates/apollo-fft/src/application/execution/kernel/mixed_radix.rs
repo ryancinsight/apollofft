@@ -5,8 +5,10 @@
 //! - Power-of-4  → `radix4` (radix-4 DIT butterfly).
 //! - Other PoT   → `radix2` (iterative Cooley-Tukey, stages 1-4 use
 //!                 compile-time constants to avoid trig calls).
-//! - Arbitrary   → Bluestein chirp-Z (no-alloc on the hot path when the
-//!                 caller supplies `Some(twiddles)`).
+//! - Non-power-of-two 5-smooth → composite radix (coalesced into cached radices),
+//!                          then mixed-radix FFT.
+//! - Other arbitrary lengths → Bluestein chirp-Z (no-alloc on the hot path when
+//!                            the caller supplies `Some(twiddles)`).
 //!
 //! ## SSOT principle
 //!
@@ -26,8 +28,8 @@
 
 use super::f16_bridge::run_f16_via_f32;
 use super::radix2_f16::Cf16;
-use super::radix_shape::{is_power_of_eight, is_power_of_four};
-use super::{bluestein, radix2, radix2_f16, radix4, radix8};
+use super::radix_shape::{factorize_composite, is_power_of_eight, is_power_of_four};
+use super::{bluestein, radix2, radix2_f16, radix4, radix8, radix_composite};
 use num_complex::{Complex32, Complex64};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
@@ -49,6 +51,8 @@ static TWIDDLE_FWD_F16_CACHE: Lazy<RwLock<HashMap<usize, Arc<[Cf16]>>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 static TWIDDLE_INV_F16_CACHE: Lazy<RwLock<HashMap<usize, Arc<[Cf16]>>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
+static COMPOSITE_RADIX_CACHE: Lazy<RwLock<HashMap<usize, Option<Arc<[usize]>>>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
 
 // ── Thread-local fast-path caches (zero locking on the hot path after warmup) ─
 //
@@ -69,6 +73,8 @@ thread_local! {
     static TL_FWD_F16: RefCell<HashMap<usize, Arc<[Cf16]>>> =
         RefCell::new(HashMap::with_capacity(8));
     static TL_INV_F16: RefCell<HashMap<usize, Arc<[Cf16]>>> =
+        RefCell::new(HashMap::with_capacity(8));
+    static TL_COMPOSITE_RADIX: RefCell<HashMap<usize, Option<Arc<[usize]>>>> =
         RefCell::new(HashMap::with_capacity(8));
 }
 
@@ -247,8 +253,36 @@ pub fn forward_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: Option
             r2 = radix2::forward_inplace_64_with_twiddles
         );
     } else {
-        bluestein::forward_inplace_64(data);
+        if let Some(radices) = cached_composite_radices(data.len()) {
+            radix_composite::forward_inplace_64_with_radices(data, &radices);
+        } else {
+            bluestein::forward_inplace_64(data);
+        }
     }
+}
+
+#[inline]
+fn cached_composite_radices(n: usize) -> Option<Arc<[usize]>> {
+    if let Some(radices) = TL_COMPOSITE_RADIX.with(|c| c.borrow().get(&n).cloned()) {
+        return radices;
+    }
+
+    let radices = {
+        let maybe_cached = COMPOSITE_RADIX_CACHE.read().get(&n).cloned();
+        if let Some(radices) = maybe_cached {
+            radices
+        } else {
+            let new_radices = factorize_composite(n).map(|rad| Arc::from(rad.into_boxed_slice()));
+            COMPOSITE_RADIX_CACHE
+                .write()
+                .entry(n)
+                .or_insert_with(|| new_radices.clone());
+            new_radices
+        }
+    };
+
+    TL_COMPOSITE_RADIX.with(|c| c.borrow_mut().insert(n, radices.clone()));
+    radices
 }
 
 /// In-place inverse FFT (unnormalized, f64) with optional precomputed twiddles.
@@ -269,7 +303,11 @@ pub fn inverse_inplace_unnorm_64_with_twiddles(
             r2 = radix2::inverse_inplace_unnorm_64_with_twiddles
         );
     } else {
-        bluestein::inverse_inplace_unnorm_64(data);
+        if let Some(radices) = cached_composite_radices(data.len()) {
+            radix_composite::inverse_inplace_unnorm_64_with_radices(data, &radices);
+        } else {
+            bluestein::inverse_inplace_unnorm_64(data);
+        }
     }
 }
 
@@ -288,7 +326,11 @@ pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: Option
             r2 = radix2::inverse_inplace_64_with_twiddles
         );
     } else {
-        bluestein::inverse_inplace_64(data);
+        if let Some(radices) = cached_composite_radices(data.len()) {
+            radix_composite::inverse_inplace_64_with_radices(data, &radices);
+        } else {
+            bluestein::inverse_inplace_64(data);
+        }
     }
 }
 
@@ -348,7 +390,11 @@ pub fn forward_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: Option
             r2 = radix2::forward_inplace_32_with_twiddles
         );
     } else {
-        bluestein::forward_inplace_32(data);
+        if let Some(radices) = cached_composite_radices(data.len()) {
+            radix_composite::forward_inplace_32_with_radices(data, &radices);
+        } else {
+            bluestein::forward_inplace_32(data);
+        }
     }
 }
 
@@ -370,7 +416,11 @@ pub fn inverse_inplace_unnorm_32_with_twiddles(
             r2 = radix2::inverse_inplace_unnorm_32_with_twiddles
         );
     } else {
-        bluestein::inverse_inplace_unnorm_32(data);
+        if let Some(radices) = cached_composite_radices(data.len()) {
+            radix_composite::inverse_inplace_unnorm_32_with_radices(data, &radices);
+        } else {
+            bluestein::inverse_inplace_unnorm_32(data);
+        }
     }
 }
 
@@ -389,7 +439,11 @@ pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: Option
             r2 = radix2::inverse_inplace_32_with_twiddles
         );
     } else {
-        bluestein::inverse_inplace_32(data);
+        if let Some(radices) = cached_composite_radices(data.len()) {
+            radix_composite::inverse_inplace_32_with_radices(data, &radices);
+        } else {
+            bluestein::inverse_inplace_32(data);
+        }
     }
 }
 
@@ -436,8 +490,8 @@ pub fn inverse_inplace_32(data: &mut [Complex32]) {
 
 /// In-place forward FFT (unnormalized, f16 storage) with optional precomputed twiddles.
 ///
-/// Non-PoT lengths promote to f32, run Bluestein-f32, and demote via
-/// `run_f16_via_f32`. This is the only allocation site for f16 non-PoT sizes.
+/// Non-PoT lengths promote to f32, then run composite radix for 5-smooth
+/// lengths or Bluestein-f32 otherwise, and demote via `run_f16_via_f32`.
 #[inline]
 pub fn forward_inplace_f16_with_twiddles(data: &mut [Cf16], twiddles: Option<&[Cf16]>) {
     if data.len() <= 1 {
@@ -451,7 +505,11 @@ pub fn forward_inplace_f16_with_twiddles(data: &mut [Cf16], twiddles: Option<&[C
             r2 = radix2_f16::forward_inplace_f16_with_twiddles
         );
     } else {
-        run_f16_via_f32(data, bluestein::forward_inplace_32);
+        if let Some(radices) = cached_composite_radices(data.len()) {
+            run_f16_via_f32(data, |buf| radix_composite::forward_inplace_32_with_radices(buf, &radices));
+        } else {
+            run_f16_via_f32(data, bluestein::forward_inplace_32);
+        }
     }
 }
 
@@ -469,7 +527,13 @@ pub fn inverse_inplace_unnorm_f16_with_twiddles(data: &mut [Cf16], twiddles: Opt
             r2 = radix2_f16::inverse_inplace_unnorm_f16_with_twiddles
         );
     } else {
-        run_f16_via_f32(data, bluestein::inverse_inplace_unnorm_32);
+        if let Some(radices) = cached_composite_radices(data.len()) {
+            run_f16_via_f32(data, |buf| {
+                radix_composite::inverse_inplace_unnorm_32_with_radices(buf, &radices)
+            });
+        } else {
+            run_f16_via_f32(data, bluestein::inverse_inplace_unnorm_32);
+        }
     }
 }
 
@@ -487,7 +551,13 @@ pub fn inverse_inplace_f16_with_twiddles(data: &mut [Cf16], twiddles: Option<&[C
             r2 = radix2_f16::inverse_inplace_f16_with_twiddles
         );
     } else {
-        run_f16_via_f32(data, bluestein::inverse_inplace_32);
+        if let Some(radices) = cached_composite_radices(data.len()) {
+            run_f16_via_f32(data, |buf| {
+                radix_composite::inverse_inplace_32_with_radices(buf, &radices)
+            });
+        } else {
+            run_f16_via_f32(data, bluestein::inverse_inplace_32);
+        }
     }
 }
 

@@ -27,6 +27,7 @@ pub mod radix32;
 pub mod radix4;
 pub mod radix64;
 pub mod radix8;
+pub(crate) mod radix_composite;
 pub(crate) mod radix_permute;
 pub(crate) mod radix_shape;
 pub(crate) mod radix_stage;

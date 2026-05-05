@@ -539,6 +539,186 @@ pub unsafe fn dft8_avx_fma_32(data: &mut [Complex32; 8], inverse: bool) {
     _mm256_storeu_ps(data.as_mut_ptr().add(4)   as *mut f32, _mm256_sub_ps(ev, ot));
 }
 
+// ── DFT-3 butterfly ──────────────────────────────────────────────────────────
+
+/// In-place DFT-3.
+///
+/// ## Mathematical derivation
+///
+/// For N=3, W₃ = exp(-2πi/3), the DFT matrix rows give:
+/// ```text
+/// Y[0] = X[0] + X[1] + X[2]
+/// Y[1] = X[0] + W₃¹·X[1] + W₃²·X[2]   (fwd)
+/// Y[2] = X[0] + W₃²·X[1] + W₃¹·X[2]   (fwd)
+/// ```
+/// With W₃¹ = −½ − i·(√3/2) and W₃² = −½ + i·(√3/2):
+/// ```text
+/// Y[1] = (X[0] − (X[1]+X[2])/2) − i·(√3/2)·(X[1]−X[2])
+/// Y[2] = (X[0] − (X[1]+X[2])/2) + i·(√3/2)·(X[1]−X[2])
+/// ```
+/// Conjugate (flip sign on imaginary twiddle component) for inverse.
+///
+/// **Real multiplications**: 4 (two by C3=−½ on re/im of s, two by S3=√3/2
+/// on re/im of id). Matches Winograd's lower bound for DFT-3.
+/// **Complex additions**: 6.
+///
+/// References: Winograd (1978), Blahut (2010) §3.2.
+#[inline(always)]
+pub fn dft3_64(data: &mut [Complex64; 3], inverse: bool) {
+    const C3: f64 = -0.5;                     // cos(2π/3) = −½
+    const S3: f64 = 0.8660254037844386767864; // sin(2π/3) = √3/2
+
+    let (x0, x1, x2) = (data[0], data[1], data[2]);
+    let s = x1 + x2; // x1 + x2
+    let d = x1 - x2; // x1 - x2
+
+    // t = x0 + C3·s = x0 − s/2
+    let t = Complex64::new(x0.re + C3 * s.re, x0.im + C3 * s.im);
+    // id = i·S3·d (forward: −i·S3·d → id = (S3·d.im, −S3·d.re) appended to t)
+    // Forward:  Y[1] = t − i·S3·d  ⟹  (.re + S3·d.im,  .im − S3·d.re)
+    //           Y[2] = t + i·S3·d  ⟹  (.re − S3·d.im,  .im + S3·d.re)
+    // Inverse:  conjugate twiddles → flip sign of S3 term.
+    data[0] = x0 + s;
+    if inverse {
+        data[1] = Complex64::new(t.re - S3 * d.im, t.im + S3 * d.re);
+        data[2] = Complex64::new(t.re + S3 * d.im, t.im - S3 * d.re);
+    } else {
+        data[1] = Complex64::new(t.re + S3 * d.im, t.im - S3 * d.re);
+        data[2] = Complex64::new(t.re - S3 * d.im, t.im + S3 * d.re);
+    }
+}
+
+/// In-place DFT-3 (f32 variant).
+#[inline(always)]
+pub fn dft3_32(data: &mut [Complex32; 3], inverse: bool) {
+    const C3: f32 = -0.5_f32;
+    const S3: f32 = 0.866_025_403_784_438_6_f32;
+
+    let (x0, x1, x2) = (data[0], data[1], data[2]);
+    let s = x1 + x2;
+    let d = x1 - x2;
+    let t = Complex32::new(x0.re + C3 * s.re, x0.im + C3 * s.im);
+    data[0] = x0 + s;
+    if inverse {
+        data[1] = Complex32::new(t.re - S3 * d.im, t.im + S3 * d.re);
+        data[2] = Complex32::new(t.re + S3 * d.im, t.im - S3 * d.re);
+    } else {
+        data[1] = Complex32::new(t.re + S3 * d.im, t.im - S3 * d.re);
+        data[2] = Complex32::new(t.re - S3 * d.im, t.im + S3 * d.re);
+    }
+}
+
+// ── DFT-5 butterfly ──────────────────────────────────────────────────────────
+
+/// In-place DFT-5.
+///
+/// ## Mathematical derivation
+///
+/// For N=5, W₅ = exp(−2πi/5). The symmetric index pairs (1,4) and (2,3)
+/// allow the 5-point DFT to be expressed via sum/difference decomposition:
+/// ```text
+/// r₁ = X[1]+X[4],  d₁ = X[1]−X[4]
+/// r₂ = X[2]+X[3],  d₂ = X[2]−X[3]
+///
+/// Y[0] = X[0] + r₁ + r₂
+/// ar   = X[0] + c₁·r₁ + c₂·r₂       (cosine terms for Y[1],Y[4])
+/// br   = X[0] + c₂·r₁ + c₁·r₂       (cosine terms for Y[2],Y[3])
+/// id₁  = s₁·d₁ + s₂·d₂               (imaginary term for Y[1],Y[4])
+/// id₂  = s₂·d₁ − s₁·d₂               (imaginary term for Y[2],Y[3])
+///
+/// Y[1] = ar − i·id₁   (fwd)    Y[4] = ar + i·id₁
+/// Y[2] = br − i·id₂   (fwd)    Y[3] = br + i·id₂
+/// ```
+/// Inverse: flip sign of the imaginary rotation (−i ↔ +i).
+///
+/// Constants:
+/// - c₁ = cos(2π/5) = (√5−1)/4 ≈ 0.30902
+/// - c₂ = cos(4π/5) = −(√5+1)/4 ≈ −0.80902
+/// - s₁ = sin(2π/5) ≈ 0.95106
+/// - s₂ = sin(4π/5) ≈ 0.58779
+///
+/// **Real multiplications**: 8 (c₁,c₂ applied to r₁,r₂; s₁,s₂ applied to
+/// d₁,d₂ — each scalar×complex costs 2 real muls). Standard minimal-form
+/// derivation: Winograd (1978), Blahut (2010) §3.3.
+/// **Complex additions**: 10.
+#[inline(always)]
+pub fn dft5_64(data: &mut [Complex64; 5], inverse: bool) {
+    // cos(2π/5) = (√5-1)/4
+    const C1: f64 = 0.309_016_994_374_947_42_f64;
+    // cos(4π/5) = -(√5+1)/4
+    const C2: f64 = -0.809_016_994_374_947_42_f64;
+    // sin(2π/5)
+    const S1: f64 = 0.951_056_516_295_153_57_f64;
+    // sin(4π/5)
+    const S2: f64 = 0.587_785_252_292_473_13_f64;
+
+    let (x0, x1, x2, x3, x4) = (data[0], data[1], data[2], data[3], data[4]);
+
+    // Symmetric sum/difference pairs.
+    let r1 = x1 + x4;
+    let r2 = x2 + x3;
+    let d1 = x1 - x4;
+    let d2 = x2 - x3;
+
+    data[0] = x0 + r1 + r2;
+
+    // Cosine accumulator terms (real-scalar × complex via componentwise mul).
+    let ar = Complex64::new(x0.re + C1 * r1.re + C2 * r2.re, x0.im + C1 * r1.im + C2 * r2.im);
+    let br = Complex64::new(x0.re + C2 * r1.re + C1 * r2.re, x0.im + C2 * r1.im + C1 * r2.im);
+
+    // Sine rotation terms (id₁, id₂ are complex; multiplied by ±i later).
+    let id1 = Complex64::new(S1 * d1.re + S2 * d2.re, S1 * d1.im + S2 * d2.im);
+    let id2 = Complex64::new(S2 * d1.re - S1 * d2.re, S2 * d1.im - S1 * d2.im);
+
+    // Apply ±i rotation: z·(−i) = (z.im, −z.re); z·(+i) = (−z.im, z.re).
+    // Forward: Y[1] = ar − i·id₁, Y[4] = ar + i·id₁
+    // Inverse: conjugate twiddles → signs flip.
+    if inverse {
+        data[1] = Complex64::new(ar.re - id1.im, ar.im + id1.re);
+        data[2] = Complex64::new(br.re - id2.im, br.im + id2.re);
+        data[3] = Complex64::new(br.re + id2.im, br.im - id2.re);
+        data[4] = Complex64::new(ar.re + id1.im, ar.im - id1.re);
+    } else {
+        data[1] = Complex64::new(ar.re + id1.im, ar.im - id1.re);
+        data[2] = Complex64::new(br.re + id2.im, br.im - id2.re);
+        data[3] = Complex64::new(br.re - id2.im, br.im + id2.re);
+        data[4] = Complex64::new(ar.re - id1.im, ar.im + id1.re);
+    }
+}
+
+/// In-place DFT-5 (f32 variant).
+#[inline(always)]
+pub fn dft5_32(data: &mut [Complex32; 5], inverse: bool) {
+    const C1: f32 = 0.309_016_994_374_947_42_f32;
+    const C2: f32 = -0.809_016_994_374_947_42_f32;
+    const S1: f32 = 0.951_056_516_295_153_57_f32;
+    const S2: f32 = 0.587_785_252_292_473_13_f32;
+
+    let (x0, x1, x2, x3, x4) = (data[0], data[1], data[2], data[3], data[4]);
+    let r1 = x1 + x4;
+    let r2 = x2 + x3;
+    let d1 = x1 - x4;
+    let d2 = x2 - x3;
+
+    data[0] = x0 + r1 + r2;
+    let ar = Complex32::new(x0.re + C1 * r1.re + C2 * r2.re, x0.im + C1 * r1.im + C2 * r2.im);
+    let br = Complex32::new(x0.re + C2 * r1.re + C1 * r2.re, x0.im + C2 * r1.im + C1 * r2.im);
+    let id1 = Complex32::new(S1 * d1.re + S2 * d2.re, S1 * d1.im + S2 * d2.im);
+    let id2 = Complex32::new(S2 * d1.re - S1 * d2.re, S2 * d1.im - S1 * d2.im);
+
+    if inverse {
+        data[1] = Complex32::new(ar.re - id1.im, ar.im + id1.re);
+        data[2] = Complex32::new(br.re - id2.im, br.im + id2.re);
+        data[3] = Complex32::new(br.re + id2.im, br.im - id2.re);
+        data[4] = Complex32::new(ar.re + id1.im, ar.im - id1.re);
+    } else {
+        data[1] = Complex32::new(ar.re + id1.im, ar.im - id1.re);
+        data[2] = Complex32::new(br.re + id2.im, br.im - id2.re);
+        data[3] = Complex32::new(br.re - id2.im, br.im + id2.re);
+        data[4] = Complex32::new(ar.re - id1.im, ar.im + id1.re);
+    }
+}
+
 // ── DFT-16 butterfly ─────────────────────────────────────────────────────────
 
 /// Precomputed forward twiddle factors for the 16-point DFT stage.
@@ -859,6 +1039,127 @@ mod tests {
             .zip(b)
             .map(|(x, y)| (x - y).norm())
             .fold(0.0f64, f64::max)
+    }
+
+    // ── DFT-3 ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn dft3_forward_matches_direct() {
+        let input: Vec<Complex64> = (0..3)
+            .map(|k| Complex64::new((k as f64 * 0.71).sin(), (k as f64 * 0.43).cos()))
+            .collect();
+        let expected = dft_forward_64(&input);
+        let mut buf: [Complex64; 3] = input.as_slice().try_into().unwrap();
+        dft3_64(&mut buf, false);
+        let err = max_err(&buf, &expected);
+        assert!(err < 1e-13, "DFT-3 forward max_err={err:.2e}");
+    }
+
+    #[test]
+    fn dft3_inverse_roundtrip() {
+        let input: Vec<Complex64> = (0..3)
+            .map(|k| Complex64::new((k as f64 * 0.55).cos(), (k as f64 * 0.19).sin()))
+            .collect();
+        let mut buf: [Complex64; 3] = input.as_slice().try_into().unwrap();
+        dft3_64(&mut buf, false);
+        dft3_64(&mut buf, true);
+        let recovered: Vec<Complex64> = buf.iter().map(|x| x / 3.0).collect();
+        let err = max_err(&recovered, &input);
+        assert!(err < 1e-13, "DFT-3 roundtrip max_err={err:.2e}");
+    }
+
+    #[test]
+    fn dft3_inverse_matches_direct() {
+        let input: Vec<Complex64> = (0..3)
+            .map(|k| Complex64::new((k as f64 * 0.39).cos(), (k as f64 * 0.83).sin()))
+            .collect();
+        let expected_unnorm: Vec<Complex64> = dft_inverse_64(&input)
+            .into_iter()
+            .map(|x| x * 3.0)
+            .collect();
+        let mut buf: [Complex64; 3] = input.as_slice().try_into().unwrap();
+        dft3_64(&mut buf, true);
+        let err = max_err(&buf, &expected_unnorm);
+        assert!(err < 1e-13, "DFT-3 inverse max_err={err:.2e}");
+    }
+
+    #[test]
+    fn dft3_dc_produces_energy_in_bin0() {
+        let mut buf = [Complex64::new(1.0, 0.0); 3];
+        dft3_64(&mut buf, false);
+        assert!((buf[0] - Complex64::new(3.0, 0.0)).norm() < 1e-14);
+        for x in &buf[1..] {
+            assert!(x.norm() < 1e-14, "non-zero bin: {:?}", x);
+        }
+    }
+
+    // ── DFT-5 ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn dft5_forward_matches_direct() {
+        let input: Vec<Complex64> = (0..5)
+            .map(|k| Complex64::new((k as f64 * 0.61).sin(), (k as f64 * 0.37).cos()))
+            .collect();
+        let expected = dft_forward_64(&input);
+        let mut buf: [Complex64; 5] = input.as_slice().try_into().unwrap();
+        dft5_64(&mut buf, false);
+        let err = max_err(&buf, &expected);
+        assert!(err < 1e-12, "DFT-5 forward max_err={err:.2e}");
+    }
+
+    #[test]
+    fn dft5_inverse_roundtrip() {
+        let input: Vec<Complex64> = (0..5)
+            .map(|k| Complex64::new((k as f64 * 0.47).cos(), (k as f64 * 0.28).sin()))
+            .collect();
+        let mut buf: [Complex64; 5] = input.as_slice().try_into().unwrap();
+        dft5_64(&mut buf, false);
+        dft5_64(&mut buf, true);
+        let recovered: Vec<Complex64> = buf.iter().map(|x| x / 5.0).collect();
+        let err = max_err(&recovered, &input);
+        assert!(err < 1e-12, "DFT-5 roundtrip max_err={err:.2e}");
+    }
+
+    #[test]
+    fn dft5_inverse_matches_direct() {
+        let input: Vec<Complex64> = (0..5)
+            .map(|k| Complex64::new((k as f64 * 0.23).cos(), (k as f64 * 0.77).sin()))
+            .collect();
+        let expected_unnorm: Vec<Complex64> = dft_inverse_64(&input)
+            .into_iter()
+            .map(|x| x * 5.0)
+            .collect();
+        let mut buf: [Complex64; 5] = input.as_slice().try_into().unwrap();
+        dft5_64(&mut buf, true);
+        let err = max_err(&buf, &expected_unnorm);
+        assert!(err < 1e-12, "DFT-5 inverse max_err={err:.2e}");
+    }
+
+    #[test]
+    fn dft5_dc_produces_energy_in_bin0() {
+        let mut buf = [Complex64::new(1.0, 0.0); 5];
+        dft5_64(&mut buf, false);
+        assert!((buf[0] - Complex64::new(5.0, 0.0)).norm() < 1e-14);
+        for x in &buf[1..] {
+            assert!(x.norm() < 1e-14, "non-zero bin: {:?}", x);
+        }
+    }
+
+    #[test]
+    fn dft5_f32_forward_matches_direct() {
+        let input: Vec<Complex64> = (0..5)
+            .map(|k| Complex64::new((k as f64 * 0.53).sin(), (k as f64 * 0.31).cos()))
+            .collect();
+        let expected = dft_forward_64(&input);
+        let mut buf: [Complex32; 5] =
+            core::array::from_fn(|i| Complex32::new(input[i].re as f32, input[i].im as f32));
+        dft5_32(&mut buf, false);
+        let got: Vec<Complex64> = buf
+            .iter()
+            .map(|x| Complex64::new(x.re as f64, x.im as f64))
+            .collect();
+        let err = max_err(&got, &expected);
+        assert!(err < 2e-6, "DFT-5 f32 forward max_err={err:.2e}");
     }
 
     // ── DFT-2 ────────────────────────────────────────────────────────────────

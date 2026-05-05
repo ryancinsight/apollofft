@@ -21,6 +21,13 @@ use std::mem::size_of;
 use std::sync::Arc;
 use rayon::prelude::*;
 
+/// Newtype wrapper that makes a raw mutable pointer `Send + Sync`.
+///
+/// # Safety
+/// The caller must guarantee that the pointer's backing storage lives for the
+/// duration of any parallel section and that non-overlapping sub-slices are
+/// handed out to different threads (enforced by the chunk decomposition below).
+
 static BLUESTEIN_PLAN_CACHE_64: Lazy<RwLock<HashMap<usize, Arc<BluesteinPlan64>>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 static BLUESTEIN_PLAN_CACHE_32: Lazy<RwLock<HashMap<usize, Arc<BluesteinPlan32>>>> =
@@ -301,6 +308,76 @@ fn par_mul_pointwise_32_inplace(dst: &mut [Complex32], twiddle: &[Complex32]) {
 }
 
 #[inline]
+fn par_mul_pointwise_64_inplace_inverse_tail(
+    dst: &mut [Complex64],
+    twiddle: &[Complex64],
+    base_index: usize,
+) {
+    if dst.is_empty() {
+        return;
+    }
+    let full_len = twiddle.len();
+    debug_assert!(base_index < full_len);
+    debug_assert!(base_index + dst.len() <= full_len);
+    let use_avx = has_avx_fma();
+    // par_chunks_mut decomposes `dst` into non-overlapping mutable sub-slices,
+    // avoiding raw pointer aliasing and eliminating the need for unsafe Send/Sync impls.
+    dst.par_chunks_mut(BLUESTEIN_PARALLEL_POINTWISE_CHUNK)
+        .enumerate()
+        .for_each(|(chunk_idx, chunk)| {
+            let chunk_start = chunk_idx * BLUESTEIN_PARALLEL_POINTWISE_CHUNK;
+            let chunk_len = chunk.len();
+            let factor_base = full_len - (base_index + chunk_start);
+            if use_avx && chunk_len >= BLUESTEIN_SIMD_POINTWISE_MIN {
+                unsafe {
+                    mul_complex_pointwise_64_avx_inplace_inverse_chunk(chunk, twiddle, factor_base);
+                }
+            } else {
+                for (offset, out) in chunk.iter_mut().enumerate() {
+                    let factor = twiddle[full_len - (base_index + chunk_start + offset)];
+                    let re = out.re * factor.re + out.im * factor.im;
+                    let im = out.im * factor.re - out.re * factor.im;
+                    *out = Complex64::new(re, im);
+                }
+            }
+        });
+}
+
+#[inline]
+fn par_mul_pointwise_32_inplace_inverse_tail(
+    dst: &mut [Complex32],
+    twiddle: &[Complex32],
+    base_index: usize,
+) {
+    if dst.is_empty() {
+        return;
+    }
+    let full_len = twiddle.len();
+    debug_assert!(base_index < full_len);
+    debug_assert!(base_index + dst.len() <= full_len);
+    let use_avx = has_avx_fma();
+    dst.par_chunks_mut(BLUESTEIN_PARALLEL_POINTWISE_CHUNK)
+        .enumerate()
+        .for_each(|(chunk_idx, chunk)| {
+            let chunk_start = chunk_idx * BLUESTEIN_PARALLEL_POINTWISE_CHUNK;
+            let chunk_len = chunk.len();
+            let factor_base = full_len - (base_index + chunk_start);
+            if use_avx && chunk_len >= BLUESTEIN_SIMD_POINTWISE_MIN {
+                unsafe {
+                    mul_complex_pointwise_32_avx_inplace_inverse_chunk(chunk, twiddle, factor_base);
+                }
+            } else {
+                for (offset, out) in chunk.iter_mut().enumerate() {
+                    let factor = twiddle[full_len - (base_index + chunk_start + offset)];
+                    let re = out.re * factor.re + out.im * factor.im;
+                    let im = out.im * factor.re - out.re * factor.im;
+                    *out = Complex32::new(re, im);
+                }
+            }
+        });
+}
+
+#[inline]
 fn fill_and_mul_from_input_64(
     dst: &mut [Complex64],
     input: &[Complex64],
@@ -457,13 +534,7 @@ fn mul_pointwise_64_with_twiddle_inverse_kernel(dst: &mut [Complex64], twiddle: 
             let im = head.im * factor.re - head.re * factor.im;
             *head = Complex64::new(re, im);
         }
-        tail.par_iter_mut()
-            .zip(twiddle[1..].par_iter().rev())
-            .for_each(|(out, factor)| {
-                let re = out.re * factor.re + out.im * factor.im;
-                let im = out.im * factor.re - out.re * factor.im;
-                *out = Complex64::new(re, im);
-            });
+        par_mul_pointwise_64_inplace_inverse_tail(tail, twiddle, 1);
         return;
     }
     #[cfg(target_arch = "x86_64")]
@@ -531,13 +602,7 @@ fn mul_pointwise_32_with_twiddle_inverse_kernel(dst: &mut [Complex32], twiddle: 
             let im = head.im * factor.re - head.re * factor.im;
             *head = Complex32::new(re, im);
         }
-        tail.par_iter_mut()
-            .zip(twiddle[1..].par_iter().rev())
-            .for_each(|(out, factor)| {
-                let re = out.re * factor.re + out.im * factor.im;
-                let im = out.im * factor.re - out.re * factor.im;
-                *out = Complex32::new(re, im);
-            });
+        par_mul_pointwise_32_inplace_inverse_tail(tail, twiddle, 1);
         return;
     }
     #[cfg(target_arch = "x86_64")]
@@ -722,6 +787,46 @@ unsafe fn mul_complex_pointwise_64_avx_inplace_inverse(
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx,fma")]
+unsafe fn mul_complex_pointwise_64_avx_inplace_inverse_chunk(
+    dst: &mut [Complex64],
+    twiddle: &[Complex64],
+    factor_base: usize,
+) {
+    use std::arch::x86_64::{
+        _mm256_fmaddsub_pd, _mm256_loadu_pd, _mm256_mul_pd, _mm256_permute_pd,
+        _mm256_set1_pd, _mm256_setr_pd, _mm256_storeu_pd, _mm256_unpackhi_pd, _mm256_unpacklo_pd,
+    };
+    let count = dst.len();
+    if count == 0 {
+        return;
+    }
+    debug_assert!(factor_base < twiddle.len());
+    debug_assert!(factor_base + 1 >= count);
+    let dst_f = dst.as_mut_ptr() as *mut f64;
+    let neg = _mm256_set1_pd(-1.0);
+    for b in 0..(count / 2) {
+        let dst_offset = b * 4;
+        let first = twiddle[factor_base - 2 * b];
+        let second = twiddle[factor_base - (2 * b + 1)];
+        let w = _mm256_setr_pd(first.re, first.im, second.re, second.im);
+        let x = _mm256_loadu_pd(dst_f.add(dst_offset));
+        let x_perm = _mm256_permute_pd(x, 5);
+        let ac = _mm256_unpacklo_pd(w, w);
+        let bd = _mm256_mul_pd(_mm256_unpackhi_pd(w, w), neg);
+        let yw = _mm256_fmaddsub_pd(ac, x, _mm256_mul_pd(bd, x_perm));
+        _mm256_storeu_pd(dst_f.add(dst_offset), yw);
+    }
+    if count % 2 == 1 {
+        let out = &mut dst[count - 1];
+        let factor = twiddle[factor_base - (count - 1)];
+        let re = out.re * factor.re + out.im * factor.im;
+        let im = out.im * factor.re - out.re * factor.im;
+        *out = Complex64::new(re, im);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx,fma")]
 unsafe fn mul_complex_pointwise_32_avx_from_input(
     dst: &mut [Complex32],
     input: &[Complex32],
@@ -857,6 +962,60 @@ unsafe fn mul_complex_pointwise_32_avx_inplace_inverse(
         for k in 0..rem {
             let out = &mut dst[base + k];
             let factor = twiddle[len - (4 * batches + k + 1)];
+            let re = out.re * factor.re + out.im * factor.im;
+            let im = out.im * factor.re - out.re * factor.im;
+            *out = Complex32::new(re, im);
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx,fma")]
+unsafe fn mul_complex_pointwise_32_avx_inplace_inverse_chunk(
+    dst: &mut [Complex32],
+    twiddle: &[Complex32],
+    factor_base: usize,
+) {
+    use std::arch::x86_64::{
+        _mm256_fmaddsub_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_moveldup_ps,
+        _mm256_movehdup_ps, _mm256_permute_ps, _mm256_set1_ps, _mm256_setr_ps, _mm256_storeu_ps,
+    };
+    let count = dst.len();
+    if count == 0 {
+        return;
+    }
+    debug_assert!(factor_base < twiddle.len());
+    debug_assert!(factor_base + 1 >= count);
+    let dst_f = dst.as_mut_ptr() as *mut f32;
+    let neg = _mm256_set1_ps(-1.0);
+    for b in 0..(count / 4) {
+        let dst_offset = b * 8;
+        let w0 = twiddle[factor_base - 4 * b];
+        let w1 = twiddle[factor_base - (4 * b + 1)];
+        let w2 = twiddle[factor_base - (4 * b + 2)];
+        let w3 = twiddle[factor_base - (4 * b + 3)];
+        let w = _mm256_setr_ps(
+            w0.re,
+            w0.im,
+            w1.re,
+            w1.im,
+            w2.re,
+            w2.im,
+            w3.re,
+            w3.im,
+        );
+        let x = _mm256_loadu_ps(dst_f.add(dst_offset));
+        let x_perm = _mm256_permute_ps(x, 0xB1);
+        let w_re = _mm256_moveldup_ps(w);
+        let w_im = _mm256_mul_ps(_mm256_movehdup_ps(w), neg);
+        let yw = _mm256_fmaddsub_ps(w_re, x, _mm256_mul_ps(w_im, x_perm));
+        _mm256_storeu_ps(dst_f.add(dst_offset), yw);
+    }
+    if count % 4 != 0 {
+        let base = (count / 4) * 4;
+        for k in 0..(count % 4) {
+            let out = &mut dst[base + k];
+            let factor = twiddle[factor_base - (base + k)];
             let re = out.re * factor.re + out.im * factor.im;
             let im = out.im * factor.re - out.re * factor.im;
             *out = Complex32::new(re, im);
