@@ -32,6 +32,11 @@ use std::arch::x86_64::{
 };
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+use std::arch::x86_64::{
+    _mm_fmaddsub_ps, _mm_movehdup_ps, _mm_moveldup_ps, _mm_mul_ps, _mm_permute_ps,
+};
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
 #[inline(always)]
 unsafe fn cmul2_r8(
     a: std::arch::x86_64::__m256d,
@@ -41,6 +46,18 @@ unsafe fn cmul2_r8(
     let ai = _mm256_unpackhi_pd(a, a);
     let bsw = _mm256_permute_pd(b, 0b0101);
     _mm256_fmaddsub_pd(ar, b, _mm256_mul_pd(ai, bsw))
+}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+#[inline(always)]
+unsafe fn cmul2_r8_32(
+    a: std::arch::x86_64::__m128,
+    b: std::arch::x86_64::__m128,
+) -> std::arch::x86_64::__m128 {
+    let ar = _mm_moveldup_ps(a);
+    let ai = _mm_movehdup_ps(a);
+    let bsw = _mm_permute_ps(b, 0xB1);
+    _mm_fmaddsub_ps(ar, b, _mm_mul_ps(ai, bsw))
 }
 
 #[inline]
@@ -226,6 +243,7 @@ fn process_j_pair_simd_64(
     };
     // tw_pair starts at step_pair (twiddle^1).
     let mut tw_pair = step_pair;
+    let mut tmp = [0.0f64; 4];
 
     for p in 1..8usize {
         let base = j + p * eighth;
@@ -233,8 +251,7 @@ fn process_j_pair_simd_64(
         let data_pair = unsafe { _mm256_loadu_pd(chunk.as_ptr().add(base) as *const f64) };
         // Apply twiddles: [data_j * tw_j, data_{j+1} * tw_{j+1}]
         let result = unsafe { cmul2_r8(data_pair, tw_pair) };
-        // Store result back and extract scalar values for buf.
-        let mut tmp = [0.0f64; 4];
+        // Store result and extract scalar values for buf.
         unsafe { _mm256_storeu_pd(tmp.as_mut_ptr(), result) };
         buf_j[p] = Complex64::new(tmp[0], tmp[1]);
         buf_j1[p] = Complex64::new(tmp[2], tmp[3]);
@@ -280,10 +297,9 @@ fn process_j_scalar_32(
 
 /// Process a pair of adjacent j-positions for Complex32 using SIMD twiddle recurrence.
 ///
-/// Packs `[tw_j, tw_{j+1}]` into one `__m256` (4 Complex32 = 8 f32) and advances
-/// both twiddle recurrences simultaneously with `cmul4_32`.  Applies twiddles to
-/// `[data[j+p*e], data[j+1+p*e]]` in one SIMD multiply per p.  2× throughput
-/// vs scalar on the twiddle application; inner DFT-8 uses `dft8_avx_fma_32`.
+/// Packs `[tw_j, tw_{j+1}]` into one `__m128` and advances twiddle recurrences
+/// with `cmul2_r8_32`. Applies twiddles to contiguous
+/// `[data[j+p*e], data[j+1+p*e]]` via direct loads (no temporary gather arrays).
 #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
 #[inline(always)]
 fn process_j_pair_simd_32(
@@ -294,44 +310,29 @@ fn process_j_pair_simd_32(
     step_j1: Complex32,
     inverse: bool,
 ) {
-    use std::arch::x86_64::{_mm256_loadu_ps, _mm256_storeu_ps};
+    use std::arch::x86_64::{_mm_loadu_ps, _mm_storeu_ps};
 
     let mut buf_j  = [Complex32::new(0.0, 0.0); 8];
     let mut buf_j1 = [Complex32::new(0.0, 0.0); 8];
     buf_j[0]  = chunk[j];
     buf_j1[0] = chunk[j + 1];
 
-    // Pack step_j and step_{j+1} into one __m256 (positions 0,1 and 2,3 within
-    // the lower 128 bits; upper 128 bits are filled with the same pair for cmul4_32).
-    // Layout: [step_j.re, step_j.im, step_j1.re, step_j1.im,
-    //          step_j.re, step_j.im, step_j1.re, step_j1.im]
-    let step_arr = [
-        step_j.re, step_j.im, step_j1.re, step_j1.im,
-        step_j.re, step_j.im, step_j1.re, step_j1.im,
-    ];
-    let step_pair = unsafe { _mm256_loadu_ps(step_arr.as_ptr()) };
+    let step_pair = unsafe {
+        _mm_loadu_ps([step_j.re, step_j.im, step_j1.re, step_j1.im].as_ptr())
+    };
     // tw_pair starts at step_pair (twiddle^1).
     let mut tw_pair = step_pair;
+    let mut tmp = [0.0f32; 4];
 
     for p in 1..8usize {
         let base = j + p * eighth;
-        // Load [data[j+p*e], data[j+1+p*e]] into lower 128 bits and replicate to upper.
-        // The two Complex32 are contiguous in memory.
-        let v2 = [
-            chunk[base].re, chunk[base].im,
-            chunk[base + 1].re, chunk[base + 1].im,
-            chunk[base].re, chunk[base].im,
-            chunk[base + 1].re, chunk[base + 1].im,
-        ];
-        let data_pair = unsafe { _mm256_loadu_ps(v2.as_ptr()) };
-        // Apply twiddles: cmul4_32 computes [d_j * tw_j, d_{j+1} * tw_{j+1}] × 2 (upper mirrors lower).
-        let result = unsafe { winograd::cmul4_32(data_pair, tw_pair) };
-        let mut tmp = [0.0f32; 8];
-        unsafe { _mm256_storeu_ps(tmp.as_mut_ptr(), result) };
+        let data_pair = unsafe { _mm_loadu_ps(chunk.as_ptr().add(base) as *const f32) };
+        let result = unsafe { cmul2_r8_32(data_pair, tw_pair) };
+        unsafe { _mm_storeu_ps(tmp.as_mut_ptr(), result) };
         buf_j[p]  = Complex32::new(tmp[0], tmp[1]);
         buf_j1[p] = Complex32::new(tmp[2], tmp[3]);
         // Advance twiddle recurrence.
-        tw_pair = unsafe { winograd::cmul4_32(tw_pair, step_pair) };
+        tw_pair = unsafe { cmul2_r8_32(tw_pair, step_pair) };
     }
 
     unsafe {

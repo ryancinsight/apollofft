@@ -16,6 +16,7 @@ use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use std::mem::size_of;
 use std::sync::Arc;
 use rayon::prelude::*;
@@ -37,7 +38,23 @@ thread_local! {
 }
 
 const BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD: usize = 65_536;
+const BLUESTEIN_PARALLEL_POINTWISE_CHUNK: usize = 4_096;
 const BLUESTEIN_SIMD_POINTWISE_MIN: usize = 8;
+
+#[inline]
+#[cfg(target_arch = "x86_64")]
+fn has_avx_fma() -> bool {
+    static HAS_AVX_FMA: OnceLock<bool> = OnceLock::new();
+    *HAS_AVX_FMA.get_or_init(|| {
+        std::is_x86_feature_detected!("avx") && std::is_x86_feature_detected!("fma")
+    })
+}
+
+#[inline]
+#[cfg(not(target_arch = "x86_64"))]
+const fn has_avx_fma() -> bool {
+    false
+}
 
 #[inline]
 fn zero_fill_complex64(dst: &mut [Complex64]) {
@@ -70,6 +87,220 @@ fn zero_fill_complex32(dst: &mut [Complex32]) {
 }
 
 #[inline]
+fn par_fill_and_mul_from_input_64(
+    dst: &mut [Complex64],
+    input: &[Complex64],
+    factors: &[Complex64],
+) {
+    let use_avx = has_avx_fma();
+    if use_avx {
+        dst.par_chunks_mut(BLUESTEIN_PARALLEL_POINTWISE_CHUNK)
+            .zip(input.par_chunks(BLUESTEIN_PARALLEL_POINTWISE_CHUNK))
+            .zip(factors.par_chunks(BLUESTEIN_PARALLEL_POINTWISE_CHUNK))
+            .for_each(|((dst_chunk, input_chunk), factor_chunk)| {
+                if dst_chunk.len() >= BLUESTEIN_SIMD_POINTWISE_MIN {
+                    #[cfg(target_arch = "x86_64")]
+                    unsafe {
+                        mul_complex_pointwise_64_avx_from_input(
+                            dst_chunk,
+                            input_chunk,
+                            factor_chunk,
+                        );
+                    }
+                } else {
+                    for ((out, in_v), factor) in dst_chunk
+                        .iter_mut()
+                        .zip(input_chunk.iter())
+                        .zip(factor_chunk.iter())
+                    {
+                        *out = *in_v * *factor;
+                    }
+                }
+            });
+    } else {
+        dst.par_iter_mut()
+            .zip(input.par_iter().zip(factors.par_iter()))
+            .for_each(|(out, (in_v, factor))| *out = *in_v * *factor);
+    }
+}
+
+#[inline]
+fn par_fill_and_mul_from_input_64_conj(
+    dst: &mut [Complex64],
+    input: &[Complex64],
+    factors: &[Complex64],
+) {
+    let use_avx = has_avx_fma();
+    if use_avx {
+        dst.par_chunks_mut(BLUESTEIN_PARALLEL_POINTWISE_CHUNK)
+            .zip(input.par_chunks(BLUESTEIN_PARALLEL_POINTWISE_CHUNK))
+            .zip(factors.par_chunks(BLUESTEIN_PARALLEL_POINTWISE_CHUNK))
+            .for_each(|((dst_chunk, input_chunk), factor_chunk)| {
+                if dst_chunk.len() >= BLUESTEIN_SIMD_POINTWISE_MIN {
+                    #[cfg(target_arch = "x86_64")]
+                    unsafe {
+                        mul_complex_pointwise_64_avx_from_input_conj(
+                            dst_chunk,
+                            input_chunk,
+                            factor_chunk,
+                        );
+                    }
+                } else {
+                    for ((out, in_v), factor) in dst_chunk
+                        .iter_mut()
+                        .zip(input_chunk.iter())
+                        .zip(factor_chunk.iter())
+                    {
+                        let re = in_v.re * factor.re + in_v.im * factor.im;
+                        let im = in_v.im * factor.re - in_v.re * factor.im;
+                        *out = Complex64::new(re, im);
+                    }
+                }
+            });
+    } else {
+        dst.par_iter_mut()
+            .zip(input.par_iter().zip(factors.par_iter()))
+            .for_each(|(out, (in_v, factor))| {
+                let re = in_v.re * factor.re + in_v.im * factor.im;
+                let im = in_v.im * factor.re - in_v.re * factor.im;
+                *out = Complex64::new(re, im);
+            });
+    }
+}
+
+#[inline]
+fn par_fill_and_mul_from_input_32(
+    dst: &mut [Complex32],
+    input: &[Complex32],
+    factors: &[Complex32],
+) {
+    let use_avx = has_avx_fma();
+    if use_avx {
+        dst.par_chunks_mut(BLUESTEIN_PARALLEL_POINTWISE_CHUNK)
+            .zip(input.par_chunks(BLUESTEIN_PARALLEL_POINTWISE_CHUNK))
+            .zip(factors.par_chunks(BLUESTEIN_PARALLEL_POINTWISE_CHUNK))
+            .for_each(|((dst_chunk, input_chunk), factor_chunk)| {
+                if dst_chunk.len() >= BLUESTEIN_SIMD_POINTWISE_MIN {
+                    #[cfg(target_arch = "x86_64")]
+                    unsafe {
+                        mul_complex_pointwise_32_avx_from_input(
+                            dst_chunk,
+                            input_chunk,
+                            factor_chunk,
+                        );
+                    }
+                } else {
+                    for ((out, in_v), factor) in dst_chunk
+                        .iter_mut()
+                        .zip(input_chunk.iter())
+                        .zip(factor_chunk.iter())
+                    {
+                        *out = *in_v * *factor;
+                    }
+                }
+            });
+    } else {
+        dst.par_iter_mut()
+            .zip(input.par_iter().zip(factors.par_iter()))
+            .for_each(|(out, (in_v, factor))| *out = *in_v * *factor);
+    }
+}
+
+#[inline]
+fn par_fill_and_mul_from_input_32_conj(
+    dst: &mut [Complex32],
+    input: &[Complex32],
+    factors: &[Complex32],
+) {
+    let use_avx = has_avx_fma();
+    if use_avx {
+        dst.par_chunks_mut(BLUESTEIN_PARALLEL_POINTWISE_CHUNK)
+            .zip(input.par_chunks(BLUESTEIN_PARALLEL_POINTWISE_CHUNK))
+            .zip(factors.par_chunks(BLUESTEIN_PARALLEL_POINTWISE_CHUNK))
+            .for_each(|((dst_chunk, input_chunk), factor_chunk)| {
+                if dst_chunk.len() >= BLUESTEIN_SIMD_POINTWISE_MIN {
+                    #[cfg(target_arch = "x86_64")]
+                    unsafe {
+                        mul_complex_pointwise_32_avx_from_input_conj(
+                            dst_chunk,
+                            input_chunk,
+                            factor_chunk,
+                        );
+                    }
+                } else {
+                    for ((out, in_v), factor) in dst_chunk
+                        .iter_mut()
+                        .zip(input_chunk.iter())
+                        .zip(factor_chunk.iter())
+                    {
+                        let re = in_v.re * factor.re + in_v.im * factor.im;
+                        let im = in_v.im * factor.re - in_v.re * factor.im;
+                        *out = Complex32::new(re, im);
+                    }
+                }
+            });
+    } else {
+        dst.par_iter_mut()
+            .zip(input.par_iter().zip(factors.par_iter()))
+            .for_each(|(out, (in_v, factor))| {
+                let re = in_v.re * factor.re + in_v.im * factor.im;
+                let im = in_v.im * factor.re - in_v.re * factor.im;
+                *out = Complex32::new(re, im);
+            });
+    }
+}
+
+#[inline]
+fn par_mul_pointwise_64_inplace(dst: &mut [Complex64], twiddle: &[Complex64]) {
+    let use_avx = has_avx_fma();
+    if use_avx {
+        dst.par_chunks_mut(BLUESTEIN_PARALLEL_POINTWISE_CHUNK)
+            .zip(twiddle.par_chunks(BLUESTEIN_PARALLEL_POINTWISE_CHUNK))
+            .for_each(|(dst_chunk, factor_chunk)| {
+                if dst_chunk.len() >= BLUESTEIN_SIMD_POINTWISE_MIN {
+                    #[cfg(target_arch = "x86_64")]
+                    unsafe {
+                        mul_complex_pointwise_64_avx_inplace(dst_chunk, factor_chunk);
+                    }
+                } else {
+                    for (out, factor) in dst_chunk.iter_mut().zip(factor_chunk.iter()) {
+                        *out *= *factor;
+                    }
+                }
+            });
+    } else {
+        dst.par_iter_mut()
+            .zip(twiddle.par_iter())
+            .for_each(|(out, factor)| *out *= *factor);
+    }
+}
+
+#[inline]
+fn par_mul_pointwise_32_inplace(dst: &mut [Complex32], twiddle: &[Complex32]) {
+    let use_avx = has_avx_fma();
+    if use_avx {
+        dst.par_chunks_mut(BLUESTEIN_PARALLEL_POINTWISE_CHUNK)
+            .zip(twiddle.par_chunks(BLUESTEIN_PARALLEL_POINTWISE_CHUNK))
+            .for_each(|(dst_chunk, factor_chunk)| {
+                if dst_chunk.len() >= BLUESTEIN_SIMD_POINTWISE_MIN {
+                    #[cfg(target_arch = "x86_64")]
+                    unsafe {
+                        mul_complex_pointwise_32_avx_inplace(dst_chunk, factor_chunk);
+                    }
+                } else {
+                    for (out, factor) in dst_chunk.iter_mut().zip(factor_chunk.iter()) {
+                        *out *= *factor;
+                    }
+                }
+            });
+    } else {
+        dst.par_iter_mut()
+            .zip(twiddle.par_iter())
+            .for_each(|(out, factor)| *out *= *factor);
+    }
+}
+
+#[inline]
 fn fill_and_mul_from_input_64(
     dst: &mut [Complex64],
     input: &[Complex64],
@@ -78,13 +309,11 @@ fn fill_and_mul_from_input_64(
     debug_assert_eq!(dst.len(), input.len());
     debug_assert_eq!(dst.len(), factors.len());
     if dst.len() >= BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD {
-        dst.par_iter_mut()
-            .enumerate()
-            .for_each(|(idx, out)| *out = input[idx] * factors[idx]);
+        par_fill_and_mul_from_input_64(dst, input, factors);
         return;
     }
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
-    if dst.len() >= BLUESTEIN_SIMD_POINTWISE_MIN {
+    #[cfg(target_arch = "x86_64")]
+    if dst.len() >= BLUESTEIN_SIMD_POINTWISE_MIN && has_avx_fma() {
         unsafe {
             mul_complex_pointwise_64_avx_from_input(dst, input, factors);
             return;
@@ -111,15 +340,15 @@ fn fill_and_mul_from_input_64_conj(
         return;
     }
     if dst.len() >= BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD {
-        dst.par_iter_mut()
-            .enumerate()
-            .for_each(|(idx, out)| {
-                let factor = factors[idx];
-                let re = input[idx].re * factor.re + input[idx].im * factor.im;
-                let im = input[idx].im * factor.re - input[idx].re * factor.im;
-                *out = Complex64::new(re, im);
-            });
+        par_fill_and_mul_from_input_64_conj(dst, input, factors);
         return;
+    }
+    #[cfg(target_arch = "x86_64")]
+    if dst.len() >= BLUESTEIN_SIMD_POINTWISE_MIN && has_avx_fma() {
+        unsafe {
+            mul_complex_pointwise_64_avx_from_input_conj(dst, input, factors);
+            return;
+        }
     }
     for (out, (in_v, factor)) in dst.iter_mut().zip(input.iter().zip(factors.iter())) {
         let re = in_v.re * factor.re + in_v.im * factor.im;
@@ -137,13 +366,11 @@ fn fill_and_mul_from_input_32(
     debug_assert_eq!(dst.len(), input.len());
     debug_assert_eq!(dst.len(), factors.len());
     if dst.len() >= BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD {
-        dst.par_iter_mut()
-            .enumerate()
-            .for_each(|(idx, out)| *out = input[idx] * factors[idx]);
+        par_fill_and_mul_from_input_32(dst, input, factors);
         return;
     }
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
-    if dst.len() >= BLUESTEIN_SIMD_POINTWISE_MIN {
+    #[cfg(target_arch = "x86_64")]
+    if dst.len() >= BLUESTEIN_SIMD_POINTWISE_MIN && has_avx_fma() {
         unsafe {
             mul_complex_pointwise_32_avx_from_input(dst, input, factors);
             return;
@@ -170,15 +397,15 @@ fn fill_and_mul_from_input_32_conj(
         return;
     }
     if dst.len() >= BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD {
-        dst.par_iter_mut()
-            .enumerate()
-            .for_each(|(idx, out)| {
-                let factor = factors[idx];
-                let re = input[idx].re * factor.re + input[idx].im * factor.im;
-                let im = input[idx].im * factor.re - input[idx].re * factor.im;
-                *out = Complex32::new(re, im);
-            });
+        par_fill_and_mul_from_input_32_conj(dst, input, factors);
         return;
+    }
+    #[cfg(target_arch = "x86_64")]
+    if dst.len() >= BLUESTEIN_SIMD_POINTWISE_MIN && has_avx_fma() {
+        unsafe {
+            mul_complex_pointwise_32_avx_from_input_conj(dst, input, factors);
+            return;
+        }
     }
     for (out, (in_v, factor)) in dst.iter_mut().zip(input.iter().zip(factors.iter())) {
         let re = in_v.re * factor.re + in_v.im * factor.im;
@@ -194,13 +421,11 @@ fn mul_pointwise_64_with_twiddle(dst: &mut [Complex64], twiddle: &[Complex64]) {
         return;
     }
     if dst.len() >= BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD {
-        dst.par_iter_mut()
-            .zip(twiddle.par_iter())
-            .for_each(|(out, factor)| *out *= *factor);
+        par_mul_pointwise_64_inplace(dst, twiddle);
         return;
     }
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
-    if dst.len() >= BLUESTEIN_SIMD_POINTWISE_MIN {
+    #[cfg(target_arch = "x86_64")]
+    if dst.len() >= BLUESTEIN_SIMD_POINTWISE_MIN && has_avx_fma() {
         unsafe {
             mul_complex_pointwise_64_avx_inplace(dst, twiddle);
             return;
@@ -217,32 +442,46 @@ fn mul_pointwise_64_with_twiddle_inverse_kernel(dst: &mut [Complex64], twiddle: 
     if dst.is_empty() {
         return;
     }
-    let len = dst.len();
-    if len >= BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD {
+    if dst.len() >= BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD {
+        if has_avx_fma() && rayon::current_num_threads() == 1 {
+            unsafe {
+                mul_complex_pointwise_64_avx_inplace_inverse(dst, twiddle);
+                return;
+            }
+        }
         let (head, tail) = dst.split_at_mut(1);
         if let Some(head) = head.first_mut() {
             let factor = twiddle[0];
-            let re = head.re * factor.re - head.im * factor.im;
-            let im = head.im * factor.re + head.re * factor.im;
+            // k=0: multiply by B_m_inv[0] = b_m[0].conj() → conjugate multiply
+            let re = head.re * factor.re + head.im * factor.im;
+            let im = head.im * factor.re - head.re * factor.im;
             *head = Complex64::new(re, im);
         }
-        tail.par_iter_mut().enumerate().for_each(|(idx, out)| {
-            let factor = twiddle[len - (idx + 1)];
-            let re = out.re * factor.re + out.im * factor.im;
-            let im = out.im * factor.re - out.re * factor.im;
-            *out = Complex64::new(re, im);
-        });
+        tail.par_iter_mut()
+            .zip(twiddle[1..].par_iter().rev())
+            .for_each(|(out, factor)| {
+                let re = out.re * factor.re + out.im * factor.im;
+                let im = out.im * factor.re - out.re * factor.im;
+                *out = Complex64::new(re, im);
+            });
         return;
+    }
+    #[cfg(target_arch = "x86_64")]
+    if dst.len() >= BLUESTEIN_SIMD_POINTWISE_MIN && has_avx_fma() {
+        unsafe {
+            mul_complex_pointwise_64_avx_inplace_inverse(dst, twiddle);
+            return;
+        }
     }
     let (head, tail) = dst.split_at_mut(1);
     if let Some(head) = head.first_mut() {
         let factor = twiddle[0];
-        let re = head.re * factor.re - head.im * factor.im;
-        let im = head.im * factor.re + head.re * factor.im;
+        // k=0: B_m_inv[0] = b_m[0].conj() → conjugate multiply
+        let re = head.re * factor.re + head.im * factor.im;
+        let im = head.im * factor.re - head.re * factor.im;
         *head = Complex64::new(re, im);
     }
-    for (idx, out) in tail.iter_mut().enumerate() {
-        let factor = twiddle[len - (idx + 1)];
+    for (out, factor) in tail.iter_mut().zip(twiddle[1..].iter().rev()) {
         let re = out.re * factor.re + out.im * factor.im;
         let im = out.im * factor.re - out.re * factor.im;
         *out = Complex64::new(re, im);
@@ -256,13 +495,11 @@ fn mul_pointwise_32_with_twiddle(dst: &mut [Complex32], twiddle: &[Complex32]) {
         return;
     }
     if dst.len() >= BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD {
-        dst.par_iter_mut()
-            .zip(twiddle.par_iter())
-            .for_each(|(out, factor)| *out *= *factor);
+        par_mul_pointwise_32_inplace(dst, twiddle);
         return;
     }
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
-    if dst.len() >= BLUESTEIN_SIMD_POINTWISE_MIN {
+    #[cfg(target_arch = "x86_64")]
+    if dst.len() >= BLUESTEIN_SIMD_POINTWISE_MIN && has_avx_fma() {
         unsafe {
             mul_complex_pointwise_32_avx_inplace(dst, twiddle);
             return;
@@ -279,39 +516,53 @@ fn mul_pointwise_32_with_twiddle_inverse_kernel(dst: &mut [Complex32], twiddle: 
     if dst.is_empty() {
         return;
     }
-    let len = dst.len();
-    if len >= BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD {
+    if dst.len() >= BLUESTEIN_PARALLEL_POINTWISE_THRESHOLD {
+        if has_avx_fma() && rayon::current_num_threads() == 1 {
+            unsafe {
+                mul_complex_pointwise_32_avx_inplace_inverse(dst, twiddle);
+                return;
+            }
+        }
         let (head, tail) = dst.split_at_mut(1);
         if let Some(head) = head.first_mut() {
             let factor = twiddle[0];
-            let re = head.re * factor.re - head.im * factor.im;
-            let im = head.im * factor.re + head.re * factor.im;
+            // k=0: B_m_inv[0] = b_m[0].conj() → conjugate multiply
+            let re = head.re * factor.re + head.im * factor.im;
+            let im = head.im * factor.re - head.re * factor.im;
             *head = Complex32::new(re, im);
         }
-        tail.par_iter_mut().enumerate().for_each(|(idx, out)| {
-            let factor = twiddle[len - (idx + 1)];
-            let re = out.re * factor.re + out.im * factor.im;
-            let im = out.im * factor.re - out.re * factor.im;
-            *out = Complex32::new(re, im);
-        });
+        tail.par_iter_mut()
+            .zip(twiddle[1..].par_iter().rev())
+            .for_each(|(out, factor)| {
+                let re = out.re * factor.re + out.im * factor.im;
+                let im = out.im * factor.re - out.re * factor.im;
+                *out = Complex32::new(re, im);
+            });
         return;
+    }
+    #[cfg(target_arch = "x86_64")]
+    if dst.len() >= BLUESTEIN_SIMD_POINTWISE_MIN && has_avx_fma() {
+        unsafe {
+            mul_complex_pointwise_32_avx_inplace_inverse(dst, twiddle);
+            return;
+        }
     }
     let (head, tail) = dst.split_at_mut(1);
     if let Some(head) = head.first_mut() {
         let factor = twiddle[0];
-        let re = head.re * factor.re - head.im * factor.im;
-        let im = head.im * factor.re + head.re * factor.im;
+        // k=0: B_m_inv[0] = b_m[0].conj() → conjugate multiply
+        let re = head.re * factor.re + head.im * factor.im;
+        let im = head.im * factor.re - head.re * factor.im;
         *head = Complex32::new(re, im);
     }
-    for (idx, out) in tail.iter_mut().enumerate() {
-        let factor = twiddle[len - (idx + 1)];
+    for (out, factor) in tail.iter_mut().zip(twiddle[1..].iter().rev()) {
         let re = out.re * factor.re + out.im * factor.im;
         let im = out.im * factor.re - out.re * factor.im;
         *out = Complex32::new(re, im);
     }
 }
 
-#[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx,fma")]
 unsafe fn mul_complex_pointwise_64_avx_from_input(
     dst: &mut [Complex64],
@@ -346,7 +597,47 @@ unsafe fn mul_complex_pointwise_64_avx_from_input(
     }
 }
 
-#[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx,fma")]
+unsafe fn mul_complex_pointwise_64_avx_from_input_conj(
+    dst: &mut [Complex64],
+    input: &[Complex64],
+    twiddle: &[Complex64],
+) {
+    use std::arch::x86_64::{
+        _mm256_fmaddsub_pd, _mm256_loadu_pd, _mm256_mul_pd, _mm256_permute_pd,
+        _mm256_set1_pd, _mm256_storeu_pd, _mm256_unpackhi_pd, _mm256_unpacklo_pd,
+    };
+    debug_assert_eq!(dst.len(), input.len());
+    debug_assert_eq!(dst.len(), twiddle.len());
+
+    let count = dst.len();
+    let dst_f = dst.as_mut_ptr() as *mut f64;
+    let in_f = input.as_ptr() as *const f64;
+    let tw_f = twiddle.as_ptr() as *const f64;
+    let batches = count / 2;
+    let neg = _mm256_set1_pd(-1.0);
+    for b in 0..batches {
+        let f = b * 4;
+        let x = _mm256_loadu_pd(in_f.add(f));
+        let w = _mm256_loadu_pd(tw_f.add(f));
+        let x_perm = _mm256_permute_pd(x, 5);
+        let ac = _mm256_unpacklo_pd(w, w);
+        let bd = _mm256_mul_pd(_mm256_unpackhi_pd(w, w), neg);
+        let yw = _mm256_fmaddsub_pd(ac, x, _mm256_mul_pd(bd, x_perm));
+        _mm256_storeu_pd(dst_f.add(f), yw);
+    }
+    let tail = batches * 2;
+    for i in tail..count {
+        let in_v = input[i];
+        let factor = twiddle[i];
+        let re = in_v.re * factor.re + in_v.im * factor.im;
+        let im = in_v.im * factor.re - in_v.re * factor.im;
+        dst[i] = Complex64::new(re, im);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx,fma")]
 unsafe fn mul_complex_pointwise_64_avx_inplace(dst: &mut [Complex64], twiddle: &[Complex64]) {
     use std::arch::x86_64::{
@@ -375,7 +666,61 @@ unsafe fn mul_complex_pointwise_64_avx_inplace(dst: &mut [Complex64], twiddle: &
     }
 }
 
-#[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx,fma")]
+unsafe fn mul_complex_pointwise_64_avx_inplace_inverse(
+    dst: &mut [Complex64],
+    twiddle: &[Complex64],
+) {
+    use std::arch::x86_64::{
+        _mm256_fmaddsub_pd, _mm256_loadu_pd, _mm256_mul_pd, _mm256_permute_pd,
+        _mm256_set1_pd, _mm256_setr_pd, _mm256_storeu_pd, _mm256_unpackhi_pd, _mm256_unpacklo_pd,
+    };
+    debug_assert_eq!(dst.len(), twiddle.len());
+
+    let len = dst.len();
+    if len == 0 {
+        return;
+    }
+    let factor = twiddle[0];
+    // k=0: B_m_inv[0] = b_m[0].conj() → conjugate multiply
+    let re = dst[0].re * factor.re + dst[0].im * factor.im;
+    let im = dst[0].im * factor.re - dst[0].re * factor.im;
+    dst[0] = Complex64::new(re, im);
+    let count = len - 1;
+    if count == 0 {
+        return;
+    }
+    let dst_f = dst.as_mut_ptr() as *mut f64;
+    let batches = count / 2;
+    let neg = _mm256_set1_pd(-1.0);
+    for b in 0..batches {
+        let dst_offset = 2 + b * 4;
+        let x = _mm256_loadu_pd(dst_f.add(dst_offset));
+        let first = twiddle[len - 1 - 2 * b];
+        let second = twiddle[len - 2 - 2 * b];
+        let w = _mm256_setr_pd(
+            first.re,
+            first.im,
+            second.re,
+            second.im,
+        );
+        let x_perm = _mm256_permute_pd(x, 5);
+        let ac = _mm256_unpacklo_pd(w, w);
+        let bd = _mm256_mul_pd(_mm256_unpackhi_pd(w, w), neg);
+        let yw = _mm256_fmaddsub_pd(ac, x, _mm256_mul_pd(bd, x_perm));
+        _mm256_storeu_pd(dst_f.add(dst_offset), yw);
+    }
+    if count % 2 == 1 {
+        let out = &mut dst[len - 1];
+        let factor = twiddle[1];
+        let re = out.re * factor.re + out.im * factor.im;
+        let im = out.im * factor.re - out.re * factor.im;
+        *out = Complex64::new(re, im);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx,fma")]
 unsafe fn mul_complex_pointwise_32_avx_from_input(
     dst: &mut [Complex32],
@@ -410,7 +755,116 @@ unsafe fn mul_complex_pointwise_32_avx_from_input(
     }
 }
 
-#[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx,fma")]
+unsafe fn mul_complex_pointwise_32_avx_from_input_conj(
+    dst: &mut [Complex32],
+    input: &[Complex32],
+    twiddle: &[Complex32],
+) {
+    use std::arch::x86_64::{
+        _mm256_fmaddsub_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_moveldup_ps,
+        _mm256_movehdup_ps, _mm256_permute_ps, _mm256_set1_ps, _mm256_storeu_ps,
+    };
+    debug_assert_eq!(dst.len(), input.len());
+    debug_assert_eq!(dst.len(), twiddle.len());
+
+    let count = dst.len();
+    let dst_f = dst.as_mut_ptr() as *mut f32;
+    let in_f = input.as_ptr() as *const f32;
+    let tw_f = twiddle.as_ptr() as *const f32;
+    let batches = count / 4;
+    let neg = _mm256_set1_ps(-1.0);
+    for b in 0..batches {
+        let f = b * 8;
+        let x = _mm256_loadu_ps(in_f.add(f));
+        let w = _mm256_loadu_ps(tw_f.add(f));
+        let w_re = _mm256_moveldup_ps(w);
+        let w_im = _mm256_mul_ps(_mm256_movehdup_ps(w), neg);
+        let x_perm = _mm256_permute_ps(x, 0xB1);
+        let yw = _mm256_fmaddsub_ps(w_re, x, _mm256_mul_ps(w_im, x_perm));
+        _mm256_storeu_ps(dst_f.add(f), yw);
+    }
+    let tail = batches * 4;
+    for i in tail..count {
+        let in_v = input[i];
+        let factor = twiddle[i];
+        let re = in_v.re * factor.re + in_v.im * factor.im;
+        let im = in_v.im * factor.re - in_v.re * factor.im;
+        dst[i] = Complex32::new(re, im);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx,fma")]
+unsafe fn mul_complex_pointwise_32_avx_inplace_inverse(
+    dst: &mut [Complex32],
+    twiddle: &[Complex32],
+) {
+    use std::arch::x86_64::{
+        _mm256_fmaddsub_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_moveldup_ps,
+        _mm256_movehdup_ps, _mm256_permute_ps, _mm256_set1_ps, _mm256_setr_ps, _mm256_storeu_ps,
+    };
+    debug_assert_eq!(dst.len(), twiddle.len());
+
+    let len = dst.len();
+    if len == 0 {
+        return;
+    }
+    let factor = twiddle[0];
+    // k=0: B_m_inv[0] = b_m[0].conj() → conjugate multiply
+    let re = dst[0].re * factor.re + dst[0].im * factor.im;
+    let im = dst[0].im * factor.re - dst[0].re * factor.im;
+    dst[0] = Complex32::new(re, im);
+    let count = len - 1;
+    if count == 0 {
+        return;
+    }
+    let dst_f = dst.as_mut_ptr() as *mut f32;
+    let batches = count / 4;
+    let neg = _mm256_set1_ps(-1.0);
+    for b in 0..batches {
+        let dst_offset = 2 + b * 8;
+        let x = _mm256_loadu_ps(dst_f.add(dst_offset));
+        let i0 = len - 1 - 4 * b;
+        let i1 = len - 2 - 4 * b;
+        let i2 = len - 3 - 4 * b;
+        let i3 = len - 4 - 4 * b;
+        let w0 = twiddle[i0];
+        let w1 = twiddle[i1];
+        let w2 = twiddle[i2];
+        let w3 = twiddle[i3];
+        let w = _mm256_setr_ps(
+            w0.re,
+            w0.im,
+            w1.re,
+            w1.im,
+            w2.re,
+            w2.im,
+            w3.re,
+            w3.im,
+        );
+        let w_re = _mm256_moveldup_ps(w);
+        let w_im = _mm256_mul_ps(_mm256_movehdup_ps(w), neg);
+        let x_perm = _mm256_permute_ps(x, 0xB1);
+        let yw = _mm256_fmaddsub_ps(w_re, x, _mm256_mul_ps(w_im, x_perm));
+        _mm256_storeu_ps(dst_f.add(dst_offset), yw);
+    }
+    let rem = count % 4;
+    if rem != 0 {
+        let base = (count / 4) * 4 + 1;
+        let batches = count / 4;
+        for k in 0..rem {
+            let out = &mut dst[base + k];
+            let factor = twiddle[len - (4 * batches + k + 1)];
+            let re = out.re * factor.re + out.im * factor.im;
+            let im = out.im * factor.re - out.re * factor.im;
+            *out = Complex32::new(re, im);
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx,fma")]
 unsafe fn mul_complex_pointwise_32_avx_inplace(dst: &mut [Complex32], twiddle: &[Complex32]) {
     use std::arch::x86_64::{
@@ -531,25 +985,24 @@ where
 /// - `chirp[k]` = `exp(-πi k²/N)` — forward chirp factor
 /// - `b_m` = FFT of filter `b[m] = chirp[m].conj()` = `exp(+πi m²/N)`,
 ///   used for the forward-transform convolution step
-/// - `twiddle_fwd` = contiguous per-stage forward twiddle table for the M-point FFT,
-///   cached in the plan so hot-path transforms bypass O(M log₂M / 2) trig calls.
-/// - `twiddle_inv` = contiguous per-stage inverse twiddle table for the M-point IFFT.
+/// - `b_m` is pre-transformed once during plan construction with mixed-radix twiddle
+///   caches and reused on every transform.
 #[derive(Clone, Debug)]
 pub struct BluesteinPlan64 {
     n: usize,
     m: usize,
     chirp: Vec<Complex64>,
     b_m: Vec<Complex64>,
-    twiddle_fwd: Vec<Complex64>,
-    twiddle_inv: Vec<Complex64>,
 }
 
 impl BluesteinPlan64 {
     /// Initialize a new Bluestein plan for length `n`.
     ///
-    /// Precomputes the M-point forward and inverse twiddle tables so hot-path
-    /// calls to `forward_with_scratch` and `inverse_unnorm_with_scratch` bypass
-    /// O(M/2) trigonometric calls that would otherwise occur per transform.
+    /// The M-point twiddle tables are NOT stored in the plan; `mixed_radix`
+    /// builds and caches per-radix twiddle tables in its own thread-local store,
+    /// keyed by size, ensuring the format matches the dispatched kernel (radix-2,
+    /// radix-4, or radix-8) rather than the radix-2 format built by
+    /// `radix2::build_forward_twiddle_table_64`.
     pub fn new(n: usize) -> Self {
         let m = (2 * n.saturating_sub(1).max(1)).next_power_of_two();
         let chirp: Vec<Complex64> = (0..n)
@@ -559,10 +1012,6 @@ impl BluesteinPlan64 {
             })
             .collect();
 
-        // Precompute M-point twiddle tables once; reused by every hot-path call.
-        let twiddle_fwd = radix2::build_forward_twiddle_table_64(m);
-        let twiddle_inv = radix2::build_inverse_twiddle_table_64(m);
-
         let mut b_m = vec![Complex64::new(0.0, 0.0); m];
         b_m[0] = Complex64::new(1.0, 0.0);
         for k in 1..n {
@@ -570,16 +1019,11 @@ impl BluesteinPlan64 {
             b_m[k] = bk;
             b_m[m - k] = bk;
         }
-        mixed_radix::forward_inplace_64_with_twiddles(&mut b_m, Some(&twiddle_fwd));
+        // None: let mixed_radix use its own cached twiddle tables in the correct
+        // format for the radix (8, 4, or 2) selected for size m.
+        mixed_radix::forward_inplace_64_with_twiddles(&mut b_m, None);
 
-        Self {
-            n,
-            m,
-            chirp,
-            b_m,
-            twiddle_fwd,
-            twiddle_inv,
-        }
+        Self { n, m, chirp, b_m }
     }
 
     /// Retrieve the working padded dimension M.
@@ -587,9 +1031,10 @@ impl BluesteinPlan64 {
         self.m
     }
 
-    /// Forward transform into data given a pre-allocated scratch sequence of length `M`.
-    ///
-    /// Uses the plan-cached M-point twiddle tables; avoids O(M/2) trig calls per call.
+/// Forward transform into data given a pre-allocated scratch sequence of length `M`.
+///
+/// Uses the precomputed `b_m` filter and scratch reuse; avoids per-call chirp/twiddle
+/// synthesis overhead.
     pub fn forward_with_scratch(&self, data: &mut [Complex64], scratch_a: &mut [Complex64]) {
         assert_eq!(data.len(), self.n);
         assert_eq!(scratch_a.len(), self.m);
@@ -602,17 +1047,15 @@ impl BluesteinPlan64 {
             }
         } // scratch_head and scratch_tail borrows end here
 
-        mixed_radix::forward_inplace_64_with_twiddles(scratch_a, Some(&self.twiddle_fwd));
+        mixed_radix::forward_inplace_64_with_twiddles(scratch_a, None);
         mul_pointwise_64_with_twiddle(scratch_a, &self.b_m);
-        mixed_radix::inverse_inplace_64_with_twiddles(scratch_a, Some(&self.twiddle_inv));
+        mixed_radix::inverse_inplace_64_with_twiddles(scratch_a, None);
 
         let scratch_head = &scratch_a[..self.n];
         fill_and_mul_from_input_64(data, scratch_head, &self.chirp);
     }
 
     /// Inverse unnormalized transform.
-    ///
-    /// Uses the plan-cached M-point twiddle tables; avoids O(M/2) trig calls per call.
     pub fn inverse_unnorm_with_scratch(&self, data: &mut [Complex64], scratch_a: &mut [Complex64]) {
         assert_eq!(data.len(), self.n);
         assert_eq!(scratch_a.len(), self.m);
@@ -625,9 +1068,9 @@ impl BluesteinPlan64 {
             }
         } // scratch_head and scratch_tail borrows end here
 
-        mixed_radix::forward_inplace_64_with_twiddles(scratch_a, Some(&self.twiddle_fwd));
+        mixed_radix::forward_inplace_64_with_twiddles(scratch_a, None);
         mul_pointwise_64_with_twiddle_inverse_kernel(scratch_a, &self.b_m);
-        mixed_radix::inverse_inplace_64_with_twiddles(scratch_a, Some(&self.twiddle_inv));
+        mixed_radix::inverse_inplace_64_with_twiddles(scratch_a, None);
 
         let scratch_head = &scratch_a[..self.n];
         fill_and_mul_from_input_64_conj(data, scratch_head, &self.chirp);
@@ -636,8 +1079,8 @@ impl BluesteinPlan64 {
 
 /// Cached per-length Bluestein context for `Complex32` transforms.
 ///
-/// Stores chirp vectors, padded convolution kernels, and the M-point radix-2
-/// twiddle tables needed on every call. The structure is cloneable via `Arc`
+/// Stores chirp vectors and padded convolution kernels with the precomputed `b_m`
+/// filter. The structure is cloneable via `Arc`
 /// for lock-free sharing across transform invocations.
 #[derive(Clone, Debug)]
 pub struct BluesteinPlan32 {
@@ -645,12 +1088,11 @@ pub struct BluesteinPlan32 {
     m: usize,
     chirp: Vec<Complex32>,
     b_m: Vec<Complex32>,
-    twiddle_fwd: Vec<Complex32>,
-    twiddle_inv: Vec<Complex32>,
 }
 
 impl BluesteinPlan32 {
     /// Build a reusable plan for a non-power-of-two length `n` transform.
+    /// Twiddle tables are not stored; `mixed_radix` caches them per-radix.
     pub fn new(n: usize) -> Self {
         let m = (2 * n.saturating_sub(1).max(1)).next_power_of_two();
         let chirp: Vec<Complex32> = (0..n)
@@ -660,9 +1102,6 @@ impl BluesteinPlan32 {
             })
             .collect();
 
-        let twiddle_fwd = radix2::build_forward_twiddle_table_32(m);
-        let twiddle_inv = radix2::build_inverse_twiddle_table_32(m);
-
         let mut b_m = vec![Complex32::new(0.0, 0.0); m];
         b_m[0] = Complex32::new(1.0, 0.0);
         for k in 1..n {
@@ -670,16 +1109,9 @@ impl BluesteinPlan32 {
             b_m[k] = bk;
             b_m[m - k] = bk;
         }
-        mixed_radix::forward_inplace_32_with_twiddles(&mut b_m, Some(&twiddle_fwd));
+        mixed_radix::forward_inplace_32_with_twiddles(&mut b_m, None);
 
-        Self {
-            n,
-            m,
-            chirp,
-            b_m,
-            twiddle_fwd,
-            twiddle_inv,
-        }
+        Self { n, m, chirp, b_m }
     }
 
     /// Padded convolution size (next power-of-two of `2n - 1`).
@@ -700,9 +1132,9 @@ impl BluesteinPlan32 {
             }
         }
 
-        mixed_radix::forward_inplace_32_with_twiddles(scratch_a, Some(&self.twiddle_fwd));
+        mixed_radix::forward_inplace_32_with_twiddles(scratch_a, None);
         mul_pointwise_32_with_twiddle(scratch_a, &self.b_m);
-        mixed_radix::inverse_inplace_32_with_twiddles(scratch_a, Some(&self.twiddle_inv));
+        mixed_radix::inverse_inplace_32_with_twiddles(scratch_a, None);
 
         let scratch_head = &scratch_a[..self.n];
         fill_and_mul_from_input_32(data, scratch_head, &self.chirp);
@@ -721,9 +1153,9 @@ impl BluesteinPlan32 {
             }
         }
 
-        mixed_radix::forward_inplace_32_with_twiddles(scratch_a, Some(&self.twiddle_fwd));
+        mixed_radix::forward_inplace_32_with_twiddles(scratch_a, None);
         mul_pointwise_32_with_twiddle_inverse_kernel(scratch_a, &self.b_m);
-        mixed_radix::inverse_inplace_32_with_twiddles(scratch_a, Some(&self.twiddle_inv));
+        mixed_radix::inverse_inplace_32_with_twiddles(scratch_a, None);
 
         let scratch_head = &scratch_a[..self.n];
         fill_and_mul_from_input_32_conj(data, scratch_head, &self.chirp);
