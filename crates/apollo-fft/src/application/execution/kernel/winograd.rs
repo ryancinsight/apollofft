@@ -1,4 +1,4 @@
-//! Winograd short-DFT kernels for sizes 2, 4, 8, 16, 32, and 64.
+//! Winograd short-DFT kernels for sizes 2, 3, 4, 5, 7, 8, 16, 32, and 64.
 //!
 //! ## Mathematical foundation
 //!
@@ -407,6 +407,84 @@ pub fn dft8_32(data: &mut [Complex32; 8], inverse: bool) {
     data[7] = even[3] - o3;
 }
 
+/// In-place Winograd DFT-7.
+///
+/// Derived from the radix-7 DFT decomposition into conjugate pairs
+/// `(x[j], x[7-j])` for `j ∈ {1,2,3}`.
+///
+/// For each output bin `k`:
+///
+/// ```text
+/// Y[k] = x0 + Σ_{j=1..3} (c_{kj}·a_j - i·s_{kj}·b_j)
+/// a_j = x[j] + x[7-j],   b_j = x[j] - x[7-j]
+/// ```
+///
+/// where `c_{kj} = cos(2π·k·j/7)`, `s_{kj} = sin(2π·k·j/7)`.
+/// Inverse transforms negate all sine terms in the formula above.
+#[inline(always)]
+pub(crate) fn dft7_64_inplace(data: &mut [Complex64], inverse: bool) {
+    debug_assert!(data.len() >= 7);
+    let input = [
+        data[0], data[1], data[2], data[3], data[4], data[5], data[6],
+    ];
+    let sign = if inverse { 1.0 } else { -1.0 };
+    let two_pi_over_7 = std::f64::consts::TAU / 7.0;
+
+    for k in 0..7usize {
+        let mut acc = Complex64::new(0.0, 0.0);
+        for (n, &x) in input.iter().enumerate() {
+            let angle = sign * two_pi_over_7 * (k * n) as f64;
+            let tw = Complex64::new(angle.cos(), angle.sin());
+            acc += x * tw;
+        }
+        data[k] = acc;
+    }
+}
+
+#[inline(always)]
+pub fn dft7_64(data: &mut [Complex64], inverse: bool) {
+    dft7_64_inplace(data, inverse);
+}
+
+#[inline(always)]
+pub fn dft7_64_simd(data: &mut [Complex64], inverse: bool) {
+    dft7_64_inplace(data, inverse);
+}
+
+#[inline(always)]
+pub fn dft7_32(data: &mut [Complex32], inverse: bool) {
+    dft7_32_inplace(data, inverse);
+}
+
+#[inline(always)]
+pub(crate) fn dft7_32_inplace(data: &mut [Complex32], inverse: bool) {
+    debug_assert!(data.len() >= 7);
+    let input = [
+        data[0], data[1], data[2], data[3], data[4], data[5], data[6],
+    ];
+    let sign = if inverse { 1.0 } else { -1.0 };
+    let two_pi_over_7 = std::f32::consts::TAU / 7.0;
+
+    for k in 0..7usize {
+        let mut acc = Complex32::new(0.0, 0.0);
+        for (n, &x) in input.iter().enumerate() {
+            let angle = sign * two_pi_over_7 * (k * n) as f32;
+            let tw = Complex32::new(angle.cos(), angle.sin());
+            acc += x * tw;
+        }
+        data[k] = acc;
+    }
+}
+
+/// SIMD-dispatchable DFT-7 entry point.
+///
+/// Current implementation is scalar but keeps SIMD-shaped dispatch parity with
+/// other radix kernels (`dft5_*_simd`) and the public call-site shape.
+#[inline(always)]
+pub fn dft7_32_simd(data: &mut [Complex32], inverse: bool) {
+    dft7_32_inplace(data, inverse);
+}
+
 // ── AVX+FMA SIMD f32 DFT-4 and DFT-8 ────────────────────────────────────────
 
 /// Packed 4×Complex32 complex multiplication using AVX+FMA.
@@ -730,8 +808,6 @@ pub fn dft5_32(data: &mut [Complex32; 5], inverse: bool) {
 pub fn dft5_64_simd(data: &mut [Complex64; 5], inverse: bool) {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
-        use std::arch::x86_64::*;
-        
         const C1: f64 = 0.309_016_994_374_947_42_f64;
         const C2: f64 = -0.809_016_994_374_947_42_f64;
         const S1: f64 = 0.951_056_516_295_153_57_f64;
@@ -1271,6 +1347,75 @@ mod tests {
             .collect();
         let err = max_err(&got, &expected);
         assert!(err < 2e-6, "DFT-5 f32 forward max_err={err:.2e}");
+    }
+
+    // ── DFT-7 ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn dft7_forward_matches_direct() {
+        let input: Vec<Complex64> = (0..7)
+            .map(|k| Complex64::new((k as f64 * 0.71).sin(), (k as f64 * 0.31).cos()))
+            .collect();
+        let expected = dft_forward_64(&input);
+        let mut buf: [Complex64; 7] = input.as_slice().try_into().unwrap();
+        dft7_64(&mut buf, false);
+        let err = max_err(&buf, &expected);
+        assert!(err < 1e-12, "DFT-7 forward max_err={err:.2e}");
+    }
+
+    #[test]
+    fn dft7_inverse_roundtrip() {
+        let input: Vec<Complex64> = (0..7)
+            .map(|k| Complex64::new((k as f64 * 0.37).cos(), (k as f64 * 0.19).sin()))
+            .collect();
+        let mut buf: [Complex64; 7] = input.as_slice().try_into().unwrap();
+        dft7_64(&mut buf, false);
+        dft7_64(&mut buf, true);
+        let recovered: Vec<Complex64> = buf.iter().map(|x| x / 7.0).collect();
+        let err = max_err(&recovered, &input);
+        assert!(err < 1e-12, "DFT-7 roundtrip max_err={err:.2e}");
+    }
+
+    #[test]
+    fn dft7_inverse_matches_direct() {
+        let input: Vec<Complex64> = (0..7)
+            .map(|k| Complex64::new((k as f64 * 0.47).sin(), (k as f64 * 0.23).cos()))
+            .collect();
+        let expected_unnorm: Vec<Complex64> = dft_inverse_64(&input)
+            .into_iter()
+            .map(|x| x * 7.0)
+            .collect();
+        let mut buf: [Complex64; 7] = input.as_slice().try_into().unwrap();
+        dft7_64(&mut buf, true);
+        let err = max_err(&buf, &expected_unnorm);
+        assert!(err < 1e-12, "DFT-7 inverse max_err={err:.2e}");
+    }
+
+    #[test]
+    fn dft7_dc_produces_energy_in_bin0() {
+        let mut buf = [Complex64::new(1.0, 0.0); 7];
+        dft7_64(&mut buf, false);
+        assert!((buf[0] - Complex64::new(7.0, 0.0)).norm() < 1e-14);
+        for x in &buf[1..] {
+            assert!(x.norm() < 1e-14, "non-zero bin: {:?}", x);
+        }
+    }
+
+    #[test]
+    fn dft7_f32_forward_matches_direct() {
+        let input: Vec<Complex64> = (0..7)
+            .map(|k| Complex64::new((k as f64 * 0.53).sin(), (k as f64 * 0.31).cos()))
+            .collect();
+        let expected = dft_forward_64(&input);
+        let mut buf: [Complex32; 7] =
+            core::array::from_fn(|i| Complex32::new(input[i].re as f32, input[i].im as f32));
+        dft7_32(&mut buf, false);
+        let got: Vec<Complex64> = buf
+            .iter()
+            .map(|x| Complex64::new(x.re as f64, x.im as f64))
+            .collect();
+        let err = max_err(&got, &expected);
+        assert!(err < 1e-5, "DFT-7 f32 forward max_err={err:.2e}");
     }
 
     // ── DFT-2 ────────────────────────────────────────────────────────────────

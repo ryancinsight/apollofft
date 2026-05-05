@@ -1,12 +1,12 @@
 /// Factorize `n` into a sequence of small radices suitable for the
 /// mixed-radix Cooley-Tukey DIT algorithm, or return `None` if `n` has
-/// a prime factor outside the supported set {2, 3, 5}.
+/// a prime factor outside the supported set {2, 3, 5, 7}.
 ///
 /// ## Radix selection
 ///
 /// - Powers of 2 are packed greedily into radix-8 (3 factors), then radix-4
 ///   (2 factors), then radix-2 (1 factor).
-/// - Primes 3 and 5 appear individually in the sequence.
+/// - Primes 3, 5, and 7 appear individually in the sequence.
 ///
 /// The sequence is ordered **innermost first** (smallest sub-transform first):
 /// prime radices precede power-of-two radices so that the smallest butterfly
@@ -15,10 +15,10 @@
 /// ## Contract
 ///
 /// For the returned `radices`, `radices.iter().product::<usize>() == n` and
-/// every element ∈ {2, 3, 4, 5, 8}.
+/// every element ∈ {2, 3, 4, 5, 7, 8}.
 ///
 /// Returns `None` (caller should fall back to Bluestein) when `n` has any
-/// prime factor other than 2, 3, or 5.
+/// prime factor other than 2, 3, 5, or 7.
 #[inline]
 pub(crate) fn factorize_composite(n: usize) -> Option<Vec<usize>> {
     if n <= 1 {
@@ -28,20 +28,23 @@ pub(crate) fn factorize_composite(n: usize) -> Option<Vec<usize>> {
     let mut count2 = 0u32;
     let mut count3 = 0u32;
     let mut count5 = 0u32;
+    let mut count7 = 0u32;
     while remaining % 2 == 0 { count2 += 1; remaining /= 2; }
     while remaining % 3 == 0 { count3 += 1; remaining /= 3; }
     while remaining % 5 == 0 { count5 += 1; remaining /= 5; }
+    while remaining % 7 == 0 { count7 += 1; remaining /= 7; }
     if remaining > 1 {
-        return None; // has prime factor > 5
+        return None; // has unsupported prime factor
     }
     // Pure power-of-two sizes are handled by the existing pow2_dispatch! routing;
     // return None so those sizes continue using the optimised PoT kernels.
-    if count3 == 0 && count5 == 0 {
+    if count3 == 0 && count5 == 0 && count7 == 0 {
         return None;
     }
     let mut radices = Vec::new();
-    // Innermost stages: odd prime factors first (5 > 3 ordering for outer loop
-    // peeling matches cache footprint: largest prime groups process last).
+    // Innermost stages: odd prime factors first (7 > 5 > 3 ordering for cache
+    // locality and mixed-radix stage shape).
+    for _ in 0..count7 { radices.push(7usize); }
     for _ in 0..count5 { radices.push(5usize); }
     for _ in 0..count3 { radices.push(3usize); }
     // Outermost stages: powers of 2 packed greedily into 8 > 4 > 2.
@@ -58,7 +61,7 @@ pub(crate) fn factorize_composite(n: usize) -> Option<Vec<usize>> {
 /// Returns `true` if the composite path should be skipped (fall back to Bluestein).
 ///
 /// Known bad patterns:
-/// - Multiple (3+) small radices (3 or 5) before large power-of-2: causes
+/// - Multiple (3+) small radices (3, 5, 7) before large power-of-2: causes
 ///   poor cache behavior due to small prev_len in early stages.
 /// - Sizes 500, 1000, 2000 range have 3+ DFT-5 stages with low parallelism.
 #[inline]
@@ -73,6 +76,8 @@ pub(crate) fn should_use_bluestein_instead_of_composite(n: usize) -> bool {
             None => return false, // Not composite; Bluestein will handle it
         };
         // Count consecutive 5-radix factors at the start (innermost stages).
+        // DFT-7 and DFT-3 heuristics are kept neutral for now to avoid overfitting
+        // the current benchmark corpus.
         let count_leading_fives = radices.iter().take_while(|&&r| r == 5).count();
         if count_leading_fives >= 3 {
             return true; // Too many DFT-5 stages, fall back to Bluestein

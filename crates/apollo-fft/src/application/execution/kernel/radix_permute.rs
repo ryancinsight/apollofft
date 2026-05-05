@@ -90,12 +90,23 @@ pub(crate) fn digit_reverse_permute_mixed<T: Copy>(data: &mut [T], radices: &[us
     if n <= 1 {
         return;
     }
-    let mut visited = vec![false; n];
+    let mut visited = vec![0u64; (n + 63) / 64];
+
+    #[inline(always)]
+    fn is_visited(bits: &[u64], idx: usize) -> bool {
+        ((bits[idx >> 6] >> (idx & 63)) & 1u64) != 0
+    }
+
+    #[inline(always)]
+    fn mark_visited(bits: &mut [u64], idx: usize) {
+        bits[idx >> 6] |= 1u64 << (idx & 63);
+    }
+
     for start in 0..n {
-        if visited[start] {
+        if is_visited(&visited, start) {
             continue;
         }
-        visited[start] = true;
+        mark_visited(&mut visited, start);
         let j0 = digit_reverse_mixed(start, radices); // σ(start)
         if j0 == start {
             // Fixed point: position start maps to itself.
@@ -109,12 +120,12 @@ pub(crate) fn digit_reverse_permute_mixed<T: Copy>(data: &mut [T], radices: &[us
         let mut j = j0; // j = σ(i)
         while j != start {
             data[i] = data[j]; // gather: position i receives old_data at σ(i) = j
-            visited[i] = true;
+            mark_visited(&mut visited, i);
             i = j;
             j = digit_reverse_mixed(i, radices); // σ(new i)
         }
         data[i] = saved; // close the cycle: last position gets old_data[start]
-        visited[i] = true;
+        mark_visited(&mut visited, i);
     }
 }
 

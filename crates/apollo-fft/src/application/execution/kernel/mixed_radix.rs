@@ -5,7 +5,7 @@
 //! - Power-of-4  → `radix4` (radix-4 DIT butterfly).
 //! - Other PoT   → `radix2` (iterative Cooley-Tukey, stages 1-4 use
 //!                 compile-time constants to avoid trig calls).
-//! - Non-power-of-two 5-smooth → composite radix (coalesced into cached radices),
+//! - Non-power-of-two 2/3/5/7-smooth → composite radix (coalesced into cached radices),
 //!                          then mixed-radix FFT.
 //! - Other arbitrary lengths → Bluestein chirp-Z (no-alloc on the hot path when
 //!                            the caller supplies `Some(twiddles)`).
@@ -330,11 +330,13 @@ pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: Option
             r2 = radix2::inverse_inplace_64_with_twiddles
         );
     } else {
-        if let Some(radices) = cached_composite_radices(data.len()) {
-            radix_composite::inverse_inplace_64_with_radices(data, &radices);
-        } else {
-            bluestein::inverse_inplace_64(data);
+        if !should_use_bluestein_instead_of_composite(data.len()) {
+            if let Some(radices) = cached_composite_radices(data.len()) {
+                radix_composite::inverse_inplace_64_with_radices(data, &radices);
+                return;
+            }
         }
+        bluestein::inverse_inplace_64(data);
     }
 }
 
@@ -447,11 +449,13 @@ pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: Option
             r2 = radix2::inverse_inplace_32_with_twiddles
         );
     } else {
-        if let Some(radices) = cached_composite_radices(data.len()) {
-            radix_composite::inverse_inplace_32_with_radices(data, &radices);
-        } else {
-            bluestein::inverse_inplace_32(data);
+        if !should_use_bluestein_instead_of_composite(data.len()) {
+            if let Some(radices) = cached_composite_radices(data.len()) {
+                radix_composite::inverse_inplace_32_with_radices(data, &radices);
+                return;
+            }
         }
+        bluestein::inverse_inplace_32(data);
     }
 }
 
@@ -498,7 +502,7 @@ pub fn inverse_inplace_32(data: &mut [Complex32]) {
 
 /// In-place forward FFT (unnormalized, f16 storage) with optional precomputed twiddles.
 ///
-/// Non-PoT lengths promote to f32, then run composite radix for 5-smooth
+/// Non-PoT lengths promote to f32, then run composite radix for 2/3/5/7-smooth
 /// lengths or Bluestein-f32 otherwise, and demote via `run_f16_via_f32`.
 #[inline]
 pub fn forward_inplace_f16_with_twiddles(data: &mut [Cf16], twiddles: Option<&[Cf16]>) {
@@ -563,13 +567,15 @@ pub fn inverse_inplace_f16_with_twiddles(data: &mut [Cf16], twiddles: Option<&[C
             r2 = radix2_f16::inverse_inplace_f16_with_twiddles
         );
     } else {
-        if let Some(radices) = cached_composite_radices(data.len()) {
-            run_f16_via_f32(data, |buf| {
-                radix_composite::inverse_inplace_32_with_radices(buf, &radices)
-            });
-        } else {
-            run_f16_via_f32(data, bluestein::inverse_inplace_32);
+        if !should_use_bluestein_instead_of_composite(data.len()) {
+            if let Some(radices) = cached_composite_radices(data.len()) {
+                run_f16_via_f32(data, |buf| {
+                    radix_composite::inverse_inplace_32_with_radices(buf, &radices)
+                });
+                return;
+            }
         }
+        run_f16_via_f32(data, bluestein::inverse_inplace_32);
     }
 }
 
