@@ -8,6 +8,9 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ## [Unreleased]
 ### Fixed
+- [patch] `apollo-fft`: consolidated duplicated 3D f32/f16 typed plan paths
+  behind a private monomorphized storage trait and removed the now-dead
+  f32-only 3D real-to-complex writer.
 - [patch] `apollo-fft`: consolidated duplicated 2D f32/f16 typed plan paths
   behind a private monomorphized storage trait, removed duplicated 2D plan
   Rustdoc, and moved crate-root tests into a dedicated module so `lib.rs`

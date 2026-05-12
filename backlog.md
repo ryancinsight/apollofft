@@ -1,5 +1,11 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure LX phase)
+- [x] [patch] Reduce `apollo-fft` typed 3D plan redundancy. The f32/f16 3D
+  allocating and caller-owned paths now share one private monomorphized
+  `Plan3dReal32` helper, the dead f32-only 3D real-to-complex writer was
+  deleted, and `apollo-fft` was bumped to 0.5.2.
+
 ## Closed in this sprint (Closure LIX phase)
 - [x] [patch] Reduce `apollo-fft` typed 2D plan redundancy and crate-root file
   size. The f32/f16 2D paths now share one private monomorphized

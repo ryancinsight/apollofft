@@ -55,6 +55,63 @@ use num_complex::Complex64;
 use rayon::prelude::*;
 use std::sync::Arc;
 
+trait Plan3dReal32: Copy {
+    const NATIVE_PROFILE: PrecisionProfile;
+
+    fn to_f32(self) -> f32;
+    fn to_f64(self) -> f64;
+    fn from_f32(value: f32) -> Self;
+    fn from_f64(value: f64) -> Self;
+}
+
+impl Plan3dReal32 for f32 {
+    const NATIVE_PROFILE: PrecisionProfile = PrecisionProfile::LOW_PRECISION_F32;
+
+    #[inline]
+    fn to_f32(self) -> f32 {
+        self
+    }
+
+    #[inline]
+    fn to_f64(self) -> f64 {
+        f64::from(self)
+    }
+
+    #[inline]
+    fn from_f32(value: f32) -> Self {
+        value
+    }
+
+    #[inline]
+    fn from_f64(value: f64) -> Self {
+        value as f32
+    }
+}
+
+impl Plan3dReal32 for f16 {
+    const NATIVE_PROFILE: PrecisionProfile = PrecisionProfile::MIXED_PRECISION_F16_F32;
+
+    #[inline]
+    fn to_f32(self) -> f32 {
+        self.to_f32()
+    }
+
+    #[inline]
+    fn to_f64(self) -> f64 {
+        f64::from(self.to_f32())
+    }
+
+    #[inline]
+    fn from_f32(value: f32) -> Self {
+        Self::from_f32(value)
+    }
+
+    #[inline]
+    fn from_f64(value: f64) -> Self {
+        Self::from_f32(value as f32)
+    }
+}
+
 /// Use rayon parallel iteration when total elements exceed this threshold.
 /// Below the threshold, sequential iteration avoids rayon task-spawn overhead
 /// that dominates for small volumes (e.g. 8^3 = 512 elements).
@@ -342,46 +399,18 @@ impl FftPlan3D {
     /// Forward transform of a real field stored as `f32`.
     #[must_use]
     pub(crate) fn forward_f32(&self, input: &Array3<f32>) -> Array3<Complex32> {
-        if self.precision == PrecisionProfile::LOW_PRECISION_F32 {
-            let mut output = Array3::<Complex32>::zeros((self.nx, self.ny, self.nz));
-            self.forward_real_to_complex_f32_into(input, &mut output);
-            output
-        } else {
-            let promoted = input.mapv(f64::from);
-            self.forward_real_to_complex(&promoted)
-                .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
-        }
+        self.forward_real32(input)
     }
 
     /// Inverse transform of an `f32`-storage complex spectrum.
     #[must_use]
     pub(crate) fn inverse_f32(&self, input: &Array3<Complex32>) -> Array3<f32> {
-        if self.precision == PrecisionProfile::LOW_PRECISION_F32 {
-            let mut output = Array3::<Complex32>::zeros((self.nx, self.ny, self.nz));
-            output.assign(input);
-            self.inverse_complex_inplace_f32(&mut output);
-            output.mapv(|value| value.re)
-        } else {
-            let promoted =
-                input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
-            self.inverse_complex_to_real(&promoted)
-                .mapv(|value| value as f32)
-        }
+        self.inverse_real32(input)
     }
 
     /// Forward transform of a real `f32` field into caller-owned spectrum storage.
     pub(crate) fn forward_f32_into(&self, input: &Array3<f32>, output: &mut Array3<Complex32>) {
-        self.check_real_shape(input.dim(), "forward input");
-        self.check_full_complex_shape(output.dim(), "forward output");
-        if self.precision == PrecisionProfile::LOW_PRECISION_F32 {
-            self.forward_real_to_complex_f32_into(input, output);
-        } else {
-            output.assign(
-                &self
-                    .forward_real_to_complex(&input.mapv(f64::from))
-                    .mapv(|value| Complex32::new(value.re as f32, value.im as f32)),
-            );
-        }
+        self.forward_real32_into(input, output);
     }
 
     /// Inverse transform of an `f32` spectrum into caller-owned real storage.
@@ -391,72 +420,24 @@ impl FftPlan3D {
         output: &mut Array3<f32>,
         scratch: &mut Array3<Complex32>,
     ) {
-        self.check_full_complex_shape(input.dim(), "inverse input");
-        self.check_real_shape(output.dim(), "inverse output");
-        self.check_full_complex_shape(scratch.dim(), "inverse scratch");
-        if self.precision == PrecisionProfile::LOW_PRECISION_F32 {
-            scratch.assign(input);
-            self.inverse_complex_inplace_f32(scratch);
-            Zip::from(output).and(scratch).for_each(|out, value| {
-                *out = value.re;
-            });
-        } else {
-            output.assign(
-                &self
-                    .inverse_complex_to_real(
-                        &input
-                            .mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im))),
-                    )
-                    .mapv(|value| value as f32),
-            );
-        }
+        self.inverse_real32_into(input, output, scratch);
     }
 
     /// Forward transform of a real field stored as `f16`.
     #[must_use]
     pub(crate) fn forward_f16(&self, input: &Array3<f16>) -> Array3<Complex32> {
-        if self.precision == PrecisionProfile::MIXED_PRECISION_F16_F32 {
-            let mut data = input.mapv(|value| Complex32::new(value.to_f32(), 0.0));
-            self.forward_complex_inplace_f32(&mut data);
-            data
-        } else {
-            let promoted = input.mapv(|value| f64::from(value.to_f32()));
-            self.forward_real_to_complex(&promoted)
-                .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
-        }
+        self.forward_real32(input)
     }
 
     /// Inverse transform of a complex spectrum to `f16` storage.
     #[must_use]
     pub(crate) fn inverse_f16(&self, input: &Array3<Complex32>) -> Array3<f16> {
-        if self.precision == PrecisionProfile::MIXED_PRECISION_F16_F32 {
-            let mut data = input.clone();
-            self.inverse_complex_inplace_f32(&mut data);
-            data.mapv(|value| f16::from_f32(value.re))
-        } else {
-            let promoted =
-                input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
-            self.inverse_complex_to_real(&promoted)
-                .mapv(|value| f16::from_f32(value as f32))
-        }
+        self.inverse_real32(input)
     }
 
     /// Forward transform of a real `f16` field into caller-owned `f32` spectrum storage.
     pub(crate) fn forward_f16_into(&self, input: &Array3<f16>, output: &mut Array3<Complex32>) {
-        self.check_real_shape(input.dim(), "forward input");
-        self.check_full_complex_shape(output.dim(), "forward output");
-        if self.precision == PrecisionProfile::MIXED_PRECISION_F16_F32 {
-            Zip::from(&mut *output).and(input).for_each(|out, &value| {
-                *out = Complex32::new(value.to_f32(), 0.0);
-            });
-            self.forward_complex_inplace_f32(output);
-        } else {
-            output.assign(
-                &self
-                    .forward_real_to_complex(&input.mapv(|value| f64::from(value.to_f32())))
-                    .mapv(|value| Complex32::new(value.re as f32, value.im as f32)),
-            );
-        }
+        self.forward_real32_into(input, output);
     }
 
     /// Inverse transform of a `Complex32` spectrum into caller-owned `f16` storage.
@@ -466,14 +447,63 @@ impl FftPlan3D {
         output: &mut Array3<f16>,
         scratch: &mut Array3<Complex32>,
     ) {
+        self.inverse_real32_into(input, output, scratch);
+    }
+
+    fn forward_real32<T: Plan3dReal32>(&self, input: &Array3<T>) -> Array3<Complex32> {
+        let mut output = Array3::<Complex32>::zeros((self.nx, self.ny, self.nz));
+        self.forward_real32_into(input, &mut output);
+        output
+    }
+
+    fn inverse_real32<T: Plan3dReal32>(&self, input: &Array3<Complex32>) -> Array3<T> {
+        self.check_full_complex_shape(input.dim(), "inverse input");
+        if self.precision == T::NATIVE_PROFILE {
+            let mut data = input.clone();
+            self.inverse_complex_inplace_f32(&mut data);
+            data.mapv(|value| T::from_f32(value.re))
+        } else {
+            let promoted =
+                input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
+            self.inverse_complex_to_real(&promoted).mapv(T::from_f64)
+        }
+    }
+
+    fn forward_real32_into<T: Plan3dReal32>(
+        &self,
+        input: &Array3<T>,
+        output: &mut Array3<Complex32>,
+    ) {
+        self.check_real_shape(input.dim(), "forward input");
+        self.check_full_complex_shape(output.dim(), "forward output");
+        if self.precision == T::NATIVE_PROFILE {
+            Zip::from(&mut *output).and(input).for_each(|out, &value| {
+                *out = Complex32::new(value.to_f32(), 0.0);
+            });
+            self.forward_complex_inplace_f32(output);
+        } else {
+            output.assign(
+                &self
+                    .forward_real_to_complex(&input.mapv(T::to_f64))
+                    .mapv(|value| Complex32::new(value.re as f32, value.im as f32)),
+            );
+        }
+    }
+
+    fn inverse_real32_into<T: Plan3dReal32>(
+        &self,
+        input: &Array3<Complex32>,
+        output: &mut Array3<T>,
+        scratch: &mut Array3<Complex32>,
+    ) {
         self.check_full_complex_shape(input.dim(), "inverse input");
         self.check_real_shape(output.dim(), "inverse output");
         self.check_full_complex_shape(scratch.dim(), "inverse scratch");
-        if self.precision == PrecisionProfile::MIXED_PRECISION_F16_F32 {
+        if self.precision == T::NATIVE_PROFILE {
             scratch.assign(input);
             self.inverse_complex_inplace_f32(scratch);
             Zip::from(output).and(scratch).for_each(|out, value| {
-                *out = f16::from_f32(value.re);
+                *out = T::from_f32(value.re);
             });
         } else {
             output.assign(
@@ -482,7 +512,7 @@ impl FftPlan3D {
                         &input
                             .mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im))),
                     )
-                    .mapv(|value| f16::from_f32(value as f32)),
+                    .mapv(T::from_f64),
             );
         }
     }
@@ -510,19 +540,6 @@ impl FftPlan3D {
             .and(input.view())
             .for_each(|out, &value| *out = Complex64::new(value, 0.0));
         self.forward_complex_inplace(output);
-    }
-
-    fn forward_real_to_complex_f32_into(
-        &self,
-        input: &Array3<f32>,
-        output: &mut Array3<Complex32>,
-    ) {
-        self.check_real_shape(input.dim(), "forward input");
-        self.check_full_complex_shape(output.dim(), "forward output");
-        Zip::from(output.view_mut())
-            .and(input.view())
-            .for_each(|out, &value| *out = Complex32::new(value, 0.0));
-        self.forward_complex_inplace_f32(output);
     }
 
     fn forward_complex_inplace_f32(&self, data: &mut Array3<Complex32>) {

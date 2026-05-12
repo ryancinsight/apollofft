@@ -1,4 +1,17 @@
 # Apollo Checklist
+## Closure LX - FFT 3D Typed Plan Deduplication [patch]
+Sprint target version: apollo-fft 0.5.2
+
+- [x] Consolidate duplicated 3D f32/f16 allocating forward/inverse paths behind
+  one private monomorphized helper trait.
+- [x] Consolidate duplicated 3D f32/f16 caller-owned forward/inverse paths
+  behind the same helper trait.
+- [x] Remove the now-dead f32-only 3D real-to-complex writer.
+- [x] Bump `apollo-fft` to 0.5.2 and update sprint artifacts.
+- [x] Verify with `cargo check -p apollo-fft --benches --examples`,
+  `cargo test -p apollo-fft --lib -- --test-threads=1`,
+  `cargo check --workspace`, source scans, and `git diff --check`.
+
 ## Closure LIX - FFT 2D Typed Plan Deduplication [patch]
 Sprint target version: apollo-fft 0.5.1
 

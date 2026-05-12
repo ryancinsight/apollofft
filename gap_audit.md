@@ -44,6 +44,23 @@ by design and will not be implemented.
 | GPU FFT 1D/2D | ✗ | ✗ | ✗ | Open |
 
 ## Closed Gaps
+### Closure LX - FFT 3D Typed Plan Deduplication [patch]
+- **Gap**: `apollo-fft` duplicated 3D f32 and f16 typed forward/inverse logic
+  across allocating and caller-owned APIs, leaving four precision-specific
+  bodies plus a now-redundant f32-only real-to-complex writer.
+- **Closed by**: Added private `Plan3dReal32` static-dispatch storage
+  abstraction, routed `forward_f32`, `inverse_f32`, `forward_f32_into`,
+  `inverse_f32_into`, `forward_f16`, `inverse_f16`, `forward_f16_into`, and
+  `inverse_f16_into` through shared monomorphized helpers, deleted the dead
+  f32-only writer, and bumped `apollo-fft` to 0.5.2.
+- **Residual risk**: Larger FFT kernel implementation files remain above the
+  structural limit and require follow-up module partitioning.
+- **Evidence**: `cargo check -p apollo-fft --benches --examples`; `cargo
+  test -p apollo-fft --lib -- --test-threads=1`; `cargo check --workspace`;
+  source scans for removed f32-only 3D writer, stale
+  compatibility/deprecation tokens, and deleted f16 wrapper names; `git diff
+  --check`.
+
 ### Closure LIX - FFT 2D Typed Plan Deduplication [patch]
 - **Gap**: `apollo-fft` duplicated the 2D f32 and f16 typed forward/inverse
   bodies, duplicated the 2D plan module-level Rustdoc block, and kept
