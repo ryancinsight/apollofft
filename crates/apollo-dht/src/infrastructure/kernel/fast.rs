@@ -1,7 +1,7 @@
 //! Fast \(O(N \log N)\) FFT-based kernel execution for large arrays.
 //! Leverages the exact correspondence between the Discrete Hartley Transform and the Discrete Fourier Transform.
 
-use apollo_fft::application::execution::kernel::fft_forward_64;
+use apollo_fft::application::execution::kernel::fft_forward;
 use num_complex::Complex64;
 
 /// Computes the unnormalized DHT via an O(N log N) FFT mapped path using caller-owned scratch.
@@ -20,7 +20,7 @@ pub fn dht_fast_with_scratch(signal: &[f64], output: &mut [f64], scratch: &mut [
         *slot = Complex64::new(x, 0.0);
     }
 
-    fft_forward_64(scratch);
+    fft_forward(scratch);
 
     for (out, x_k) in output.iter_mut().zip(scratch.iter()) {
         *out = x_k.re - x_k.im;

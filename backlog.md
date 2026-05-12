@@ -1,5 +1,12 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure LXV phase)
+- [x] [major] Remove concrete public auto-selector FFT wrappers from
+  `apollo-fft`. Internal plans, tests, and benchmarks now use the canonical
+  generic `fft_forward`, `fft_inverse`, and `fft_inverse_unnorm` entry points
+  or the lower-level mixed-radix implementation where axis normalization
+  requires it. `apollo-fft` was bumped to 0.9.0.
+
 ## Closed in this sprint (Closure LXIV phase)
 - [x] [major] Remove the remaining public type-suffixed Winograd DFT-16/32/64
   wrappers. The recursive Winograd codelets now share one generic implementation

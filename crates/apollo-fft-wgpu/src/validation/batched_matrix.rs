@@ -2,7 +2,7 @@
 
 use crate::infrastructure::gpu_fft::batched_matrix::prime::GpuPrimeBatch;
 use crate::infrastructure::gpu_fft::batched_matrix::radix5::GpuRadix5Batch;
-use apollo_fft::application::execution::kernel::direct::dft_forward_32;
+use apollo_fft::application::execution::kernel::direct::dft_forward;
 use apollo_fft::domain::storage::FftPlanarMut;
 use apollo_fft::f16;
 use apollo_fft::infrastructure::cpu::simd::batched::{
@@ -41,7 +41,7 @@ fn assert_gpu_prime_matches_analytical<const R: usize>(tolerance: f32) {
         for point in 0..R {
             input[point] = Complex32::new(re[point][lane].to_f32(), im[point][lane].to_f32());
         }
-        let expected = dft_forward_32(&input);
+        let expected = dft_forward(&input);
         for point in 0..R {
             let idx = point * 8 + lane;
             let got = gpu_out[idx];
@@ -148,7 +148,7 @@ fn gpu_radix5_batch_matches_analytical_direct_dft_per_lane() {
     let gpu_out = gpu.forward_f16(&re, &im);
     for lane in 0..8 {
         let input = to_column_major_complex(&re, &im, lane);
-        let expected = dft_forward_32(&input);
+        let expected = dft_forward(&input);
         for point in 0..5 {
             let got = gpu_out[point * 8 + lane];
             let err = (got - expected[point]).norm();

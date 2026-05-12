@@ -73,79 +73,35 @@ pub fn fft_inverse_unnorm<C: FftPrecision>(data: &mut [C]) {
     C::fft_inverse_unnorm(data);
 }
 
-// ── Concrete precision entry points ──────────────────────────────────────────
-//
-// These public functions remain the concrete f64/f32 API surface. The generic
-// `FftPrecision` API below delegates here so dispatch logic still lives in one
-// place.
-
-/// Auto-selecting forward FFT (unnormalized, f64).
-#[inline]
-pub fn fft_forward_64(data: &mut [Complex64]) {
-    mixed_radix::forward_inplace_64(data);
-}
-
-/// Auto-selecting inverse FFT, normalized by 1/N (f64).
-#[inline]
-pub fn fft_inverse_64(data: &mut [Complex64]) {
-    mixed_radix::inverse_inplace_64(data);
-}
-
-/// Auto-selecting inverse FFT, unnormalized (f64).
-///
-/// Required for nD separable axis passes where normalization is applied once externally.
-#[inline]
-pub fn fft_inverse_unnorm_64(data: &mut [Complex64]) {
-    mixed_radix::inverse_inplace_unnorm_64(data);
-}
-
-/// Auto-selecting forward FFT (unnormalized, f32).
-#[inline]
-pub fn fft_forward_32(data: &mut [Complex32]) {
-    mixed_radix::forward_inplace_32(data);
-}
-
-/// Auto-selecting inverse FFT, normalized by 1/N (f32).
-#[inline]
-pub fn fft_inverse_32(data: &mut [Complex32]) {
-    mixed_radix::inverse_inplace_32(data);
-}
-
-/// Auto-selecting inverse FFT, unnormalized (f32).
-#[inline]
-pub fn fft_inverse_unnorm_32(data: &mut [Complex32]) {
-    mixed_radix::inverse_inplace_unnorm_32(data);
-}
-
 // ── FftPrecision implementations ─────────────────────────────────────────────
 
 impl FftPrecision for Complex64 {
     #[inline]
     fn fft_forward(data: &mut [Self]) {
-        fft_forward_64(data);
+        mixed_radix::forward_inplace_64(data);
     }
     #[inline]
     fn fft_inverse(data: &mut [Self]) {
-        fft_inverse_64(data);
+        mixed_radix::inverse_inplace_64(data);
     }
     #[inline]
     fn fft_inverse_unnorm(data: &mut [Self]) {
-        fft_inverse_unnorm_64(data);
+        mixed_radix::inverse_inplace_unnorm_64(data);
     }
 }
 
 impl FftPrecision for Complex32 {
     #[inline]
     fn fft_forward(data: &mut [Self]) {
-        fft_forward_32(data);
+        mixed_radix::forward_inplace_32(data);
     }
     #[inline]
     fn fft_inverse(data: &mut [Self]) {
-        fft_inverse_32(data);
+        mixed_radix::inverse_inplace_32(data);
     }
     #[inline]
     fn fft_inverse_unnorm(data: &mut [Self]) {
-        fft_inverse_unnorm_32(data);
+        mixed_radix::inverse_inplace_unnorm_32(data);
     }
 }
 
@@ -209,11 +165,7 @@ mod tests {
         let mut generic = input.clone();
         fft_forward(&mut generic);
 
-        let mut typed = input.clone();
-        fft_forward_64(&mut typed);
-
         let direct = dft_forward(&input);
-        assert!(max_abs_err_64(&generic, &typed) < 1e-12);
         assert!(max_abs_err_64(&generic, &direct) < 1e-10);
     }
 
@@ -225,11 +177,7 @@ mod tests {
         let mut generic = input.clone();
         fft_forward(&mut generic);
 
-        let mut typed = input.clone();
-        fft_forward_32(&mut typed);
-
         let direct = dft_forward(&input);
-        assert!(max_abs_err_32(&generic, &typed) < 1e-6);
         assert!(max_abs_err_32(&generic, &direct) < 5e-4);
     }
 

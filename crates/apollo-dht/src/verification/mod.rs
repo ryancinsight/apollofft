@@ -139,18 +139,18 @@ mod tests {
     ///
     /// Cross-check independence: for N=8 (below FAST_KERNEL_THRESHOLD=512), `DhtPlan::forward`
     /// uses the O(N²) direct `transform_real` kernel. The DFT is computed via
-    /// `fft_forward_64` which selects the radix-2 Cooley-Tukey path for N=8. These are
+    /// `fft_forward` which selects the radix-2 Cooley-Tukey path for N=8. These are
     /// entirely separate code paths, so any sign or index error in either would be detected.
     #[test]
     fn dht_equals_re_minus_im_of_independent_dft() {
-        use apollo_fft::application::execution::kernel::fft_forward_64;
+        use apollo_fft::application::execution::kernel::fft_forward;
         use num_complex::Complex64;
         let signal = [3.0_f64, -1.0, 0.5, 2.25, -4.0, 1.5, 0.0, -0.75];
         let plan = crate::DhtPlan::new(signal.len()).expect("plan");
         let h = plan.forward(&signal).expect("forward");
         // Independent DFT: embed real signal in complex, apply radix-2 FFT
         let mut scratch: Vec<Complex64> = signal.iter().map(|&x| Complex64::new(x, 0.0)).collect();
-        fft_forward_64(&mut scratch);
+        fft_forward(&mut scratch);
         // H[k] = Re(F[k]) - Im(F[k])
         for (k, (hk, fk)) in h.values().iter().zip(scratch.iter()).enumerate() {
             let expected = fk.re - fk.im;

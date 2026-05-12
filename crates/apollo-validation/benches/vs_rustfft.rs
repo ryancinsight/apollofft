@@ -10,7 +10,7 @@
 //! Both implementations operate on `Complex<f64>` (f64) and `Complex<f32>` (f32)
 //! in-place buffers.  RustFFT planning is performed once outside the measured
 //! loop — matching production usage where a plan is reused across many transforms.
-//! Apollo's `fft_forward_64`/`fft_forward_32` auto-selectors are measured
+//! Apollo's generic `fft_forward` auto-selector is measured
 //! including their O(1) dispatch overhead (no dynamic allocation inside the loop).
 //!
 //! Sizes benchmarked:
@@ -20,7 +20,7 @@
 #![cfg(feature = "external-references")]
 #![allow(missing_docs)]
 
-use apollo_fft::application::execution::kernel::{fft_forward_32, fft_forward_64};
+use apollo_fft::application::execution::kernel::fft_forward;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::{Complex32, Complex64};
 use rustfft::FftPlanner;
@@ -63,7 +63,7 @@ fn bench_f64(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("apollo", len), &input, |bench, input| {
             bench.iter(|| {
                 let mut buf = input.clone();
-                fft_forward_64(black_box(&mut buf));
+                fft_forward(black_box(&mut buf));
                 black_box(buf);
             });
         });
@@ -115,7 +115,7 @@ fn bench_f32(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("apollo", len), &input, |bench, input| {
             bench.iter(|| {
                 let mut buf = input.clone();
-                fft_forward_32(black_box(&mut buf));
+                fft_forward(black_box(&mut buf));
                 black_box(buf);
             });
         });

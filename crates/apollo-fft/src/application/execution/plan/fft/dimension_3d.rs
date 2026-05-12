@@ -1,4 +1,4 @@
-﻿//! 3D FFT plan.
+//! 3D FFT plan.
 //!
 //! Apollo-owned 3D FFT implementation based on separable FFT passes.
 //!
@@ -42,9 +42,7 @@ use crate::application::execution::kernel::mixed_radix::{
     forward_inplace_32_with_twiddles, forward_inplace_64_with_twiddles,
     inverse_inplace_32_with_twiddles, inverse_inplace_64_with_twiddles,
 };
-use crate::application::execution::kernel::{
-    fft_forward_32, fft_forward_64, fft_inverse_32, fft_inverse_64,
-};
+use crate::application::execution::kernel::{fft_forward, fft_inverse};
 use crate::application::execution::plan::fft::real_storage::RealFftData;
 use crate::domain::metadata::precision::PrecisionProfile;
 use crate::domain::metadata::shape::Shape3D;
@@ -624,9 +622,9 @@ impl FftPlan3D {
             (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
-                    fft_forward_64(lane)
+                    fft_forward(lane)
                 } else {
-                    fft_inverse_64(lane)
+                    fft_inverse(lane)
                 }
             }
         };
@@ -690,9 +688,9 @@ impl FftPlan3D {
             (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
-                    fft_forward_64(lane)
+                    fft_forward(lane)
                 } else {
-                    fft_inverse_64(lane)
+                    fft_inverse(lane)
                 }
             }
         };
@@ -737,9 +735,9 @@ impl FftPlan3D {
             (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
-                    fft_forward_64(lane)
+                    fft_forward(lane)
                 } else {
-                    fft_inverse_64(lane)
+                    fft_inverse(lane)
                 }
             }
         };
@@ -798,9 +796,9 @@ impl FftPlan3D {
             (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
-                    fft_forward_32(lane)
+                    fft_forward(lane)
                 } else {
-                    fft_inverse_32(lane)
+                    fft_inverse(lane)
                 }
             }
         };
@@ -857,9 +855,9 @@ impl FftPlan3D {
             (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
-                    fft_forward_32(lane)
+                    fft_forward(lane)
                 } else {
-                    fft_inverse_32(lane)
+                    fft_inverse(lane)
                 }
             }
         };
@@ -901,9 +899,9 @@ impl FftPlan3D {
             (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
-                    fft_forward_32(lane)
+                    fft_forward(lane)
                 } else {
-                    fft_inverse_32(lane)
+                    fft_inverse(lane)
                 }
             }
         };
@@ -1177,7 +1175,7 @@ impl FftPlan3D {
         // Stage 2: length-m complex FFT in-place.
         match &self.twiddle_zh_fwd_64 {
             Some(tw) => forward_inplace_64_with_twiddles(&mut out_row[..m], Some(tw.as_ref())),
-            None => fft_forward_64(&mut out_row[..m]),
+            None => fft_forward(&mut out_row[..m]),
         }
 
         // Stage 3: Cooley-Tukey extraction â€” X[k] for k = 0..m (inclusive).
@@ -1307,7 +1305,7 @@ impl FftPlan3D {
         // Stage 2: normalized IFFT of length m in-place.
         match &self.twiddle_zh_inv_64 {
             Some(tw) => inverse_inplace_64_with_twiddles(&mut in_row[..m], Some(tw.as_ref())),
-            None => fft_inverse_64(&mut in_row[..m]),
+            None => fft_inverse(&mut in_row[..m]),
         }
 
         // Stage 3: unpack h[k] â†’ out_row[2k], out_row[2k+1].
@@ -1369,9 +1367,9 @@ impl FftPlan3D {
             (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
-                    fft_forward_64(lane);
+                    fft_forward(lane);
                 } else {
-                    fft_inverse_64(lane);
+                    fft_inverse(lane);
                 }
             }
         };
@@ -1439,9 +1437,9 @@ impl FftPlan3D {
             (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
-                    fft_forward_64(lane);
+                    fft_forward(lane);
                 } else {
-                    fft_inverse_64(lane);
+                    fft_inverse(lane);
                 }
             }
         };

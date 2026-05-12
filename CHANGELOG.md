@@ -8,6 +8,11 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ## [Unreleased]
 ### Breaking
+- [major] `apollo-fft`: removed concrete public auto-selector wrappers
+  `fft_forward_64`, `fft_inverse_64`, `fft_inverse_unnorm_64`,
+  `fft_forward_32`, `fft_inverse_32`, and `fft_inverse_unnorm_32`.
+  Callers must use the canonical generic `fft_forward`, `fft_inverse`, and
+  `fft_inverse_unnorm` entry points.
 - [major] `apollo-fft`: removed the remaining public type-suffixed Winograd
   DFT-16/32/64 wrappers and collapsed their duplicated f32/f64 recursive
   bodies into one generic codelet family.

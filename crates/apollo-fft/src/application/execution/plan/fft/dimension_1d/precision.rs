@@ -4,9 +4,7 @@ use super::FftPlan1D;
 use crate::application::execution::kernel::mixed_radix::{
     forward_inplace_32_with_twiddles, inverse_inplace_32_with_twiddles,
 };
-use crate::application::execution::kernel::{
-    fft_forward, fft_forward_32, fft_inverse, fft_inverse_32,
-};
+use crate::application::execution::kernel::{fft_forward, fft_inverse};
 use crate::domain::metadata::precision::PrecisionProfile;
 use half::f16;
 use ndarray::Array1;
@@ -22,7 +20,7 @@ impl FftPlan1D {
             if let Some(twiddles) = &self.twiddle_fwd_32 {
                 forward_inplace_32_with_twiddles(slice, Some(twiddles.as_ref()));
             } else {
-                fft_forward_32(slice);
+                fft_forward(slice);
             }
             output
         } else {
@@ -41,7 +39,7 @@ impl FftPlan1D {
             if let Some(twiddles) = &self.twiddle_inv_32 {
                 inverse_inplace_32_with_twiddles(slice, Some(twiddles.as_ref()));
             } else {
-                fft_inverse_32(slice);
+                fft_inverse(slice);
             }
             output.mapv(|value| value.re)
         } else {
@@ -75,7 +73,7 @@ impl FftPlan1D {
                 )
             } else {
                 let mut data = input.mapv(|value| Complex32::new(value.to_f32(), 0.0));
-                fft_forward_32(data.as_slice_mut().expect("Array must be contiguous"));
+                fft_forward(data.as_slice_mut().expect("Array must be contiguous"));
                 data
             }
         } else {
@@ -105,7 +103,7 @@ impl FftPlan1D {
                 Array1::from_vec(buf.into_iter().map(|cf| cf.re).collect())
             } else {
                 let mut data = input.clone();
-                fft_inverse_32(data.as_slice_mut().expect("Array must be contiguous"));
+                fft_inverse(data.as_slice_mut().expect("Array must be contiguous"));
                 data.mapv(|value| f16::from_f32(value.re))
             }
         } else {

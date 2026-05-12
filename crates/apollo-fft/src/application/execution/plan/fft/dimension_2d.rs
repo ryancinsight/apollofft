@@ -33,9 +33,7 @@ use crate::application::execution::kernel::mixed_radix::{
     forward_inplace_32_with_twiddles, forward_inplace_64_with_twiddles,
     inverse_inplace_32_with_twiddles, inverse_inplace_64_with_twiddles,
 };
-use crate::application::execution::kernel::{
-    fft_forward_32, fft_forward_64, fft_inverse_32, fft_inverse_64,
-};
+use crate::application::execution::kernel::{fft_forward, fft_inverse};
 use crate::application::execution::plan::fft::real_storage::RealFftData;
 
 /// Use rayon parallel iteration when total elements exceed this threshold.
@@ -121,12 +119,13 @@ impl Plan2dReal32 for f16 {
 /// `forward_inplace_64_with_twiddles` / `inverse_inplace_64_with_twiddles`,
 /// reading twiddles sequentially with no stride. This eliminates:
 /// 1. The per-lane twiddle-table `Vec` allocation that the naïve kernel
-///    performs on every `fft_forward_64` call (O(ny) alloc × nx rows).
+///    performs on every generic `fft_forward` call (O(ny) alloc × nx rows).
 /// 2. The strided access pattern (`T[j * stride]`) that causes L1 cache
 ///    misses for large N.
 ///
-/// For non-power-of-two axis lengths the plan falls back to `fft_forward_64` /
-/// `fft_inverse_64`, which use Bluestein with per-call scratch allocation.
+/// For non-power-of-two axis lengths the plan falls back to generic
+/// `fft_forward` / `fft_inverse`, which use Bluestein with per-call scratch
+/// allocation.
 ///
 /// The column pass must transpose, FFT, then scatter; this requires an
 /// auxiliary buffer of `nx * ny` entries. This scratch buffer is preallocated
@@ -457,9 +456,9 @@ impl FftPlan2D {
             (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
-                    fft_forward_64(lane)
+                    fft_forward(lane)
                 } else {
-                    fft_inverse_64(lane)
+                    fft_inverse(lane)
                 }
             }
         };
@@ -501,9 +500,9 @@ impl FftPlan2D {
             (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
-                    fft_forward_64(lane)
+                    fft_forward(lane)
                 } else {
-                    fft_inverse_64(lane)
+                    fft_inverse(lane)
                 }
             }
         };
@@ -562,9 +561,9 @@ impl FftPlan2D {
             (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
-                    fft_forward_32(lane)
+                    fft_forward(lane)
                 } else {
-                    fft_inverse_32(lane)
+                    fft_inverse(lane)
                 }
             }
         };
@@ -603,9 +602,9 @@ impl FftPlan2D {
             (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
-                    fft_forward_32(lane)
+                    fft_forward(lane)
                 } else {
-                    fft_inverse_32(lane)
+                    fft_inverse(lane)
                 }
             }
         };

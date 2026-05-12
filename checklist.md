@@ -1,4 +1,18 @@
 # Apollo Checklist
+## Closure LXV - FFT Auto-Selector Wrapper Removal [major]
+Sprint target version: apollo-fft 0.9.0
+
+- [x] Remove public concrete auto-selector wrappers for f64 and f32.
+- [x] Route `FftPrecision` implementations directly to mixed-radix dispatch.
+- [x] Update 1D/2D/3D plan fallbacks, tests, and benchmarks to call generic
+  `fft_forward` / `fft_inverse`.
+- [x] Update downstream DHT, WGPU validation, and validation benchmark callers.
+- [x] Bump `apollo-fft` to 0.9.0 and update sprint artifacts.
+- [x] Verify with `cargo check -p apollo-fft --benches --examples`,
+  `cargo test -p apollo-fft --lib -- --test-threads=1`,
+  `cargo check --workspace`, `cargo check -p apollo-fft-wgpu --tests`,
+  source scans, and `git diff --check`.
+
 ## Closure LXIV - FFT Recursive Winograd Generic Codelets [major]
 Sprint target version: apollo-fft 0.8.0
 

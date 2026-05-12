@@ -44,6 +44,19 @@ by design and will not be implemented.
 | GPU FFT 1D/2D | ✗ | ✗ | ✗ | Open |
 
 ## Closed Gaps
+### Closure LXV - FFT Auto-Selector Wrapper Removal [major]
+- **Gap**: `apollo-fft` still exposed concrete f64/f32 public auto-selector
+  wrappers even though `fft_forward`, `fft_inverse`, and `fft_inverse_unnorm`
+  are the canonical generic API.
+- **Closed by**: Deleted `fft_forward_64`, `fft_inverse_64`,
+  `fft_inverse_unnorm_64`, `fft_forward_32`, `fft_inverse_32`, and
+  `fft_inverse_unnorm_32`; routed `FftPrecision` implementations directly to
+  mixed-radix dispatch; updated plan fallbacks, tests, and benchmarks to use the
+  generic API; and bumped `apollo-fft` to 0.9.0.
+- **Residual risk**: External pre-1.0 callers using the removed concrete
+  wrappers must migrate to the generic FFT API.
+- **Evidence**: `cargo check -p apollo-fft --benches --examples`; `cargo test -p apollo-fft --lib -- --test-threads=1`; `cargo check --workspace`; `cargo check -p apollo-fft-wgpu --tests`; source scans for removed auto-selector wrapper names, direct DFT wrapper names, Winograd wrapper names, debug binary references, stale compatibility/deprecation tokens, and deleted f16 wrapper names; `git diff --check`.
+
 ### Closure LXIV - FFT Recursive Winograd Generic Codelets [major]
 - **Gap**: `apollo-fft` still exposed public type-suffixed Winograd DFT-16/32/64
   wrappers and carried duplicated f32/f64 recursive codelet bodies.

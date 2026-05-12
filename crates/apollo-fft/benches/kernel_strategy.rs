@@ -2,9 +2,7 @@
 
 #![allow(missing_docs)]
 
-use apollo_fft::application::execution::kernel::{
-    bluestein, direct, fft_forward, fft_forward_64, mixed_radix,
-};
+use apollo_fft::application::execution::kernel::{bluestein, direct, fft_forward, mixed_radix};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use half::f16;
 use num_complex::Complex;
@@ -70,7 +68,7 @@ fn bench_fft_kernels(c: &mut Criterion) {
             |bench, input| {
                 bench.iter(|| {
                     let mut data = input.clone();
-                    fft_forward_64(black_box(&mut data));
+                    fft_forward(black_box(&mut data));
                     black_box(data);
                 });
             },
