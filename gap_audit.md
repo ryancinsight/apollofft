@@ -44,6 +44,23 @@ by design and will not be implemented.
 | GPU FFT 1D/2D | ✗ | ✗ | ✗ | Open |
 
 ## Closed Gaps
+### Closure LXII - FFT Direct DFT Wrapper Removal [major]
+- **Gap**: The direct DFT reference kernel still exposed type-suffixed
+  wrapper functions and an unused debug-only f32 parity binary, duplicating the
+  canonical generic DFT API surface.
+- **Closed by**: Deleted `dft_forward_64`, `dft_inverse_64`,
+  `dft_forward_32`, `dft_inverse_32`, `forward_owned_64`, `inverse_owned_64`,
+  removed `src/bin/debug_f32.rs`, updated direct DFT tests, benchmarks, and
+  kernel regressions to use `dft_forward` / `dft_inverse`, and bumped
+  `apollo-fft` to 0.6.0.
+- **Residual risk**: External pre-1.0 callers using the removed direct DFT
+  wrappers must migrate to the generic functions.
+- **Evidence**: `cargo check -p apollo-fft --benches --examples`; `cargo
+  test -p apollo-fft --lib -- --test-threads=1`; `cargo check --workspace`;
+  source scans for removed direct DFT wrapper names, debug binary references,
+  stale compatibility/deprecation tokens, and deleted f16 wrapper names; `git
+  diff --check`.
+
 ### Closure LXI - FFT Composite Scratch and Twiddle Cache Reuse [patch]
 - **Gap**: Bluestein and mixed-radix composite FFT paths still retained
   allocation-heavy scratch behavior and stale docs. The composite twiddle cache

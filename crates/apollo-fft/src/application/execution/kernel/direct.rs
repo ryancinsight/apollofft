@@ -142,30 +142,6 @@ impl KernelScalar for Complex32 {
     }
 }
 
-/// In-place direct DFT kernel over `Complex64`.
-#[must_use]
-pub fn dft_forward_64(input: &[Complex64]) -> Vec<Complex64> {
-    dft_forward(input)
-}
-
-/// In-place direct inverse DFT kernel over `Complex64`.
-#[must_use]
-pub fn dft_inverse_64(input: &[Complex64]) -> Vec<Complex64> {
-    dft_inverse(input)
-}
-
-/// In-place direct DFT kernel over `Complex32`.
-#[must_use]
-pub fn dft_forward_32(input: &[Complex32]) -> Vec<Complex32> {
-    dft_forward(input)
-}
-
-/// In-place direct inverse DFT kernel over `Complex32`.
-#[must_use]
-pub fn dft_inverse_32(input: &[Complex32]) -> Vec<Complex32> {
-    dft_inverse(input)
-}
-
 /// Direct DFT forward transform.
 #[must_use]
 pub fn dft_forward<T: KernelScalar>(input: &[T]) -> Vec<T> {
@@ -218,18 +194,6 @@ pub fn dft_inverse<T: KernelScalar>(input: &[T]) -> Vec<T> {
     output
 }
 
-/// Complex64 forward kernel for owned buffers.
-#[must_use]
-pub fn forward_owned_64(input: Vec<Complex64>) -> Vec<Complex64> {
-    dft_forward_64(&input)
-}
-
-/// Complex64 inverse kernel for owned buffers.
-#[must_use]
-pub fn inverse_owned_64(input: Vec<Complex64>) -> Vec<Complex64> {
-    dft_inverse_64(&input)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,7 +205,7 @@ mod tests {
     #[test]
     fn forward_matches_known_two_point_transform() {
         let input = vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)];
-        let output = dft_forward_64(&input);
+        let output = dft_forward(&input);
         assert!(approx_eq(output[0], Complex64::new(3.0, 0.0), 1.0e-12));
         assert!(approx_eq(output[1], Complex64::new(-1.0, 0.0), 1.0e-12));
     }
@@ -254,8 +218,8 @@ mod tests {
             Complex64::new(-0.5, 0.25),
             Complex64::new(0.75, -0.125),
         ];
-        let spectrum = dft_forward_64(&input);
-        let recovered = dft_inverse_64(&spectrum);
+        let spectrum = dft_forward(&input);
+        let recovered = dft_inverse(&spectrum);
         for (actual, expected) in recovered.iter().zip(input.iter()) {
             assert!(approx_eq(*actual, *expected, 1.0e-10));
         }
@@ -269,7 +233,7 @@ mod tests {
             Complex64::new(0.0, 0.0),
             Complex64::new(-1.0, 0.0),
         ];
-        let recovered = dft_inverse_64(&dft_forward_64(&input));
+        let recovered = dft_inverse(&dft_forward(&input));
         for (actual, expected) in recovered.iter().zip(input.iter()) {
             assert!(approx_eq(*actual, *expected, 1.0e-10));
         }

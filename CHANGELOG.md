@@ -7,7 +7,16 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 ---
 
 ## [Unreleased]
+### Breaking
+- [major] `apollo-fft`: removed type-suffixed direct DFT wrappers
+  `dft_forward_64`, `dft_inverse_64`, `dft_forward_32`, `dft_inverse_32`,
+  `forward_owned_64`, and `inverse_owned_64`. Callers must use the canonical
+  generic `dft_forward` and `dft_inverse` functions.
+
 ### Fixed
+- [patch] `apollo-fft`: removed the debug-only `debug_f32` binary and updated
+  direct DFT tests, benchmarks, and kernel regressions to use the canonical
+  generic DFT functions.
 - [patch] `apollo-fft`: reuse Bluestein and mixed-radix composite FFT scratch
   buffers across calls, cache composite twiddle tables by exact radix
   decomposition and direction, and add regression coverage for same-length

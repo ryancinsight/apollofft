@@ -1012,7 +1012,7 @@ pub fn dft8_32(data: &mut [Complex32; 8], inverse: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::execution::kernel::direct::{dft_forward_64, dft_inverse_64};
+    use crate::application::execution::kernel::direct::{dft_forward, dft_inverse};
 
     fn max_err(a: &[Complex64], b: &[Complex64]) -> f64 {
         a.iter()
@@ -1028,7 +1028,7 @@ mod tests {
         let input: Vec<Complex64> = (0..3)
             .map(|k| Complex64::new((k as f64 * 0.71).sin(), (k as f64 * 0.43).cos()))
             .collect();
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut buf: [Complex64; 3] = input.as_slice().try_into().unwrap();
         dft3_impl(&mut buf, false);
         let err = max_err(&buf, &expected);
@@ -1053,10 +1053,8 @@ mod tests {
         let input: Vec<Complex64> = (0..3)
             .map(|k| Complex64::new((k as f64 * 0.39).cos(), (k as f64 * 0.83).sin()))
             .collect();
-        let expected_unnorm: Vec<Complex64> = dft_inverse_64(&input)
-            .into_iter()
-            .map(|x| x * 3.0)
-            .collect();
+        let expected_unnorm: Vec<Complex64> =
+            dft_inverse(&input).into_iter().map(|x| x * 3.0).collect();
         let mut buf: [Complex64; 3] = input.as_slice().try_into().unwrap();
         dft3_impl(&mut buf, true);
         let err = max_err(&buf, &expected_unnorm);
@@ -1080,7 +1078,7 @@ mod tests {
         let input: Vec<Complex64> = (0..5)
             .map(|k| Complex64::new((k as f64 * 0.61).sin(), (k as f64 * 0.37).cos()))
             .collect();
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut buf: [Complex64; 5] = input.as_slice().try_into().unwrap();
         dft5_impl(&mut buf, false);
         let err = max_err(&buf, &expected);
@@ -1105,10 +1103,8 @@ mod tests {
         let input: Vec<Complex64> = (0..5)
             .map(|k| Complex64::new((k as f64 * 0.23).cos(), (k as f64 * 0.77).sin()))
             .collect();
-        let expected_unnorm: Vec<Complex64> = dft_inverse_64(&input)
-            .into_iter()
-            .map(|x| x * 5.0)
-            .collect();
+        let expected_unnorm: Vec<Complex64> =
+            dft_inverse(&input).into_iter().map(|x| x * 5.0).collect();
         let mut buf: [Complex64; 5] = input.as_slice().try_into().unwrap();
         dft5_impl(&mut buf, true);
         let err = max_err(&buf, &expected_unnorm);
@@ -1130,7 +1126,7 @@ mod tests {
         let input: Vec<Complex64> = (0..5)
             .map(|k| Complex64::new((k as f64 * 0.53).sin(), (k as f64 * 0.31).cos()))
             .collect();
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut buf: [Complex32; 5] =
             core::array::from_fn(|i| Complex32::new(input[i].re as f32, input[i].im as f32));
         dft5_impl(&mut buf, false);
@@ -1149,7 +1145,7 @@ mod tests {
         let input: Vec<Complex64> = (0..7)
             .map(|k| Complex64::new((k as f64 * 0.71).sin(), (k as f64 * 0.31).cos()))
             .collect();
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut buf: [Complex64; 7] = input.as_slice().try_into().unwrap();
         dft7_impl(&mut buf, false);
         let err = max_err(&buf, &expected);
@@ -1174,10 +1170,8 @@ mod tests {
         let input: Vec<Complex64> = (0..7)
             .map(|k| Complex64::new((k as f64 * 0.47).sin(), (k as f64 * 0.23).cos()))
             .collect();
-        let expected_unnorm: Vec<Complex64> = dft_inverse_64(&input)
-            .into_iter()
-            .map(|x| x * 7.0)
-            .collect();
+        let expected_unnorm: Vec<Complex64> =
+            dft_inverse(&input).into_iter().map(|x| x * 7.0).collect();
         let mut buf: [Complex64; 7] = input.as_slice().try_into().unwrap();
         dft7_impl(&mut buf, true);
         let err = max_err(&buf, &expected_unnorm);
@@ -1199,7 +1193,7 @@ mod tests {
         let input: Vec<Complex64> = (0..7)
             .map(|k| Complex64::new((k as f64 * 0.53).sin(), (k as f64 * 0.31).cos()))
             .collect();
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut buf: [Complex32; 7] =
             core::array::from_fn(|i| Complex32::new(input[i].re as f32, input[i].im as f32));
         dft7_impl(&mut buf, false);
@@ -1216,7 +1210,7 @@ mod tests {
     #[test]
     fn dft2_forward_matches_direct() {
         let input = vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 1.0)];
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut a = input[0];
         let mut b = input[1];
         dft2_impl(&mut a, &mut b);
@@ -1246,7 +1240,7 @@ mod tests {
         let input: Vec<Complex64> = (0..4)
             .map(|k| Complex64::new((k as f64 * 0.3).sin(), (k as f64 * 0.7).cos()))
             .collect();
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut buf: [Complex64; 4] = input.as_slice().try_into().unwrap();
         dft4_impl(&mut buf, false);
         assert!(max_err(&buf, &expected) < 1e-13, "DFT-4 forward mismatch");
@@ -1272,10 +1266,8 @@ mod tests {
         let input: Vec<Complex64> = (0..4)
             .map(|k| Complex64::new((k as f64 * 0.9).cos(), (k as f64 * 0.4).sin()))
             .collect();
-        let expected_unnorm: Vec<Complex64> = dft_inverse_64(&input)
-            .into_iter()
-            .map(|x| x * 4.0)
-            .collect();
+        let expected_unnorm: Vec<Complex64> =
+            dft_inverse(&input).into_iter().map(|x| x * 4.0).collect();
         let mut buf: [Complex64; 4] = input.as_slice().try_into().unwrap();
         dft4_impl(&mut buf, true);
         assert!(
@@ -1291,7 +1283,7 @@ mod tests {
         let input: Vec<Complex64> = (0..8)
             .map(|k| Complex64::new((k as f64 * 0.41).sin(), (k as f64 * 0.17).cos()))
             .collect();
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut buf: [Complex64; 8] = input.as_slice().try_into().unwrap();
         dft8_impl(&mut buf, false);
         let err = max_err(&buf, &expected);
@@ -1316,10 +1308,8 @@ mod tests {
         let input: Vec<Complex64> = (0..8)
             .map(|k| Complex64::new((k as f64 * 0.33).sin(), (k as f64 * 0.22).cos()))
             .collect();
-        let expected_unnorm: Vec<Complex64> = dft_inverse_64(&input)
-            .into_iter()
-            .map(|x| x * 8.0)
-            .collect();
+        let expected_unnorm: Vec<Complex64> =
+            dft_inverse(&input).into_iter().map(|x| x * 8.0).collect();
         let mut buf: [Complex64; 8] = input.as_slice().try_into().unwrap();
         dft8_impl(&mut buf, true);
         let err = max_err(&buf, &expected_unnorm);
@@ -1331,7 +1321,7 @@ mod tests {
         let input: Vec<Complex64> = (0..8)
             .map(|k| Complex64::new((k as f64 * 0.18).sin(), (k as f64 * 0.31).cos()))
             .collect();
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut buf: [Complex32; 8] =
             core::array::from_fn(|i| Complex32::new(input[i].re as f32, input[i].im as f32));
         dft8_impl(&mut buf, false);
@@ -1350,7 +1340,7 @@ mod tests {
         let input: Vec<Complex64> = (0..16)
             .map(|k| Complex64::new((k as f64 * 0.29).sin(), (k as f64 * 0.13).cos()))
             .collect();
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut buf: [Complex64; 16] = input.as_slice().try_into().unwrap();
         dft16_64(&mut buf, false);
         let err = max_err(&buf, &expected);
@@ -1375,10 +1365,8 @@ mod tests {
         let input: Vec<Complex64> = (0..16)
             .map(|k| Complex64::new((k as f64 * 0.44).sin(), (k as f64 * 0.36).cos()))
             .collect();
-        let expected_unnorm: Vec<Complex64> = dft_inverse_64(&input)
-            .into_iter()
-            .map(|x| x * 16.0)
-            .collect();
+        let expected_unnorm: Vec<Complex64> =
+            dft_inverse(&input).into_iter().map(|x| x * 16.0).collect();
         let mut buf: [Complex64; 16] = input.as_slice().try_into().unwrap();
         dft16_64(&mut buf, true);
         let err = max_err(&buf, &expected_unnorm);
@@ -1392,7 +1380,7 @@ mod tests {
         let input: Vec<Complex64> = (0..32)
             .map(|k| Complex64::new((k as f64 * 0.21).sin(), (k as f64 * 0.09).cos()))
             .collect();
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut buf: [Complex64; 32] = input.as_slice().try_into().unwrap();
         dft32_64(&mut buf, false);
         let err = max_err(&buf, &expected);
@@ -1417,10 +1405,8 @@ mod tests {
         let input: Vec<Complex64> = (0..32)
             .map(|k| Complex64::new((k as f64 * 0.55).sin(), (k as f64 * 0.27).cos()))
             .collect();
-        let expected_unnorm: Vec<Complex64> = dft_inverse_64(&input)
-            .into_iter()
-            .map(|x| x * 32.0)
-            .collect();
+        let expected_unnorm: Vec<Complex64> =
+            dft_inverse(&input).into_iter().map(|x| x * 32.0).collect();
         let mut buf: [Complex64; 32] = input.as_slice().try_into().unwrap();
         dft32_64(&mut buf, true);
         let err = max_err(&buf, &expected_unnorm);
@@ -1434,7 +1420,7 @@ mod tests {
         let input: Vec<Complex64> = (0..64)
             .map(|k| Complex64::new((k as f64 * 0.17).sin(), (k as f64 * 0.03).cos()))
             .collect();
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut buf: [Complex64; 64] = input.as_slice().try_into().unwrap();
         dft64_64(&mut buf, false);
         let err = max_err(&buf, &expected);
@@ -1459,10 +1445,8 @@ mod tests {
         let input: Vec<Complex64> = (0..64)
             .map(|k| Complex64::new((k as f64 * 0.14).sin(), (k as f64 * 0.42).cos()))
             .collect();
-        let expected_unnorm: Vec<Complex64> = dft_inverse_64(&input)
-            .into_iter()
-            .map(|x| x * 64.0)
-            .collect();
+        let expected_unnorm: Vec<Complex64> =
+            dft_inverse(&input).into_iter().map(|x| x * 64.0).collect();
         let mut buf: [Complex64; 64] = input.as_slice().try_into().unwrap();
         dft64_64(&mut buf, true);
         let err = max_err(&buf, &expected_unnorm);
@@ -1532,7 +1516,7 @@ mod tests {
         let input: Vec<Complex64> = (0..32)
             .map(|k| Complex64::new((k as f64 * 0.12).sin(), (k as f64 * 0.35).cos()))
             .collect();
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut buf: [Complex32; 32] =
             core::array::from_fn(|i| Complex32::new(input[i].re as f32, input[i].im as f32));
         dft32_32(&mut buf, false);
@@ -1549,7 +1533,7 @@ mod tests {
         let input: Vec<Complex64> = (0..64)
             .map(|k| Complex64::new((k as f64 * 0.07).sin(), (k as f64 * 0.29).cos()))
             .collect();
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut buf: [Complex32; 64] =
             core::array::from_fn(|i| Complex32::new(input[i].re as f32, input[i].im as f32));
         dft64_32(&mut buf, false);

@@ -1,5 +1,11 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure LXII phase)
+- [x] [major] Remove type-suffixed direct DFT wrappers and the debug-only f32
+  parity binary from `apollo-fft`. Direct DFT tests, benchmarks, and kernel
+  regressions now use the canonical generic `dft_forward` / `dft_inverse`
+  functions, and `apollo-fft` was bumped to 0.6.0.
+
 ## Closed in this sprint (Closure LXI phase)
 - [x] [patch] Reuse `apollo-fft` Bluestein and mixed-radix composite scratch
   buffers across calls and cache composite twiddle tables by exact radix

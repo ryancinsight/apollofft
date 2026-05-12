@@ -28,10 +28,7 @@ pub mod winograd;
 #[cfg(test)]
 pub(crate) mod test_utils;
 
-pub use direct::{
-    dft_forward_32, dft_forward_64, dft_inverse_32, dft_inverse_64, forward_owned_64,
-    inverse_owned_64, KernelScalar,
-};
+pub use direct::{dft_forward, dft_inverse, KernelScalar};
 
 use half::f16;
 use num_complex::{Complex, Complex32, Complex64};
@@ -170,7 +167,7 @@ impl FftPrecision for Complex<f16> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::execution::kernel::direct::{dft_forward_32, dft_forward_64};
+    use crate::application::execution::kernel::direct::dft_forward;
     use crate::application::execution::kernel::test_utils::{max_abs_err_32, max_abs_err_64};
 
     fn sig64(n: usize) -> Vec<Complex64> {
@@ -215,7 +212,7 @@ mod tests {
         let mut typed = input.clone();
         fft_forward_64(&mut typed);
 
-        let direct = dft_forward_64(&input);
+        let direct = dft_forward(&input);
         assert!(max_abs_err_64(&generic, &typed) < 1e-12);
         assert!(max_abs_err_64(&generic, &direct) < 1e-10);
     }
@@ -231,7 +228,7 @@ mod tests {
         let mut typed = input.clone();
         fft_forward_32(&mut typed);
 
-        let direct = dft_forward_32(&input);
+        let direct = dft_forward(&input);
         assert!(max_abs_err_32(&generic, &typed) < 1e-6);
         assert!(max_abs_err_32(&generic, &direct) < 5e-4);
     }

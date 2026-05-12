@@ -1368,7 +1368,7 @@ pub fn inverse_inplace_32(data: &mut [Complex32]) {
 mod tests {
     use super::super::test_utils::max_abs_err_64 as max_abs_err;
     use super::*;
-    use crate::application::execution::kernel::direct::{dft_forward_64, dft_inverse_64};
+    use crate::application::execution::kernel::direct::{dft_forward, dft_inverse};
 
     fn sig(n: usize) -> Vec<Complex64> {
         (0..n)
@@ -1390,7 +1390,7 @@ mod tests {
             Complex64::new(0.0, 0.0),
             Complex64::new(0.0, 0.0),
         ];
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut got = input.clone();
         forward_inplace_64(&mut got);
         assert!(max_abs_err(&got, &expected) < 1e-12);
@@ -1399,7 +1399,7 @@ mod tests {
     #[test]
     fn forward_matches_direct_for_n5() {
         let input = sig(5);
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut got = input.clone();
         forward_inplace_64(&mut got);
         assert!(
@@ -1412,7 +1412,7 @@ mod tests {
     #[test]
     fn forward_matches_direct_for_n6() {
         let input = sig(6);
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut got = input.clone();
         forward_inplace_64(&mut got);
         assert!(
@@ -1425,7 +1425,7 @@ mod tests {
     #[test]
     fn forward_matches_direct_for_n7() {
         let input = sig(7);
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut got = input.clone();
         forward_inplace_64(&mut got);
         assert!(
@@ -1438,7 +1438,7 @@ mod tests {
     #[test]
     fn forward_matches_direct_for_n11() {
         let input = sig(11);
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut got = input.clone();
         forward_inplace_64(&mut got);
         assert!(
@@ -1491,7 +1491,7 @@ mod tests {
     #[test]
     fn inverse_matches_direct_for_n5() {
         let input = sig(5);
-        let expected = dft_inverse_64(&input);
+        let expected = dft_inverse(&input);
         let mut got = input.clone();
         inverse_inplace_64(&mut got);
         assert!(

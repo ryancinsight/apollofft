@@ -721,7 +721,7 @@ pub(crate) fn inverse_compact_storage<S: Complex32Bridge>(data: &mut [S]) {
 mod tests {
     use super::super::test_utils::max_abs_err_64;
     use super::*;
-    use crate::application::execution::kernel::direct::{dft_forward_64, dft_inverse_64};
+    use crate::application::execution::kernel::direct::{dft_forward, dft_inverse};
     use half::f16;
     use num_complex::Complex;
 
@@ -733,7 +733,7 @@ mod tests {
             .collect();
         let mut got = input.clone();
         forward_inplace_64(&mut got);
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let err = max_abs_err_64(&got, &expected);
         assert!(err < 1e-10, "mixed-radix forward mismatch err={err:.2e}");
     }
@@ -746,7 +746,7 @@ mod tests {
             .collect();
         let mut got = input.clone();
         inverse_inplace_unnorm_64(&mut got);
-        let expected = dft_inverse_64(&input)
+        let expected = dft_inverse(&input)
             .into_iter()
             .map(|x| x * n as f64)
             .collect::<Vec<_>>();

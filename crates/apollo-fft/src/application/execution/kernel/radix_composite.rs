@@ -456,7 +456,7 @@ fn stockham_block<F: WinogradScalar>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::execution::kernel::direct::{dft_forward_64, dft_inverse_64};
+    use crate::application::execution::kernel::direct::{dft_forward, dft_inverse};
     use crate::application::execution::kernel::radix_shape::factorize_composite;
     use num_complex::{Complex32, Complex64};
 
@@ -607,7 +607,7 @@ mod tests {
         let input: Vec<Complex64> = (0..n)
             .map(|k| Complex64::new((k as f64 * 0.37).sin(), (k as f64 * 0.19).cos()))
             .collect();
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut got = input.clone();
         forward_inplace_64(&mut got);
         let err = max_err(&got, &expected);
@@ -636,7 +636,7 @@ mod tests {
         let input: Vec<Complex64> = (0..n)
             .map(|k| Complex64::new((k as f64 * 0.61).cos(), (k as f64 * 0.43).sin()))
             .collect();
-        let expected_unnorm: Vec<Complex64> = dft_inverse_64(&input)
+        let expected_unnorm: Vec<Complex64> = dft_inverse(&input)
             .into_iter()
             .map(|x| x * n as f64)
             .collect();
@@ -713,7 +713,7 @@ mod tests {
         let input: Vec<Complex64> = (0..12)
             .map(|i| Complex64::new((i as f64 * 0.37).sin(), (i as f64 * 0.11).cos()))
             .collect();
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
 
         let mut radix_3_4 = input.clone();
         forward_inplace_with_radices(&mut radix_3_4, &[3, 4]);
@@ -802,7 +802,7 @@ mod tests {
         let input: Vec<Complex64> = (0..100usize)
             .map(|k| Complex64::new((k as f64 * 0.29).sin(), (k as f64 * 0.47).cos()))
             .collect();
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut buf: Vec<Complex32> = input
             .iter()
             .map(|x| Complex32::new(x.re as f32, x.im as f32))
@@ -821,7 +821,7 @@ mod tests {
         let input: Vec<Complex64> = (0..1000usize)
             .map(|k| Complex64::new((k as f64 * 0.13).sin(), (k as f64 * 0.31).cos()))
             .collect();
-        let expected = dft_forward_64(&input);
+        let expected = dft_forward(&input);
         let mut buf: Vec<Complex32> = input
             .iter()
             .map(|x| Complex32::new(x.re as f32, x.im as f32))

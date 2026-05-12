@@ -1,4 +1,17 @@
 # Apollo Checklist
+## Closure LXII - FFT Direct DFT Wrapper Removal [major]
+Sprint target version: apollo-fft 0.6.0
+
+- [x] Remove public type-suffixed direct DFT wrappers.
+- [x] Remove unused owned Complex64 direct DFT wrappers.
+- [x] Delete the debug-only `debug_f32` binary.
+- [x] Update in-repo tests and benchmarks to call generic `dft_forward` /
+  `dft_inverse`.
+- [x] Bump `apollo-fft` to 0.6.0 and update sprint artifacts.
+- [x] Verify with `cargo check -p apollo-fft --benches --examples`,
+  `cargo test -p apollo-fft --lib -- --test-threads=1`,
+  `cargo check --workspace`, source scans, and `git diff --check`.
+
 ## Closure LXI - FFT Composite Scratch and Twiddle Cache Reuse [patch]
 Sprint target version: apollo-fft 0.5.3
 

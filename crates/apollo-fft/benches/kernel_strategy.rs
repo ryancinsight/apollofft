@@ -45,7 +45,7 @@ fn bench_fft_kernels(c: &mut Criterion) {
                 &input,
                 |bench, input| {
                     bench.iter(|| {
-                        let output = direct::dft_forward_64(black_box(input));
+                        let output = direct::dft_forward(black_box(input));
                         black_box(output);
                     });
                 },
