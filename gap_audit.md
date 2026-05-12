@@ -44,6 +44,24 @@ by design and will not be implemented.
 | GPU FFT 1D/2D | ✗ | ✗ | ✗ | Open |
 
 ## Closed Gaps
+### Closure LIX - FFT 2D Typed Plan Deduplication [patch]
+- **Gap**: `apollo-fft` duplicated the 2D f32 and f16 typed forward/inverse
+  bodies, duplicated the 2D plan module-level Rustdoc block, and kept
+  crate-root tests inside `lib.rs`, leaving the crate root above the 500-line
+  structural limit.
+- **Closed by**: Added private `Plan2dReal32` static-dispatch storage
+  abstraction, routed `forward_f32`, `inverse_f32`, `forward_f16`, and
+  `inverse_f16` through shared monomorphized helpers, removed duplicated 2D
+  Rustdoc, moved crate-root tests into `lib_tests.rs`, and bumped
+  `apollo-fft` to 0.5.1.
+- **Residual risk**: Larger FFT kernel implementation files remain above the
+  structural limit and require follow-up module partitioning.
+- **Evidence**: `cargo check -p apollo-fft --benches --examples`; `cargo
+  test -p apollo-fft --lib -- --test-threads=1`; `cargo check --workspace`;
+  structural scan confirming `lib.rs` is 434 lines; source scan for stale
+  compatibility/deprecation tokens and deleted f16 wrapper names; `git diff
+  --check`.
+
 ### Closure LVIII - FFT Compatibility Alias Removal [major]
 - **Gap**: `apollo-fft` retained the stale `FftPlan3D::nz_complex` alias,
   `HalfSpectrum3D::nz_complex` field, and compatibility wording after the FFT

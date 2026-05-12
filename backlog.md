@@ -1,5 +1,11 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure LIX phase)
+- [x] [patch] Reduce `apollo-fft` typed 2D plan redundancy and crate-root file
+  size. The f32/f16 2D paths now share one private monomorphized
+  `Plan2dReal32` helper, duplicated 2D plan Rustdoc was removed, crate-root
+  tests moved into `lib_tests.rs`, and `apollo-fft` was bumped to 0.5.1.
+
 ## Closed in this sprint (Closure LVIII phase)
 - [x] [major] Remove the stale `FftPlan3D::nz_complex` compatibility alias,
   rename `HalfSpectrum3D::nz_complex` to `HalfSpectrum3D::nz_c`, and remove

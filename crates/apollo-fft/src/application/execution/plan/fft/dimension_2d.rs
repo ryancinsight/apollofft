@@ -22,30 +22,6 @@
 //!
 //! # Complexity
 //!
-//! 2D FFT plan.
-//!
-//! Apollo-owned 2D FFT implementation.
-//!
-//! The 2D DFT is separable, so this plan applies the in-repo auto-selected 1D
-//! FFT kernel across rows and columns. The inverse path is normalized on each
-//! inverse axis pass, which gives the standard `1 / (nx * ny)` inverse
-//! normalization.
-//!
-//! # Mathematical contract
-//!
-//! For a complex input field `x in C^(nx x ny)`, the forward transform is
-//!
-//! `X[k,l] = sum_i sum_j x[i,j] exp(-2*pi*i*(k*i/nx + l*j/ny))`.
-//!
-//! The inverse transform is
-//!
-//! `x[i,j] = (1/(nx*ny)) sum_k sum_l X[k,l] exp(2*pi*i*(k*i/nx + l*j/ny))`.
-//!
-//! The implementation is linear and separable. Floating-point error follows
-//! from the selected scalar precision and the selected 1D FFT kernel.
-//!
-//! # Complexity
-//!
 //! Let `C(n)` be the selected 1D FFT cost. The plan costs
 //! `O(ny * C(nx) + nx * C(ny))`, with `C(n) = O(n log n)` for both radix-2 and
 //! Bluestein plan paths. Contiguous innermost-axis passes mutate row chunks in
@@ -77,6 +53,63 @@ use ndarray::{Array2, Axis, Zip};
 use num_complex::{Complex32, Complex64};
 use rayon::prelude::*;
 use std::sync::Arc;
+
+trait Plan2dReal32: Copy {
+    const NATIVE_PROFILE: PrecisionProfile;
+
+    fn to_f32(self) -> f32;
+    fn to_f64(self) -> f64;
+    fn from_f32(value: f32) -> Self;
+    fn from_f64(value: f64) -> Self;
+}
+
+impl Plan2dReal32 for f32 {
+    const NATIVE_PROFILE: PrecisionProfile = PrecisionProfile::LOW_PRECISION_F32;
+
+    #[inline]
+    fn to_f32(self) -> f32 {
+        self
+    }
+
+    #[inline]
+    fn to_f64(self) -> f64 {
+        f64::from(self)
+    }
+
+    #[inline]
+    fn from_f32(value: f32) -> Self {
+        value
+    }
+
+    #[inline]
+    fn from_f64(value: f64) -> Self {
+        value as f32
+    }
+}
+
+impl Plan2dReal32 for f16 {
+    const NATIVE_PROFILE: PrecisionProfile = PrecisionProfile::MIXED_PRECISION_F16_F32;
+
+    #[inline]
+    fn to_f32(self) -> f32 {
+        self.to_f32()
+    }
+
+    #[inline]
+    fn to_f64(self) -> f64 {
+        f64::from(self.to_f32())
+    }
+
+    #[inline]
+    fn from_f32(value: f32) -> Self {
+        Self::from_f32(value)
+    }
+
+    #[inline]
+    fn from_f64(value: f64) -> Self {
+        Self::from_f32(value as f32)
+    }
+}
 
 /// Reusable 2D FFT plan.
 ///
@@ -343,78 +376,58 @@ impl FftPlan2D {
     /// Forward transform of a real array stored as `f32`.
     #[must_use]
     pub(crate) fn forward_f32(&self, input: &Array2<f32>) -> Array2<Complex32> {
-        assert_eq!(
-            input.dim(),
-            (self.nx, self.ny),
-            "forward input shape mismatch"
-        );
-        if self.precision == PrecisionProfile::LOW_PRECISION_F32 {
-            let mut data = input.mapv(|value| Complex32::new(value, 0.0));
-            self.forward_complex_inplace_f32(&mut data);
-            data
-        } else {
-            let promoted = input.mapv(f64::from);
-            self.forward_real_to_complex(&promoted)
-                .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
-        }
+        self.forward_real32(input)
     }
 
     /// Inverse transform of an `f32`-storage complex spectrum.
     #[must_use]
     pub(crate) fn inverse_f32(&self, input: &Array2<Complex32>) -> Array2<f32> {
-        assert_eq!(
-            input.dim(),
-            (self.nx, self.ny),
-            "inverse input shape mismatch"
-        );
-        if self.precision == PrecisionProfile::LOW_PRECISION_F32 {
-            let mut data = input.clone();
-            self.inverse_complex_inplace_f32(&mut data);
-            data.mapv(|value| value.re)
-        } else {
-            let promoted =
-                input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
-            self.inverse_complex_to_real(&promoted)
-                .mapv(|value| value as f32)
-        }
+        self.inverse_real32(input)
     }
 
     /// Forward transform of a real array stored as `f16`.
     #[must_use]
     pub(crate) fn forward_f16(&self, input: &Array2<f16>) -> Array2<Complex32> {
-        assert_eq!(
-            input.dim(),
-            (self.nx, self.ny),
-            "forward input shape mismatch"
-        );
-        if self.precision == PrecisionProfile::MIXED_PRECISION_F16_F32 {
-            let mut data = input.mapv(|value| Complex32::new(value.to_f32(), 0.0));
-            self.forward_complex_inplace_f32(&mut data);
-            data
-        } else {
-            let promoted = input.mapv(|value| f64::from(value.to_f32()));
-            self.forward_real_to_complex(&promoted)
-                .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
-        }
+        self.forward_real32(input)
     }
 
     /// Inverse transform of a complex spectrum to `f16` storage.
     #[must_use]
     pub(crate) fn inverse_f16(&self, input: &Array2<Complex32>) -> Array2<f16> {
+        self.inverse_real32(input)
+    }
+
+    fn forward_real32<T: Plan2dReal32>(&self, input: &Array2<T>) -> Array2<Complex32> {
+        assert_eq!(
+            input.dim(),
+            (self.nx, self.ny),
+            "forward input shape mismatch"
+        );
+        if self.precision == T::NATIVE_PROFILE {
+            let mut data = input.mapv(|value| Complex32::new(value.to_f32(), 0.0));
+            self.forward_complex_inplace_f32(&mut data);
+            data
+        } else {
+            let promoted = input.mapv(T::to_f64);
+            self.forward_real_to_complex(&promoted)
+                .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
+        }
+    }
+
+    fn inverse_real32<T: Plan2dReal32>(&self, input: &Array2<Complex32>) -> Array2<T> {
         assert_eq!(
             input.dim(),
             (self.nx, self.ny),
             "inverse input shape mismatch"
         );
-        if self.precision == PrecisionProfile::MIXED_PRECISION_F16_F32 {
+        if self.precision == T::NATIVE_PROFILE {
             let mut data = input.clone();
             self.inverse_complex_inplace_f32(&mut data);
-            data.mapv(|value| f16::from_f32(value.re))
+            data.mapv(|value| T::from_f32(value.re))
         } else {
             let promoted =
                 input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
-            self.inverse_complex_to_real(&promoted)
-                .mapv(|value| f16::from_f32(value as f32))
+            self.inverse_complex_to_real(&promoted).mapv(T::from_f64)
         }
     }
 

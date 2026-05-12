@@ -1,4 +1,18 @@
 # Apollo Checklist
+## Closure LIX - FFT 2D Typed Plan Deduplication [patch]
+Sprint target version: apollo-fft 0.5.1
+
+- [x] Consolidate duplicated 2D f32/f16 forward/inverse typed paths behind one
+  private monomorphized helper trait.
+- [x] Remove duplicated 2D plan Rustdoc.
+- [x] Move crate-root tests from `lib.rs` to `lib_tests.rs` so `lib.rs` stays
+  under the 500-line structural limit.
+- [x] Bump `apollo-fft` to 0.5.1 and update sprint artifacts.
+- [x] Verify with `cargo check -p apollo-fft --benches --examples`,
+  `cargo test -p apollo-fft --lib -- --test-threads=1`,
+  `cargo check --workspace`, structural line scan, source scans, and
+  `git diff --check`.
+
 ## Closure LVIII - FFT Compatibility Alias Removal [major]
 Sprint target version: apollo-fft 0.5.0
 
