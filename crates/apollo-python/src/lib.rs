@@ -1,6 +1,9 @@
 #![warn(missing_docs)]
 //! Python bindings for Apollo FFT and NUFFT.
 
+#![allow(clippy::unused_self)]
+#![allow(clippy::elidable_lifetime_names)]
+
 pub mod application;
 pub mod domain;
 pub mod infrastructure;
@@ -431,7 +434,7 @@ impl PyFftPlan3D {
         require_contiguous_3d(&input, "rfft input")?;
         let input = input.as_array().to_owned();
         let mut output = ndarray::Array3::<Complex64>::zeros(input.dim());
-        self.inner.forward_into(&input, &mut output);
+        self.inner.forward_real_to_complex_into(&input, &mut output);
         Ok(PyArray3::from_owned_array(py, output))
     }
 
@@ -744,7 +747,7 @@ fn rfft3<'py>(
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
     let plan = FftPlan3D::new(shape);
     let mut output = ndarray::Array3::<Complex64>::zeros(owned.dim());
-    plan.forward_into(&owned, &mut output);
+    plan.forward_real_to_complex_into(&owned, &mut output);
     Ok(PyArray3::from_owned_array(py, output))
 }
 

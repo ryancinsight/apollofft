@@ -1,7 +1,7 @@
 //! Sparse Fourier transform tests.
 
 use crate::{SparseFftPlan, SparseSpectrum};
-use apollo_fft::error::ApolloError;
+use apollo_fft::ApolloError;
 use num_complex::Complex64;
 
 fn approx_eq(a: Complex64, b: Complex64, eps: f64) -> bool {

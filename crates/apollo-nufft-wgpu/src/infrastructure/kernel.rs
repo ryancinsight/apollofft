@@ -79,7 +79,6 @@ struct FastNufftParams3D {
 ///
 /// Buffers are sized for a specific transform configuration (`n`, `m`, `max_samples`).
 /// Reusing these buffers across calls eliminates per-dispatch GPU buffer creation overhead.
-#[allow(dead_code)]
 pub struct NufftGpuBuffers1D {
     position_buffer: wgpu::Buffer,
     value_buffer: wgpu::Buffer,
@@ -186,7 +185,6 @@ impl NufftGpuBuffers1D {
 /// Buffers are sized for a specific transform configuration (`shape`, `oversampled`,
 /// `max_samples`). Reusing these buffers across calls eliminates per-dispatch GPU
 /// buffer creation overhead.
-#[allow(dead_code)]
 pub struct NufftGpuBuffers3D {
     position_buffer: wgpu::Buffer,
     value_buffer: wgpu::Buffer,
@@ -320,6 +318,16 @@ impl NufftGpuBuffers3D {
     }
 }
 
+fn ensure_sample_capacity(max_samples: usize, actual: usize) -> NufftWgpuResult<()> {
+    if actual > max_samples {
+        return Err(NufftWgpuError::InputLengthMismatch {
+            expected: max_samples,
+            actual,
+        });
+    }
+    Ok(())
+}
+
 /// Cached WGPU state for direct and fast-gridded NUFFT dispatches.
 #[derive(Debug)]
 pub struct NufftGpuKernel {
@@ -330,6 +338,7 @@ pub struct NufftGpuKernel {
     fast_3d_extract_layout: wgpu::BindGroupLayout,
     params_buffer: wgpu::Buffer,
     fast_params_buffer: wgpu::Buffer,
+    layout_padding_buffer: wgpu::Buffer,
     type1_1d_pipeline: wgpu::ComputePipeline,
     type2_1d_pipeline: wgpu::ComputePipeline,
     type1_3d_pipeline: wgpu::ComputePipeline,
@@ -609,6 +618,11 @@ impl NufftGpuKernel {
             }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
+        let layout_padding_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("apollo-nufft-wgpu layout padding complex"),
+            contents: bytemuck::bytes_of(&ComplexPod { re: 0.0, im: 0.0 }),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
         Self {
             bind_group_layout,
             fast_spread_layout,
@@ -617,6 +631,7 @@ impl NufftGpuKernel {
             fast_3d_extract_layout,
             params_buffer,
             fast_params_buffer,
+            layout_padding_buffer,
             type1_1d_pipeline,
             type2_1d_pipeline,
             type1_3d_pipeline,
@@ -817,8 +832,6 @@ impl NufftGpuKernel {
             storage_buffer(device, "apollo-nufft-wgpu fast positions", &position_data);
         let value_buffer = storage_buffer(device, "apollo-nufft-wgpu fast values", &value_data);
         let deconv_buffer = storage_buffer(device, "apollo-nufft-wgpu fast deconv", &deconv_data);
-        let coefficient_buffer =
-            placeholder_storage_buffer(device, "apollo-nufft-wgpu fast empty coefficients", n);
         let (re_buffer, im_buffer) = split_grid_buffers(device, oversampled_len);
         let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("apollo-nufft-wgpu fast type1 output"),
@@ -850,7 +863,7 @@ impl NufftGpuKernel {
                 binding(3, &im_buffer),
                 binding(4, &deconv_buffer),
                 binding(5, &output_buffer),
-                binding(6, &coefficient_buffer),
+                binding(6, &self.layout_padding_buffer),
                 binding(7, &self.fast_params_buffer),
             ],
         });
@@ -883,7 +896,7 @@ impl NufftGpuKernel {
                 binding(3, &im_buffer),
                 binding(4, &deconv_buffer),
                 binding(5, &output_buffer),
-                binding(6, &coefficient_buffer),
+                binding(6, &self.layout_padding_buffer),
                 binding(7, &self.fast_params_buffer),
             ],
         });
@@ -1056,11 +1069,6 @@ impl NufftGpuKernel {
             storage_buffer(device, "apollo-nufft-wgpu fast3d positions", &position_data);
         let value_buffer = storage_buffer(device, "apollo-nufft-wgpu fast3d values", &value_data);
         let deconv_buffer = storage_buffer(device, "apollo-nufft-wgpu fast3d deconv", deconv_xyz);
-        let coeff_buffer = placeholder_storage_buffer(
-            device,
-            "apollo-nufft-wgpu fast3d coeffs placeholder",
-            output_len,
-        );
         let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("apollo-nufft-wgpu fast3d type1 output"),
             size: (output_len * std::mem::size_of::<ComplexPod>()) as u64,
@@ -1101,7 +1109,7 @@ impl NufftGpuKernel {
                 binding(3, &im_buffer),
                 binding(4, &deconv_buffer),
                 binding(5, &output_buffer),
-                binding(6, &coeff_buffer),
+                binding(6, &self.layout_padding_buffer),
                 binding(7, &self.fast_3d_params_buffer),
             ],
         });
@@ -1136,7 +1144,7 @@ impl NufftGpuKernel {
                 binding(3, &im_buffer),
                 binding(4, &deconv_buffer),
                 binding(5, &output_buffer),
-                binding(6, &coeff_buffer),
+                binding(6, &self.layout_padding_buffer),
                 binding(7, &self.fast_3d_params_buffer),
             ],
         });
@@ -1199,11 +1207,6 @@ impl NufftGpuKernel {
         );
         let deconv_buffer =
             storage_buffer(device, "apollo-nufft-wgpu fast3d type2 deconv", deconv_xyz);
-        let values_placeholder = placeholder_storage_buffer(
-            device,
-            "apollo-nufft-wgpu fast3d type2 values placeholder",
-            positions.len(),
-        );
         let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("apollo-nufft-wgpu fast3d type2 output"),
             size: (positions.len() * std::mem::size_of::<ComplexPod>()) as u64,
@@ -1239,7 +1242,7 @@ impl NufftGpuKernel {
             layout: &self.fast_3d_extract_layout,
             entries: &[
                 binding(0, &position_buffer),
-                binding(1, &values_placeholder),
+                binding(1, &self.layout_padding_buffer),
                 binding(2, &re_buffer),
                 binding(3, &im_buffer),
                 binding(4, &deconv_buffer),
@@ -1274,7 +1277,7 @@ impl NufftGpuKernel {
             layout: &self.fast_3d_spread_layout,
             entries: &[
                 binding(0, &position_buffer),
-                binding(1, &values_placeholder),
+                binding(1, &self.layout_padding_buffer),
                 binding(2, &re_buffer),
                 binding(3, &im_buffer),
                 binding(4, &deconv_buffer),
@@ -1316,6 +1319,7 @@ impl NufftGpuKernel {
     ) -> NufftWgpuResult<Vec<Complex32>> {
         let n = buffers.n;
         let oversampled_len = buffers.m;
+        ensure_sample_capacity(buffers.max_samples, positions.len())?;
 
         let position_data = positions_to_complex_pods_1d(positions);
         let value_data = complex_to_pods(values);
@@ -1332,9 +1336,6 @@ impl NufftGpuKernel {
             0,
             bytemuck::cast_slice(&deconv_data),
         );
-
-        let coeff_buffer =
-            placeholder_storage_buffer(device, "apollo-nufft-wgpu fast empty coefficients", n);
 
         let params = FastNufftParams {
             n: n as u32,
@@ -1358,7 +1359,7 @@ impl NufftGpuKernel {
                 binding(3, &buffers.im_buffer),
                 binding(4, &buffers.deconv_buffer),
                 binding(5, &buffers.output_buffer),
-                binding(6, &coeff_buffer),
+                binding(6, &self.layout_padding_buffer),
                 binding(7, &self.fast_params_buffer),
             ],
         });
@@ -1393,7 +1394,7 @@ impl NufftGpuKernel {
                 binding(3, &buffers.im_buffer),
                 binding(4, &buffers.deconv_buffer),
                 binding(5, &buffers.output_buffer),
-                binding(6, &coeff_buffer),
+                binding(6, &self.layout_padding_buffer),
                 binding(7, &self.fast_params_buffer),
             ],
         });
@@ -1437,6 +1438,7 @@ impl NufftGpuKernel {
         positions: &[f32],
     ) -> NufftWgpuResult<Vec<Complex32>> {
         let oversampled_len = buffers.m;
+        ensure_sample_capacity(buffers.max_samples, positions.len())?;
 
         let coefficient_data = complex_to_pods(coefficients);
         let position_data = positions_to_complex_pods_1d(positions);
@@ -1566,6 +1568,7 @@ impl NufftGpuKernel {
         positions: &[f32],
     ) -> NufftWgpuResult<(Vec<Complex32>, NufftType2GridDiagnostics)> {
         let oversampled_len = buffers.m;
+        ensure_sample_capacity(buffers.max_samples, positions.len())?;
         let coefficient_data = complex_to_pods(coefficients);
         let position_data = positions_to_complex_pods_1d(positions);
         let deconv_data = real_to_complex_pods_scaled(deconv, oversampled_len as f32);
@@ -1716,6 +1719,7 @@ impl NufftGpuKernel {
         let (nx, ny, nz) = buffers.shape;
         let (mx, my, mz) = buffers.oversampled;
         let (lx, ly, lz) = lengths;
+        ensure_sample_capacity(buffers.max_samples, positions.len())?;
         let grid_len = mx * my * mz;
         let output_len = nx * ny * nz;
 
@@ -1737,12 +1741,6 @@ impl NufftGpuKernel {
         );
         queue.write_buffer(&buffers.value_buffer, 0, bytemuck::cast_slice(&value_data));
         queue.write_buffer(&buffers.deconv_buffer, 0, bytemuck::cast_slice(deconv_xyz));
-
-        let coeff_buffer = placeholder_storage_buffer(
-            device,
-            "apollo-nufft-wgpu fast3d coeffs placeholder",
-            output_len,
-        );
 
         let params = FastNufftParams3D {
             nx: nx as u32,
@@ -1774,7 +1772,7 @@ impl NufftGpuKernel {
                 binding(3, &buffers.im_buffer),
                 binding(4, &buffers.deconv_buffer),
                 binding(5, &buffers.output_buffer),
-                binding(6, &coeff_buffer),
+                binding(6, &self.layout_padding_buffer),
                 binding(7, &self.fast_3d_params_buffer),
             ],
         });
@@ -1811,7 +1809,7 @@ impl NufftGpuKernel {
                 binding(3, &buffers.im_buffer),
                 binding(4, &buffers.deconv_buffer),
                 binding(5, &buffers.output_buffer),
-                binding(6, &coeff_buffer),
+                binding(6, &self.layout_padding_buffer),
                 binding(7, &self.fast_3d_params_buffer),
             ],
         });
@@ -1857,6 +1855,7 @@ impl NufftGpuKernel {
         let (nx, ny, nz) = buffers.shape;
         let (mx, my, mz) = buffers.oversampled;
         let (lx, ly, lz) = lengths;
+        ensure_sample_capacity(buffers.max_samples, positions.len())?;
         let grid_len = mx * my * mz;
 
         let coeff_data = complex_to_pods(modes);
@@ -1889,12 +1888,6 @@ impl NufftGpuKernel {
             mapped_at_creation: false,
         });
 
-        let values_placeholder = placeholder_storage_buffer(
-            device,
-            "apollo-nufft-wgpu fast3d type2 values placeholder",
-            positions.len(),
-        );
-
         let params = FastNufftParams3D {
             nx: nx as u32,
             ny: ny as u32,
@@ -1920,7 +1913,7 @@ impl NufftGpuKernel {
             layout: &self.fast_3d_extract_layout,
             entries: &[
                 binding(0, &buffers.position_buffer),
-                binding(1, &values_placeholder),
+                binding(1, &self.layout_padding_buffer),
                 binding(2, &buffers.re_buffer),
                 binding(3, &buffers.im_buffer),
                 binding(4, &buffers.deconv_buffer),
@@ -1957,7 +1950,7 @@ impl NufftGpuKernel {
             layout: &self.fast_3d_spread_layout,
             entries: &[
                 binding(0, &buffers.position_buffer),
-                binding(1, &values_placeholder),
+                binding(1, &self.layout_padding_buffer),
                 binding(2, &buffers.re_buffer),
                 binding(3, &buffers.im_buffer),
                 binding(4, &buffers.deconv_buffer),
@@ -2005,6 +1998,7 @@ impl NufftGpuKernel {
         let (nx, ny, nz) = buffers.shape;
         let (mx, my, mz) = buffers.oversampled;
         let (lx, ly, lz) = lengths;
+        ensure_sample_capacity(buffers.max_samples, positions.len())?;
         let grid_len = mx * my * mz;
 
         let coeff_data = complex_to_pods(modes);
@@ -2037,11 +2031,6 @@ impl NufftGpuKernel {
                 | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let values_placeholder = placeholder_storage_buffer(
-            device,
-            "apollo-nufft-wgpu diagnostic fast3d values placeholder",
-            positions.len(),
-        );
         let params = FastNufftParams3D {
             nx: nx as u32,
             ny: ny as u32,
@@ -2067,7 +2056,7 @@ impl NufftGpuKernel {
             layout: &self.fast_3d_extract_layout,
             entries: &[
                 binding(0, &buffers.position_buffer),
-                binding(1, &values_placeholder),
+                binding(1, &self.layout_padding_buffer),
                 binding(2, &buffers.re_buffer),
                 binding(3, &buffers.im_buffer),
                 binding(4, &buffers.deconv_buffer),
@@ -2121,7 +2110,7 @@ impl NufftGpuKernel {
             layout: &self.fast_3d_spread_layout,
             entries: &[
                 binding(0, &buffers.position_buffer),
-                binding(1, &values_placeholder),
+                binding(1, &self.layout_padding_buffer),
                 binding(2, &buffers.re_buffer),
                 binding(3, &buffers.im_buffer),
                 binding(4, &buffers.deconv_buffer),
@@ -2394,19 +2383,6 @@ fn storage_buffer<T: Pod>(device: &wgpu::Device, label: &'static str, data: &[T]
         label: Some(label),
         contents: bytemuck::cast_slice(data),
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-    })
-}
-
-fn placeholder_storage_buffer(
-    device: &wgpu::Device,
-    label: &'static str,
-    len: usize,
-) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size: (len.max(1) * std::mem::size_of::<ComplexPod>()) as u64,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
     })
 }
 

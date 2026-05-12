@@ -8,6 +8,17 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ## [Unreleased]
 ### Added
+- `apollo-hilbert`: caller-owned `AnalyticSignal` projections for real,
+  quadrature, envelope, phase, and instantaneous frequency, plus
+  `HilbertPlan::envelope_into` and `HilbertPlan::phase_into`.
+- `apollo-hilbert`: `analytic_signal_into` direct kernel and
+  `HilbertPlan::analytic_signal_into` caller-owned analytic-signal execution.
+- `apollo-fft`: `FftPlan1D::forward_real_to_complex_slice_into` exposes the
+  canonical 1D real-forward caller-owned slice path for downstream crates that
+  already own contiguous real slices.
+- `apollo-stft` / `docs/adr-0001-typed-workspace-and-alias-removal.md`:
+  co-located ADR for typed workspace reuse, storage-trait extraction, and
+  pre-1.0 removal of deprecated allocating aliases.
 - `apollo-fft` / `application/execution/kernel/winograd.rs` (new module):
   - Algebraic Winograd short-DFT kernels for sizes 2, 4, 8, 16, 32, and 64 (f64 and f32).
   - DFT-2: 0 multiplications (pure add/subtract butterfly).
@@ -20,7 +31,155 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
   - `apply_twiddle_64` / `apply_twiddle_32` helpers for complex multiply.
   - 23 unit tests covering forward, inverse, roundtrip, and boundary cases for all sizes.
 
+### Breaking
+- [major] `apollo-stft`: removed deprecated `StftPlan::forward_inplace` and
+  `StftPlan::inverse_inplace` allocating aliases. Callers must use `forward`
+  and `inverse` for owned output or `forward_into` and `inverse_into` for
+  caller-owned output. Typed storage/profile traits now live under
+  `application::execution::plan::stft::storage`; crate-root re-exports are
+  unchanged.
+- [major] `apollo-stft-wgpu`: removed deprecated
+  `WgpuError::FrameLenNotPowerOfTwo`. Non-power-of-two STFT WGPU frame lengths
+  are valid through the Chirp-Z path; callers should handle the remaining
+  concrete validation and WGPU runtime errors.
+- [major] `apollo-fft`: removed deprecated compatibility aliases
+  `FftPlan1D/2D/3D::{forward_into,inverse_into}` and `ProcessorFft3d`.
+  Callers must use `forward_real_to_complex_into` and
+  `inverse_complex_to_real_into`.
+- [major] `apollo-fft`: removed compatibility re-export modules
+  `apollo_fft::{backend,error,plan,types}`,
+  `apollo_fft::application::{plan,cache}`, and
+  `apollo_fft::domain::{backend,error,precision,shape}`. Callers must import
+  root exports such as `apollo_fft::FftPlan1D`, `apollo_fft::ApolloError`, and
+  `apollo_fft::PrecisionProfile`, or use the canonical owner modules.
+- [major] `apollo-fft`: removed the legacy `FFT_CACHE` alias. Callers must use
+  `FFT_CACHE_3D` for the 3D plan cache.
+- [major] `apollo-fft`: removed unused
+  `infrastructure::cpu::simd::power_of_two::{radix4,radix8}` forwarding
+  modules. The executable radix-4/radix-8 kernels remain under
+  `application::execution::kernel`.
+
 ### Changed
+- `apollo-hilbert`: allocating observable projection methods now delegate to
+  shared non-generic slice helpers, and plan-level envelope/phase execution
+  reuses a thread-local Complex64 analytic scratch buffer before projecting
+  into caller-owned output.
+- `apollo-hilbert`: bumped to 0.3.0 for additive caller-owned observable
+  projections and envelope/phase scratch reuse.
+- `apollo-hilbert`: owned analytic-signal execution now routes through the
+  caller-owned analytic kernel, and caller-owned quadrature reuses a
+  thread-local Complex64 analytic scratch buffer instead of allocating an
+  analytic `Vec` per call.
+- `apollo-hilbert`: crate-root docs now describe Apollo FFT plan execution
+  instead of stale private DFT ownership.
+- `apollo-hilbert`: bumped to 0.2.0 for the additive caller-owned analytic API
+  and quadrature scratch reuse.
+- `apollo-fft`: `FftPlan1D::forward_real_to_complex_into` now delegates through
+  the slice-level real-forward path, keeping one non-generic owner
+  implementation for ndarray and slice callers.
+- `apollo-fft`: 1D precision-specific plan methods and tests moved into leaf
+  modules so `dimension_1d.rs` remains below the structural line limit.
+- `apollo-fft`: bumped to 0.3.0 for the additive 1D real-forward slice API.
+- `apollo-hilbert`: analytic-signal execution now calls the cached
+  `FftPlan1D` slice path directly, removing the real input `Array1` bridge.
+- `apollo-hilbert`: removed the now-unused `ndarray` dependency.
+- `apollo-hilbert`: bumped to 0.1.4 for the FFT slice-path integration and
+  dependency cleanup.
+- `apollo-hilbert`: analytic-signal execution now keeps the forward FFT output
+  as the masked analytic spectrum, runs the complex inverse in place, and moves
+  the contiguous buffer out once instead of copying through intermediate
+  `Vec`/`Array1` representations.
+- `apollo-hilbert`: owned quadrature now routes through the caller-owned
+  quadrature writer instead of collecting imaginary components from an
+  allocating analytic-signal vector.
+- `apollo-hilbert`: bumped to 0.1.3 for analytic-signal copy allocation
+  removal.
+- `apollo-hilbert`: `HilbertPlan::transform_into` now routes through a
+  slice-level owner quadrature kernel instead of allocating a temporary
+  quadrature vector and copying it into caller-owned output.
+- `apollo-hilbert`: removed the unused direct `rayon` dependency left after the
+  private parallel DFT kernels were replaced by `apollo-fft`.
+- `apollo-hilbert`: bumped to 0.1.2 for owner quadrature slice execution.
+- `apollo-hilbert`: typed `f32` and mixed `f16` execution now reuses
+  thread-local f64 input/output bridge workspaces while keeping `f64` storage
+  on the zero-copy owner path and preserving the shared analytic-mask kernel.
+- `apollo-hilbert`: bumped to 0.1.1 for typed workspace reuse.
+- `apollo-sdft`: typed direct-bin execution now reuses thread-local f64 input
+  and Complex64 output bridge workspaces while keeping arithmetic in the shared
+  direct-bin owner kernel.
+- `apollo-sdft`: bumped to 0.1.1 for typed direct-bin workspace reuse.
+- `apollo-stft`: inverse WOLA execution now reuses thread-local frame,
+  complex, overlap, and weight workspaces through the shared slice-level owner
+  inverse path instead of allocating four work buffers per inverse call.
+- `apollo-stft`: bumped to 0.2.1 for inverse WOLA workspace reuse.
+- `apollo-stft`: typed forward/inverse now reuse thread-local f64/Complex64
+  bridge workspaces and call shared slice-level owner kernels instead of
+  allocating owner-precision `Array1` bridge buffers per call.
+- `apollo-stft`: storage/profile traits moved to a dedicated `stft::storage`
+  leaf module, 1D tests moved to a leaf test module, and
+  `dimension_1d.rs` is below the 500-line structural limit.
+- `apollo-stft`: bumped to 0.2.0 for typed workspace reuse and pre-1.0
+  breaking alias cleanup.
+- `apollo-qft`: dense kernels now provide caller-owned output entry points,
+  `QftPlan::forward_into` and `inverse_into` no longer allocate an intermediate
+  dense output vector, and typed storage now reuses thread-local Complex64
+  input/output bridge workspaces.
+- `apollo-qft`: bumped to 0.1.1 for QFT dense and typed workspace reuse.
+- `apollo-gft`: typed storage now reuses thread-local f64 input/output bridge
+  workspaces through contiguous f64 graph-basis multiply execution, removing
+  per-call typed bridge arrays.
+- `apollo-gft`: bumped to 0.1.1 for GFT typed workspace reuse.
+- `apollo-fwht`: typed storage now reuses thread-local f64 bridge workspaces
+  through contiguous f64 slice execution, and mixed f16 storage now reuses a
+  thread-local f32 compute workspace, removing per-call typed bridge and f16
+  compute vector allocations.
+- `apollo-fwht`: bumped to 0.1.1 for FWHT typed workspace reuse.
+- `apollo-czt`: `CztPlan` now reuses a plan-owned Bluestein convolution
+  workspace, precomputes square-plan inverse Vandermonde nodes, and routes
+  typed storage through reusable Complex64 input/output workspaces, removing
+  repeated O(P) forward workspace allocation and typed bridge allocations.
+- `apollo-czt`: bumped to 0.2.1 for CZT workspace reuse.
+- `apollo-fft`: removed the obsolete radix-2 butterfly helper section that was
+  no longer called after Stockham became the canonical power-of-two path, and
+  added missing `FftPlan3D` Rustdoc.
+- `apollo-fft`: bumped to 0.2.2 for the patch-class dead-code/doc cleanup.
+- `apollo-frft`: typed `Complex32` and `[f16; 2]` FrFT paths now reuse
+  thread-local Complex64 input/output workspaces and call internal Complex64
+  slice entry points on the canonical direct FrFT kernel, removing two O(N)
+  heap allocations per typed forward/inverse call.
+- `apollo-frft`: bumped to 0.1.2 for typed-storage workspace reuse.
+- `apollo-fft`: restored the current kernel module declarations and
+  `FftPrecision` trait header after module-header drift, and restored the
+  `radix2_f16` import required by the current mixed-radix source.
+- `apollo-fft`: removed dead generic helper surface from the f16 bridge,
+  radix permutation, radix shape, and radix stage modules after Stockham and
+  composite routing became the canonical execution paths.
+- `apollo-fft`: bumped to 0.2.1 for the patch-class dependency build cleanup.
+- `apollo-frft`: `UnitaryFrftPlan` now reuses a thread-local coefficient
+  workspace for the Candan-Grünbaum `V^T x` projection and reconstruction,
+  removing the previous per-call O(N) heap allocation while preserving the
+  same unitary transform contract.
+- `apollo-frft`: crate-root export documentation now identifies the exports as
+  canonical live API rather than backward-compatibility surface.
+- `apollo-frft`: bumped to 0.1.1 for the patch-class unitary workspace reuse.
+- `apollo-fft`: bumped to 0.2.0 for the pre-1.0 breaking compatibility cleanup.
+- `apollo-fft`: root public exports now re-export directly from canonical
+  application, contract, metadata, and infrastructure owners without
+  compatibility modules.
+- `apollo-stft-wgpu`: renamed retained GPU resource-owner fields with
+  `_`-prefixed names and removed explicit dead-code suppressions from the
+  buffer and Chirp-Z resource holders.
+- `apollo-nufft-wgpu`: reusable fast-path buffers now validate `max_samples`
+  before GPU writes and return `InputLengthMismatch` instead of relying on WGPU
+  write bounds behavior.
+- `apollo-nufft-wgpu`: fast-path bind groups now reuse one retained
+  `layout_padding_buffer` for structurally required but unread shader bindings,
+  removing per-dispatch placeholder buffer allocation.
+- `apollo-ntt-wgpu`: removed duplicated reusable-buffer `n_inv` scalar storage
+  and renamed retained twiddle/params GPU buffers with `_` ownership names.
+- `apollo-dctdst`: `dct2_fast` and `dst2_fast` now fill only the requested
+  projection from the shared 2N-point FFT setup instead of allocating an
+  unused sibling output vector.
 - `apollo-fft` / `application/execution/kernel/mod.rs`:
   - Registered `pub mod winograd;` in the kernel module tree.
 - `apollo-fft` / `application/execution/kernel/radix8.rs`:
@@ -78,6 +237,150 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
     auto-selector throughput on both power-of-two and non-power-of-two lengths.
 
 ### Verification
+- `cargo check -p apollo-hilbert`: passed for `apollo-hilbert` 0.3.0.
+- `cargo test -p apollo-hilbert observables --lib -- --test-threads=1`:
+  passed, 2 tests.
+- `cargo test -p apollo-hilbert envelope --lib -- --test-threads=1`: passed,
+  3 tests.
+- `cargo test -p apollo-hilbert --lib -- --test-threads=1`: passed, 21 tests.
+- `cargo check -p apollo-validation`: passed.
+- `rg` source scan for direct allocating projection `map(...).collect()`
+  patterns in `AnalyticSignal`: no matches.
+- `cargo check -p apollo-hilbert`: passed for `apollo-hilbert` 0.2.0.
+- `cargo test -p apollo-hilbert analytic --lib -- --test-threads=1`: passed,
+  6 tests.
+- `cargo test -p apollo-hilbert workspace --lib -- --test-threads=1`: passed,
+  2 tests.
+- `cargo test -p apollo-hilbert --lib -- --test-threads=1`: passed, 18 tests.
+- `cargo check -p apollo-validation`: passed.
+- `rg` source scan for removed caller-owned quadrature analytic allocation
+  patterns: no matches.
+- `cargo check -p apollo-fft`: passed for `apollo-fft` 0.3.0.
+- `cargo test -p apollo-fft caller_owned_paths --lib -- --test-threads=1`:
+  passed, 1 test.
+- `cargo test -p apollo-fft forward_slice --lib -- --test-threads=1`: passed,
+  1 test.
+- `cargo test -p apollo-fft --lib -- --test-threads=1`: passed, 181 tests.
+- `cargo check -p apollo-hilbert`: passed for `apollo-hilbert` 0.1.4.
+- `cargo test -p apollo-hilbert --lib -- --test-threads=1`: passed, 14 tests.
+- `cargo check -p apollo-validation`: passed.
+- `rg` source scan for removed Hilbert ndarray bridge/dependency patterns: no
+  matches.
+- `cargo check -p apollo-hilbert`: passed for `apollo-hilbert` 0.1.3.
+- `cargo test -p apollo-hilbert transform --lib -- --test-threads=1`:
+  passed, 3 tests.
+- `cargo test -p apollo-hilbert --lib -- --test-threads=1`: passed, 14 tests.
+- `cargo check -p apollo-validation`: passed.
+- `rg` source scan for removed Hilbert analytic-signal copy allocation
+  patterns: no matches.
+- `cargo check -p apollo-hilbert`: passed for `apollo-hilbert` 0.1.2.
+- `cargo test -p apollo-hilbert transform_into --lib -- --test-threads=1`:
+  passed, 2 tests.
+- `cargo test -p apollo-hilbert --lib -- --test-threads=1`: passed, 14 tests.
+- `cargo check -p apollo-validation`: passed.
+- `rg` source scan for removed Hilbert quadrature copy-through allocation and
+  dead direct dependency patterns: no matches.
+- `cargo check -p apollo-hilbert`: passed for `apollo-hilbert` 0.1.1.
+- `cargo test -p apollo-hilbert workspace --lib -- --test-threads=1`:
+  passed, 1 test.
+- `cargo test -p apollo-hilbert --lib -- --test-threads=1`: passed, 12 tests.
+- `cargo check -p apollo-validation`: passed.
+- `rg` source scan for removed Hilbert production typed bridge allocation
+  patterns: no matches.
+- `cargo check -p apollo-sdft`: passed for `apollo-sdft` 0.1.1.
+- `cargo test -p apollo-sdft workspace --lib -- --test-threads=1`: passed,
+  1 test.
+- `cargo test -p apollo-sdft --lib -- --test-threads=1`: passed, 14 tests.
+- `cargo check -p apollo-validation`: passed.
+- `rg` source scan for removed SDFT production typed direct-bin bridge
+  allocation patterns: no matches.
+- `cargo check -p apollo-stft`: passed for `apollo-stft` 0.2.1.
+- `cargo test -p apollo-stft workspace --lib -- --test-threads=1`: passed,
+  2 tests.
+- `cargo test -p apollo-stft --lib -- --test-threads=1`: passed, 12 tests.
+- `cargo check -p apollo-validation`: passed.
+- `rg` source scan for removed STFT production inverse WOLA allocation
+  patterns and typed bridge aliases: no matches.
+- `cargo check -p apollo-stft`: passed for `apollo-stft` 0.2.0.
+- `cargo test -p apollo-stft workspace --lib -- --test-threads=1`: passed,
+  1 test.
+- `cargo test -p apollo-stft --lib -- --test-threads=1`: passed, 11 tests.
+- `cargo check -p apollo-validation`: passed.
+- `rg` source scan for removed STFT production typed bridge allocation and
+  deprecated alias patterns: no production matches; one expected test fixture
+  name remains for `signal64`.
+- `cargo check -p apollo-qft`: passed for `apollo-qft` 0.1.1.
+- `cargo test -p apollo-qft workspace --lib -- --test-threads=1`: passed, 1
+  test.
+- `cargo test -p apollo-qft --lib -- --test-threads=1`: passed, 14 tests.
+- `cargo check -p apollo-validation`: passed.
+- `rg` source scan for removed QFT production plan/typed allocation patterns:
+  no optimized-path matches.
+- `cargo check -p apollo-gft`: passed for `apollo-gft` 0.1.1.
+- `cargo test -p apollo-gft workspace --lib -- --test-threads=1`: passed, 1
+  test.
+- `cargo test -p apollo-gft --lib -- --test-threads=1`: passed, 10 tests.
+- `cargo check -p apollo-validation`: passed.
+- `rg` source scan for removed GFT production typed bridge allocation
+  patterns: no production matches.
+- `cargo check -p apollo-fwht`: passed for `apollo-fwht` 0.1.1.
+- `cargo test -p apollo-fwht workspace --lib -- --test-threads=1`: passed, 1
+  test.
+- `cargo test -p apollo-fwht --lib -- --test-threads=1`: passed, 25 tests.
+- `cargo check -p apollo-validation`: passed.
+- `rg` source scan for removed FWHT production typed bridge allocation
+  patterns: no production matches.
+- `cargo check -p apollo-fft --lib`: passed for `apollo-fft` 0.2.2.
+- `cargo check -p apollo-czt`: passed for `apollo-czt` 0.2.1.
+- `cargo test -p apollo-czt workspace --lib -- --test-threads=1`: passed, 2
+  tests.
+- `cargo test -p apollo-czt --lib -- --test-threads=1`: passed, 27 tests.
+- `cargo test -p apollo-fft radix2 --lib -- --test-threads=1`: passed, 7
+  tests.
+- `cargo check -p apollo-czt-wgpu -p apollo-validation`: passed.
+- `rg` source scans for removed CZT typed bridge allocation patterns and
+  deleted radix-2 butterfly helper names: no matches in the optimized paths.
+- `cargo check -p apollo-frft`: passed for `apollo-frft` 0.1.2.
+- `cargo test -p apollo-frft typed --lib -- --test-threads=1`: passed, 3
+  tests.
+- `cargo test -p apollo-frft --lib -- --test-threads=1`: passed, 24 tests.
+- `cargo check -p apollo-frft-wgpu -p apollo-validation`: passed.
+- `rg` source scan for removed typed FrFT bridge allocation patterns: no
+  matches.
+- `cargo check -p apollo-fft --lib`: passed without dead-code warnings from
+  the removed helper set.
+- `cargo test -p apollo-fft radix_shape --lib -- --test-threads=1`: passed, 6
+  tests.
+- `cargo test -p apollo-fft radix_permute --lib -- --test-threads=1`: passed,
+  5 tests.
+- `rg` source scan for deleted `apollo-fft` helper names: no matches.
+- `cargo check -p apollo-frft`: passed.
+- `cargo test -p apollo-frft unitary --lib -- --test-threads=1`: passed, 13
+  tests.
+- `cargo test -p apollo-frft --lib -- --test-threads=1`: passed, 23 tests.
+- `cargo check -p apollo-frft-wgpu -p apollo-validation`: passed.
+- `rg` source scan for stale FrFT compatibility/deprecated markers and the
+  removed per-call unitary coefficient allocation expression: no matches.
+- `cargo check -p apollo-fft --lib`: passed.
+- `cargo check -p apollo-fft-wgpu -p apollo-czt -p apollo-nufft -p apollo-stft -p apollo-sft`:
+  passed.
+- `cargo test -p apollo-fft --lib -- --test-threads=1`: passed, 189 tests.
+- `cargo check -p apollo-fft --benches`: passed.
+- `rg` source scan for removed `apollo-fft` compatibility paths,
+  `FFT_CACHE`, and deleted power-of-two forwarding modules in touched sources:
+  no matches.
+- `cargo check -p apollo-stft-wgpu`: passed.
+- `cargo test -p apollo-stft-wgpu --lib -- --test-threads=1`: passed.
+- `cargo check -p apollo-nufft-wgpu`: passed.
+- `cargo test -p apollo-nufft-wgpu --lib -- --test-threads=1`: passed.
+- `cargo check -p apollo-ntt-wgpu`: passed.
+- `cargo test -p apollo-ntt-wgpu --lib -- --test-threads=1`: passed.
+- `cargo check -p apollo-dctdst`: passed.
+- `cargo test -p apollo-dctdst fast_single_projection_paths --lib -- --test-threads=1`:
+  passed.
+- `cargo test -p apollo-dctdst --lib -- --test-threads=1`: passed, 43 tests.
+- `rg` source scan for audited WGPU `FrameLenNotPowerOfTwo`,
+  `#[allow(dead_code)]`, and deprecated markers: no matches.
 - `cargo test -p apollo-fft`: **112/112 tests pass** (includes mixed-precision non-power-of-two
   output-comparison and roundtrip regressions).
 - `cargo test -p apollo-fft -- winograd`: 25/25 Winograd unit tests pass.

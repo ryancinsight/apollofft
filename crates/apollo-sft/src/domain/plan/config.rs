@@ -1,6 +1,6 @@
 //! Sparse FFT plan configuration.
 
-use apollo_fft::error::{ApolloError, ApolloResult};
+use apollo_fft::{ApolloError, ApolloResult};
 
 /// Validated sparse FFT configuration.
 #[derive(Clone, Copy, Debug, PartialEq)]

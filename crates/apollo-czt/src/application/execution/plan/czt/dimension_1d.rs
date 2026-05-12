@@ -1,15 +1,20 @@
 //! 1D Chirp Z-Transform Plan
 
 use crate::application::execution::kernel::bluestein::{
-    czt_bluestein_forward, czt_bluestein_forward_into,
+    czt_bjork_pereyra_inverse_into, czt_bluestein_forward_into_with_workspace, czt_inverse_nodes,
 };
 use crate::application::execution::kernel::direct::czt_direct_forward;
 use crate::domain::contracts::error::CztError;
-use apollo_fft::application::plan::FftPlan1D;
-use apollo_fft::f16;
-use apollo_fft::types::{PrecisionProfile, Shape1D};
+use apollo_fft::{f16, FftPlan1D, PrecisionProfile, Shape1D};
 use ndarray::Array1;
 use num_complex::{Complex32, Complex64};
+use std::cell::RefCell;
+use std::sync::Mutex;
+
+thread_local! {
+    static TYPED_INPUT64_SCRATCH: RefCell<Vec<Complex64>> = const { RefCell::new(Vec::new()) };
+    static TYPED_OUTPUT64_SCRATCH: RefCell<Vec<Complex64>> = const { RefCell::new(Vec::new()) };
+}
 
 /// Return whether a CZT input or output length satisfies the non-zero contract.
 #[must_use]
@@ -47,6 +52,8 @@ pub struct CztPlan {
     chirp_k: Vec<Complex64>,
     fft_kernel: Array1<Complex64>,
     fft_plan: FftPlan1D,
+    forward_workspace: Mutex<Vec<Complex64>>,
+    inverse_nodes: Option<Vec<Complex64>>,
 }
 
 impl CztPlan {
@@ -93,6 +100,12 @@ impl CztPlan {
 
         let mut fft_kernel = Array1::from_vec(kernel);
         fft_plan.forward_complex_inplace(&mut fft_kernel);
+        let forward_workspace = Mutex::new(vec![Complex64::new(0.0, 0.0); convolution_len]);
+        let inverse_nodes = if n == m {
+            Some(czt_inverse_nodes(n, w))
+        } else {
+            None
+        };
 
         Ok(Self {
             n,
@@ -104,6 +117,8 @@ impl CztPlan {
             chirp_k,
             fft_kernel,
             fft_plan,
+            forward_workspace,
+            inverse_nodes,
         })
     }
 
@@ -125,6 +140,14 @@ impl CztPlan {
         self.convolution_len
     }
 
+    #[cfg(test)]
+    pub(crate) fn forward_workspace_capacity(&self) -> usize {
+        self.forward_workspace
+            .lock()
+            .expect("CZT forward workspace mutex poisoned")
+            .capacity()
+    }
+
     /// Forward direct CZT evaluation.
     pub fn forward_direct(&self, input: &Array1<Complex64>) -> Result<Array1<Complex64>, CztError> {
         if input.len() != self.n {
@@ -139,15 +162,9 @@ impl CztPlan {
             return Err(CztError::LengthMismatch);
         }
 
-        Ok(czt_bluestein_forward(
-            input,
-            self.m,
-            self.convolution_len,
-            &self.chirp_n,
-            &self.chirp_k,
-            &self.fft_kernel,
-            &self.fft_plan,
-        ))
+        let mut output = Array1::<Complex64>::zeros(self.m);
+        self.forward_into(input, &mut output)?;
+        Ok(output)
     }
 
     /// Forward CZT into caller-owned output storage.
@@ -159,14 +176,37 @@ impl CztPlan {
         if input.len() != self.n || output.len() != self.m {
             return Err(CztError::LengthMismatch);
         }
+        self.forward_complex64_slice_into(
+            input.as_slice().expect("CZT input must be contiguous"),
+            output
+                .as_slice_mut()
+                .expect("CZT output must be contiguous"),
+        )
+    }
 
-        czt_bluestein_forward_into(
+    /// Forward CZT over contiguous Complex64 slices.
+    pub(crate) fn forward_complex64_slice_into(
+        &self,
+        input: &[Complex64],
+        output: &mut [Complex64],
+    ) -> Result<(), CztError> {
+        if input.len() != self.n || output.len() != self.m {
+            return Err(CztError::LengthMismatch);
+        }
+        let mut workspace = self
+            .forward_workspace
+            .lock()
+            .expect("CZT forward workspace mutex poisoned");
+        czt_bluestein_forward_into_with_workspace(
             input,
             output,
+            &mut workspace,
             self.convolution_len,
             &self.chirp_n,
             &self.chirp_k,
-            &self.fft_kernel,
+            self.fft_kernel
+                .as_slice()
+                .expect("CZT FFT kernel must be contiguous"),
             &self.fft_plan,
         );
         Ok(())
@@ -217,12 +257,34 @@ impl CztPlan {
                 reason: "inverse is only defined for square (M == N) CZT plans",
             });
         }
-        let result = crate::application::execution::kernel::bluestein::czt_bjork_pereyra_inverse(
-            spectrum.as_slice().expect("spectrum must be contiguous"),
-            self.a,
-            self.w,
+        let mut output = Array1::<Complex64>::zeros(self.n);
+        self.inverse_complex64_slice_into(
+            spectrum
+                .as_slice()
+                .expect("CZT spectrum must be contiguous"),
+            output
+                .as_slice_mut()
+                .expect("CZT inverse output must be contiguous"),
         )?;
-        Ok(Array1::from_vec(result))
+        Ok(output)
+    }
+
+    /// Inverse CZT over contiguous Complex64 slices.
+    pub(crate) fn inverse_complex64_slice_into(
+        &self,
+        spectrum: &[Complex64],
+        output: &mut [Complex64],
+    ) -> Result<(), CztError> {
+        if spectrum.len() != self.m || output.len() != self.n {
+            return Err(CztError::LengthMismatch);
+        }
+        let nodes = self
+            .inverse_nodes
+            .as_deref()
+            .ok_or(CztError::NotInvertible {
+                reason: "inverse is only defined for square (M == N) CZT plans",
+            })?;
+        czt_bjork_pereyra_inverse_into(spectrum, output, nodes, self.a)
     }
 
     /// Inverse CZT for typed `Complex64`, `Complex32`, or mixed `[f16; 2]` storage.
@@ -261,13 +323,16 @@ pub trait CztStorage: Copy + Send + Sync + 'static {
         if input.len() != plan.input_len() || output.len() != plan.output_len() {
             return Err(CztError::LengthMismatch);
         }
-        let input64 = Array1::from_iter(input.iter().copied().map(Self::to_complex64));
-        let mut output64 = Array1::zeros(plan.output_len());
-        plan.forward_into(&input64, &mut output64)?;
-        for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
-            *slot = Self::from_complex64(value);
-        }
-        Ok(())
+        with_complex64_workspaces(plan.input_len(), plan.output_len(), |input64, output64| {
+            for (slot, value) in input64.iter_mut().zip(input.iter().copied()) {
+                *slot = Self::to_complex64(value);
+            }
+            plan.forward_complex64_slice_into(input64, output64)?;
+            for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+                *slot = Self::from_complex64(value);
+            }
+            Ok(())
+        })
     }
 
     /// Execute inverse transform into caller-owned storage.
@@ -281,12 +346,20 @@ pub trait CztStorage: Copy + Send + Sync + 'static {
         if spectrum.len() != plan.output_len() || output.len() != plan.input_len() {
             return Err(CztError::LengthMismatch);
         }
-        let spectrum64 = Array1::from_iter(spectrum.iter().copied().map(Self::to_complex64));
-        let result64 = plan.inverse(&spectrum64)?;
-        for (slot, value) in output.iter_mut().zip(result64.iter().copied()) {
-            *slot = Self::from_complex64(value);
-        }
-        Ok(())
+        with_complex64_workspaces(
+            plan.output_len(),
+            plan.input_len(),
+            |spectrum64, output64| {
+                for (slot, value) in spectrum64.iter_mut().zip(spectrum.iter().copied()) {
+                    *slot = Self::to_complex64(value);
+                }
+                plan.inverse_complex64_slice_into(spectrum64, output64)?;
+                for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+                    *slot = Self::from_complex64(value);
+                }
+                Ok(())
+            },
+        )
     }
 }
 
@@ -309,6 +382,26 @@ impl CztStorage for Complex64 {
     ) -> Result<(), CztError> {
         validate_profile(profile, Self::PROFILE)?;
         plan.forward_into(input, output)
+    }
+
+    fn inverse_into(
+        plan: &CztPlan,
+        spectrum: &Array1<Self>,
+        output: &mut Array1<Self>,
+        profile: PrecisionProfile,
+    ) -> Result<(), CztError> {
+        validate_profile(profile, Self::PROFILE)?;
+        if spectrum.len() != plan.output_len() || output.len() != plan.input_len() {
+            return Err(CztError::LengthMismatch);
+        }
+        plan.inverse_complex64_slice_into(
+            spectrum
+                .as_slice()
+                .expect("CZT spectrum must be contiguous"),
+            output
+                .as_slice_mut()
+                .expect("CZT inverse output must be contiguous"),
+        )
     }
 }
 
@@ -345,6 +438,43 @@ fn validate_profile(actual: PrecisionProfile, expected: PrecisionProfile) -> Res
     } else {
         Err(CztError::PrecisionMismatch)
     }
+}
+
+fn with_complex64_workspaces<R>(
+    input_len: usize,
+    output_len: usize,
+    f: impl FnOnce(&mut [Complex64], &mut [Complex64]) -> R,
+) -> R {
+    TYPED_INPUT64_SCRATCH.with(|input_scratch| {
+        TYPED_OUTPUT64_SCRATCH.with(|output_scratch| {
+            let mut input_scratch = input_scratch.borrow_mut();
+            if input_scratch.len() < input_len {
+                input_scratch.resize(input_len, Complex64::new(0.0, 0.0));
+            }
+
+            let mut output_scratch = output_scratch.borrow_mut();
+            if output_scratch.len() < output_len {
+                output_scratch.resize(output_len, Complex64::new(0.0, 0.0));
+            }
+
+            f(
+                &mut input_scratch[..input_len],
+                &mut output_scratch[..output_len],
+            )
+        })
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn typed_scratch_capacities() -> (usize, usize) {
+    TYPED_INPUT64_SCRATCH.with(|input_scratch| {
+        TYPED_OUTPUT64_SCRATCH.with(|output_scratch| {
+            (
+                input_scratch.borrow().capacity(),
+                output_scratch.borrow().capacity(),
+            )
+        })
+    })
 }
 
 #[cfg(test)]
@@ -526,6 +656,39 @@ mod tests {
     }
 
     #[test]
+    fn forward_into_reuses_plan_convolution_workspace() {
+        let input = Array1::from_vec(vec![
+            Complex64::new(0.25, -0.5),
+            Complex64::new(-0.75, 1.0),
+            Complex64::new(1.25, 0.25),
+            Complex64::new(0.5, -0.125),
+            Complex64::new(-0.375, 0.75),
+        ]);
+        let plan = CztPlan::new(
+            input.len(),
+            7,
+            Complex64::from_polar(1.0, 0.125),
+            Complex64::from_polar(1.0, -std::f64::consts::TAU / 11.0),
+        )
+        .expect("valid plan");
+        let workspace_capacity = plan.forward_workspace_capacity();
+        let mut first = Array1::<Complex64>::zeros(plan.output_len());
+        let mut second = Array1::<Complex64>::zeros(plan.output_len());
+
+        plan.forward_into(&input, &mut first)
+            .expect("first caller-owned fast path");
+        plan.forward_into(&input, &mut second)
+            .expect("second caller-owned fast path");
+
+        assert_eq!(workspace_capacity, plan.convolution_len());
+        assert_eq!(plan.forward_workspace_capacity(), workspace_capacity);
+        for (actual, expected) in second.iter().zip(first.iter()) {
+            assert_relative_eq!(actual.re, expected.re, epsilon = 1.0e-12);
+            assert_relative_eq!(actual.im, expected.im, epsilon = 1.0e-12);
+        }
+    }
+
+    #[test]
     fn typed_paths_support_complex64_complex32_and_mixed_f16_storage() {
         let input64 = Array1::from_vec(vec![
             Complex64::new(0.25, 0.5),
@@ -596,6 +759,69 @@ mod tests {
             plan.forward_typed_into(&input, &mut output, PrecisionProfile::HIGH_ACCURACY_F64),
             Err(CztError::PrecisionMismatch)
         ));
+    }
+
+    #[test]
+    fn typed_complex32_forward_and_inverse_reuse_complex64_workspaces() {
+        let n = 5usize;
+        let input64 = Array1::from_shape_fn(n, |i| {
+            Complex64::new((i as f64 * 0.23).sin(), (i as f64 * 0.41).cos())
+        });
+        let input32 = input64.mapv(|value| Complex32::new(value.re as f32, value.im as f32));
+        let plan = CztPlan::new(
+            n,
+            n,
+            Complex64::new(1.0, 0.0),
+            Complex64::from_polar(1.0, -std::f64::consts::TAU / n as f64),
+        )
+        .expect("valid DFT-equivalent CZT plan");
+        let mut first_spectrum = Array1::<Complex32>::zeros(n);
+        let mut second_spectrum = Array1::<Complex32>::zeros(n);
+        let mut first_recovered = Array1::<Complex32>::zeros(n);
+        let mut second_recovered = Array1::<Complex32>::zeros(n);
+
+        plan.forward_typed_into(
+            &input32,
+            &mut first_spectrum,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("first typed forward");
+        let forward_caps = typed_scratch_capacities();
+        plan.forward_typed_into(
+            &input32,
+            &mut second_spectrum,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("second typed forward");
+        assert_eq!(typed_scratch_capacities(), forward_caps);
+
+        plan.inverse_typed_into(
+            &first_spectrum,
+            &mut first_recovered,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("first typed inverse");
+        let inverse_caps = typed_scratch_capacities();
+        plan.inverse_typed_into(
+            &first_spectrum,
+            &mut second_recovered,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("second typed inverse");
+        assert_eq!(typed_scratch_capacities(), inverse_caps);
+        assert!(inverse_caps.0 >= n);
+        assert!(inverse_caps.1 >= n);
+
+        for ((first, second), original) in first_recovered
+            .iter()
+            .zip(second_recovered.iter())
+            .zip(input32.iter())
+        {
+            assert!((first.re - second.re).abs() < 1.0e-7);
+            assert!((first.im - second.im).abs() < 1.0e-7);
+            assert!((first.re - original.re).abs() < 1.0e-4);
+            assert!((first.im - original.im).abs() < 1.0e-4);
+        }
     }
 }
 

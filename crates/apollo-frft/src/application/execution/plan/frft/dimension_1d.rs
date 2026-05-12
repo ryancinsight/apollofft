@@ -121,6 +121,18 @@ impl FrftPlan {
         input: &Array1<Complex64>,
         output: &mut Array1<Complex64>,
     ) -> Result<(), FrftError> {
+        self.forward_complex64_slice_into(
+            input.as_slice().expect("Array must be contiguous"),
+            output.as_slice_mut().expect("Array must be contiguous"),
+        )
+    }
+
+    /// Execute the forward FrFT over contiguous Complex64 slices.
+    pub(crate) fn forward_complex64_slice_into(
+        &self,
+        input: &[Complex64],
+        output: &mut [Complex64],
+    ) -> Result<(), FrftError> {
         if input.len() != self.n {
             return Err(FrftError::LengthMismatch {
                 input: input.len(),
@@ -133,14 +145,7 @@ impl FrftPlan {
                 plan: self.n,
             });
         }
-        direct_frft_forward_into(
-            input.as_slice().expect("Array must be contiguous"),
-            output.as_slice_mut().expect("Array must be contiguous"),
-            self.order,
-            self.cot,
-            self.csc,
-            self.scale,
-        );
+        direct_frft_forward_into(input, output, self.order, self.cot, self.csc, self.scale);
         Ok(())
     }
 
@@ -157,8 +162,20 @@ impl FrftPlan {
         input: &Array1<Complex64>,
         output: &mut Array1<Complex64>,
     ) -> Result<(), FrftError> {
+        self.inverse_complex64_slice_into(
+            input.as_slice().expect("Array must be contiguous"),
+            output.as_slice_mut().expect("Array must be contiguous"),
+        )
+    }
+
+    /// Execute the inverse FrFT over contiguous Complex64 slices.
+    pub(crate) fn inverse_complex64_slice_into(
+        &self,
+        input: &[Complex64],
+        output: &mut [Complex64],
+    ) -> Result<(), FrftError> {
         let inverse_plan = Self::new(self.n, -self.order)?;
-        inverse_plan.forward_into(input, output)
+        inverse_plan.forward_complex64_slice_into(input, output)
     }
 
     /// Execute the forward FrFT for `Complex64`, `Complex32`, or mixed `[f16; 2]` storage.
@@ -310,6 +327,34 @@ mod tests {
         for (actual, expected) in recovered32.iter().zip(expected_recovered32.iter()) {
             assert!((f64::from(actual.re) - expected.re).abs() < 1.0e-5);
             assert!((f64::from(actual.im) - expected.im).abs() < 1.0e-5);
+        }
+    }
+
+    #[test]
+    fn typed_complex32_path_reuses_complex64_workspaces() {
+        let n: usize = 8;
+        let plan = FrftPlan::new(n, 0.5).expect("valid plan");
+        let input = Array1::from_shape_fn(n, |i| {
+            Complex32::new((i as f32 * 0.17).cos(), (i as f32 * 0.23).sin())
+        });
+        let mut first = Array1::<Complex32>::zeros(n);
+        let mut second = Array1::<Complex32>::zeros(n);
+
+        plan.forward_typed_into(&input, &mut first, PrecisionProfile::LOW_PRECISION_F32)
+            .expect("first typed forward");
+        let first_caps =
+            crate::application::execution::plan::frft::storage::typed_scratch_capacities();
+        plan.forward_typed_into(&input, &mut second, PrecisionProfile::LOW_PRECISION_F32)
+            .expect("second typed forward");
+        let second_caps =
+            crate::application::execution::plan::frft::storage::typed_scratch_capacities();
+
+        assert_eq!(first_caps, second_caps);
+        assert!(first_caps.0 >= n);
+        assert!(first_caps.1 >= n);
+        for (actual, expected) in second.iter().zip(first.iter()) {
+            assert!((actual.re - expected.re).abs() < 1.0e-7);
+            assert!((actual.im - expected.im).abs() < 1.0e-7);
         }
     }
 

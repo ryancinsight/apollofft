@@ -9,10 +9,11 @@ pub mod application;
 pub mod domain;
 pub mod infrastructure;
 
-use apollo_fft::backend::FftBackend;
-use apollo_fft::domain::backend::BackendCapabilities;
-use apollo_fft::error::{ApolloError, ApolloResult};
-use apollo_fft::types::{BackendKind, Normalization, PrecisionProfile, Shape1D, Shape2D, Shape3D};
+use apollo_fft::domain::contracts::backend::BackendCapabilities;
+use apollo_fft::{
+    ApolloError, ApolloResult, BackendKind, FftBackend, Normalization, PrecisionProfile, Shape1D,
+    Shape2D, Shape3D,
+};
 pub use infrastructure::gpu_fft::{gpu_fft_available, GpuFft3d, GpuFft3dBuffers};
 
 #[cfg(feature = "native-f16")]

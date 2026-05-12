@@ -41,8 +41,13 @@ use crate::domain::contracts::error::FrftError;
 use nalgebra::{DMatrix, SymmetricEigen};
 use ndarray::Array1;
 use num_complex::Complex64;
+use std::cell::RefCell;
 use std::f64::consts::PI;
 use std::sync::Arc;
+
+thread_local! {
+    static UNITARY_COEFF_SCRATCH: RefCell<Vec<Complex64>> = const { RefCell::new(Vec::new()) };
+}
 
 /// Sorted orthonormal eigenvector basis of the Grünbaum commuting matrix.
 ///
@@ -263,28 +268,45 @@ fn apply_unitary_frft(
     input: &[Complex64],
     output: &mut [Complex64],
 ) {
-    // Step 1: c = V^T x
-    let mut coeffs = vec![Complex64::new(0.0, 0.0); n];
-    for k in 0..n {
-        let mut sum = Complex64::new(0.0, 0.0);
-        for j in 0..n {
-            sum += input[j] * v[(j, k)];
-        }
-        coeffs[k] = sum;
-    }
-    // Step 2: phase c[k] *= exp(-i * order * k * pi / 2)
-    for k in 0..n {
-        let phase = -order * k as f64 * PI / 2.0;
-        coeffs[k] *= Complex64::new(phase.cos(), phase.sin());
-    }
-    // Step 3: output = V c
-    for j in 0..n {
-        let mut sum = Complex64::new(0.0, 0.0);
+    with_coeff_scratch(n, |coeffs| {
+        // Step 1: c = V^T x
         for k in 0..n {
-            sum += coeffs[k] * v[(j, k)];
+            let mut sum = Complex64::new(0.0, 0.0);
+            for j in 0..n {
+                sum += input[j] * v[(j, k)];
+            }
+            coeffs[k] = sum;
         }
-        output[j] = sum;
-    }
+        // Step 2: phase c[k] *= exp(-i * order * k * pi / 2)
+        for (k, coeff) in coeffs.iter_mut().enumerate() {
+            let phase = -order * k as f64 * PI / 2.0;
+            *coeff *= Complex64::new(phase.cos(), phase.sin());
+        }
+        // Step 3: output = V c
+        for j in 0..n {
+            let mut sum = Complex64::new(0.0, 0.0);
+            for k in 0..n {
+                sum += coeffs[k] * v[(j, k)];
+            }
+            output[j] = sum;
+        }
+    });
+}
+
+#[inline]
+fn with_coeff_scratch<R>(n: usize, f: impl FnOnce(&mut [Complex64]) -> R) -> R {
+    UNITARY_COEFF_SCRATCH.with(|scratch| {
+        let mut scratch = scratch.borrow_mut();
+        if scratch.len() < n {
+            scratch.resize(n, Complex64::new(0.0, 0.0));
+        }
+        f(&mut scratch[..n])
+    })
+}
+
+#[cfg(test)]
+fn coeff_scratch_capacity() -> usize {
+    UNITARY_COEFF_SCRATCH.with(|scratch| scratch.borrow().capacity())
 }
 
 #[cfg(test)]
@@ -385,6 +407,30 @@ mod tests {
                     (actual - expected).norm()
                 );
             }
+        }
+    }
+
+    #[test]
+    fn unitary_transform_reuses_thread_local_coeff_workspace() {
+        let n = 16;
+        let plan = UnitaryFrftPlan::new(n, 0.5).expect("valid plan");
+        let input = Array1::from_shape_fn(n, |i| {
+            Complex64::new((i as f64 * 0.19).sin(), (i as f64 * 0.23).cos())
+        });
+        let mut first = Array1::<Complex64>::zeros(n);
+        let mut second = Array1::<Complex64>::zeros(n);
+
+        plan.forward_into(&input, &mut first)
+            .expect("first forward");
+        let first_capacity = coeff_scratch_capacity();
+        plan.forward_into(&input, &mut second)
+            .expect("second forward");
+        let second_capacity = coeff_scratch_capacity();
+
+        assert_eq!(first_capacity, second_capacity);
+        assert!(first_capacity >= n);
+        for (actual, expected) in second.iter().zip(first.iter()) {
+            assert!((actual - expected).norm() < 1.0e-14);
         }
     }
 

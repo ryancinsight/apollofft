@@ -47,22 +47,21 @@ pub(crate) struct StftChirpParamsPod {
 /// One `StftChirpData` is constructed per unique `(frame_count, frame_len)` pair.
 /// Construction uploads the precomputed chirp kernel H to the GPU; no per-dispatch
 /// allocation is required.
-#[allow(dead_code)]
 pub(crate) struct StftChirpData {
     // ── Precomputed chirp kernel (length M, read-only after construction) ────
     pub(crate) _h_fft_re: wgpu::Buffer,
     pub(crate) _h_fft_im: wgpu::Buffer,
 
     // ── Working buffers (length frame_count × M, rewritten each dispatch) ───
-    pub(crate) chirp_re_buf: wgpu::Buffer,
-    pub(crate) chirp_im_buf: wgpu::Buffer,
+    pub(crate) _chirp_re_buf: wgpu::Buffer,
+    pub(crate) _chirp_im_buf: wgpu::Buffer,
 
     // ── Chirp BGL (group 0): [rw chirp_re, rw chirp_im, ro h_fft_re, ro h_fft_im] ──
-    pub(crate) chirp_data_bgl: wgpu::BindGroupLayout,
+    pub(crate) _chirp_data_bgl: wgpu::BindGroupLayout,
     pub(crate) chirp_data_bg: wgpu::BindGroup,
 
     // ── Chirp params BGL (group 1): 1 uniform (StftChirpParamsPod) ──────────
-    pub(crate) chirp_params_bgl: wgpu::BindGroupLayout,
+    pub(crate) _chirp_params_bgl: wgpu::BindGroupLayout,
     pub(crate) _chirp_params_buf: wgpu::Buffer,
     pub(crate) chirp_params_bg: wgpu::BindGroup,
 
@@ -72,7 +71,7 @@ pub(crate) struct StftChirpData {
     pub(crate) io_bgl: wgpu::BindGroupLayout,
 
     // ── Radix-2 sub-FFT pipeline layout (groups 0 + 1 = chirp_data + chirp_params) ──
-    pub(crate) radix2_pipeline_layout: wgpu::PipelineLayout,
+    pub(crate) _radix2_pipeline_layout: wgpu::PipelineLayout,
 
     // ── Precomputed Radix-2 stage bind groups for the chirp sub-FFTs ─────────
     /// Forward sub-FFT stage bind groups (log₂M + 1 bind groups).
@@ -101,10 +100,10 @@ pub(crate) struct StftChirpData {
     pub(crate) pointmul_fwd_pipeline: wgpu::ComputePipeline,
 
     // ── Dimensions ────────────────────────────────────────────────────────────
-    pub(crate) n: u32, // original frame_len
-    pub(crate) m: u32, // padded Radix-2 length
-    pub(crate) frame_count: u32,
-    pub(crate) log2_m: u32,
+    pub(crate) _n: u32, // original frame_len
+    pub(crate) _m: u32, // padded Radix-2 length
+    pub(crate) _frame_count: u32,
+    pub(crate) _log2_m: u32,
 }
 
 /// Compute M = 2^⌈log₂(2N−1)⌉ — the smallest power-of-two ≥ 2N−1.
@@ -445,15 +444,15 @@ impl StftChirpData {
         Self {
             _h_fft_re: h_fft_re_buf,
             _h_fft_im: h_fft_im_buf,
-            chirp_re_buf,
-            chirp_im_buf,
-            chirp_data_bgl,
+            _chirp_re_buf: chirp_re_buf,
+            _chirp_im_buf: chirp_im_buf,
+            _chirp_data_bgl: chirp_data_bgl,
             chirp_data_bg,
-            chirp_params_bgl,
+            _chirp_params_bgl: chirp_params_bgl,
             _chirp_params_buf: chirp_params_buf,
             chirp_params_bg,
             io_bgl,
-            radix2_pipeline_layout,
+            _radix2_pipeline_layout: radix2_pipeline_layout,
             radix2_fwd_bgs,
             radix2_inv_bgs,
             _radix2_param_bufs: radix2_param_bufs,
@@ -467,10 +466,10 @@ impl StftChirpData {
             chirp_inv_butterfly_pipeline,
             chirp_scale_pipeline,
             pointmul_fwd_pipeline,
-            n: n as u32,
-            m: m as u32,
-            frame_count: frame_count as u32,
-            log2_m,
+            _n: n as u32,
+            _m: m as u32,
+            _frame_count: frame_count as u32,
+            _log2_m: log2_m,
         }
     }
 }

@@ -334,14 +334,13 @@ impl NttGpuKernel {
             len: n,
             log2_n,
             modulus: modulus32,
-            n_inv,
             params_stride,
             data_residues: vec![0u32; n],
             output_residues: vec![0u64; n],
             data_buffer,
-            fwd_twiddle_buffer,
-            inv_twiddle_buffer,
-            params_buffer,
+            _fwd_twiddle_buffer: fwd_twiddle_buffer,
+            _inv_twiddle_buffer: inv_twiddle_buffer,
+            _params_buffer: params_buffer,
             staging_buffer,
             fwd_bind_group,
             inv_bind_group,
@@ -559,10 +558,6 @@ pub struct NttGpuBuffers {
     len: usize,
     log2_n: u32,
     modulus: u32,
-    /// N⁻¹ mod m, embedded in the params buffer at construction time.
-    /// Retained here so the value is inspectable for diagnostics.
-    #[allow(dead_code)]
-    n_inv: u32,
     params_stride: u32, // aligned byte stride between per-stage params entries
 
     // ── CPU scratch ─────────────────────────────────────────────────────────
@@ -573,14 +568,11 @@ pub struct NttGpuBuffers {
     data_buffer: wgpu::Buffer, // in-place NTT data  (STORAGE rw)
     /// Forward twiddle buffer.  Kept alive so the GPU resource lives as long
     /// as the bind group that references it.  Not read directly from Rust.
-    #[allow(dead_code)]
-    fwd_twiddle_buffer: wgpu::Buffer,
+    _fwd_twiddle_buffer: wgpu::Buffer,
     /// Inverse twiddle buffer.  Same lifetime-keeper contract as above.
-    #[allow(dead_code)]
-    inv_twiddle_buffer: wgpu::Buffer,
+    _inv_twiddle_buffer: wgpu::Buffer,
     /// Per-stage params uniform buffer.  Kept alive for the bind groups.
-    #[allow(dead_code)]
-    params_buffer: wgpu::Buffer,
+    _params_buffer: wgpu::Buffer,
     staging_buffer: wgpu::Buffer, // host readback      (MAP_READ)
 
     // ── Bind groups ─────────────────────────────────────────────────────────

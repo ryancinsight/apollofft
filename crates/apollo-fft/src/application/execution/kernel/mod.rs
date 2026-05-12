@@ -1,36 +1,28 @@
 //! Apollo FFT kernel module.
 //!
-//! Provides three kernel implementations:
-//! - `direct`: O(N^2) reference DFT kept for testing and validation.
-//! - `radix2`: O(N log N) iterative Cooley-Tukey radix-2 DIT FFT for power-of-two lengths.
-//! - `bluestein`: O(N log N) chirp-Z FFT for arbitrary lengths using radix-2 internally.
-//! - `radix4`: radix-4 strategy facade for power-of-four lengths.
-//! - `radix8`: radix-8 strategy facade for power-of-eight lengths.
-//! - `radix16`: radix-16 strategy facade for power-of-sixteen lengths.
-//! - `radix32`: radix-32 strategy facade for power-of-thirty-two lengths.
-//! - `radix64`: radix-64 strategy facade for power-of-sixty-four lengths.
-//! - `mixed_radix`: mixed strategy router for power-of-two lengths.
+//! ## Kernel implementations
 //!
-//! The functions below auto-select radix-2 for power-of-2 sizes and
-//! Bluestein otherwise, providing a single authoritative entry point for all
-//! higher-level plan code.
+//! | Module            | Role |
+//! |-------------------|------|
+//! | `direct`          | O(N²) reference DFT; used only for testing. |
+//! | `radix2`          | Twiddle-table builders used by Stockham, Bluestein, and tests. |
+//! | `radix2_f16`      | `Cf16` type (f16 complex storage) and conversion utilities. |
+//! | `bluestein`       | O(N log N) chirp-Z FFT for arbitrary-length transforms. |
+//! | `winograd`        | Short-DFT codelets (DFT-3/5/7/8/N) used by the composite kernel. |
+//! | `radix_composite` | Mixed-radix Stockham autosort FFT for 2/3/5/7-smooth composite lengths. |
+//! | `stockham`        | Radix-2 Stockham autosort FFT for all power-of-two lengths. |
+//! | `mixed_radix`     | Dispatch facade: Stockham for PoT, composite for smooth, Bluestein otherwise. |
 
 pub mod bluestein;
 pub mod direct;
 pub(crate) mod f16_bridge;
-pub(crate) mod kernel_api;
 pub mod mixed_radix;
-pub mod radix16;
 pub mod radix2;
 pub mod radix2_f16;
-pub mod radix32;
-pub mod radix4;
-pub mod radix64;
-pub mod radix8;
 pub(crate) mod radix_composite;
-pub(crate) mod radix_permute;
 pub(crate) mod radix_shape;
 pub(crate) mod radix_stage;
+pub(crate) mod stockham;
 pub(crate) mod tuning;
 pub(crate) mod twiddle_table;
 pub mod winograd;
@@ -50,8 +42,11 @@ use num_complex::{Complex32, Complex64};
 
 /// Precision-generic auto-selecting FFT operations.
 ///
-/// Implementors delegate to the `mixed_radix` facade, which chooses the best
-/// available radix kernel for the given length and type at compile time.
+/// Implementors delegate to the `mixed_radix` facade, which routes to:
+/// - Stockham autosort for power-of-two lengths (no bit-reversal).
+/// - Composite mixed-radix DIT for 2/3/5/7-smooth lengths.
+/// - Bluestein chirp-Z for all other lengths.
+///
 /// Implemented for `Complex64`, `Complex32`, and `Cf16`.
 pub trait FftPrecision: Sized {
     /// In-place forward FFT, unnormalized.
@@ -85,9 +80,8 @@ pub fn fft_inverse_unnorm<C: FftPrecision>(data: &mut [C]) {
 
 // ── Free-function entry points (backward-compatible) ─────────────────────────
 //
-// Each function is a thin shim over `mixed_radix`, which already handles the
-// full radix dispatch (power-of-8 → radix8, power-of-4 → radix4, PoT →
-// radix2, else → Bluestein).  The dispatch logic lives in exactly one place.
+// Each function is a thin shim over `mixed_radix`. The dispatch logic lives
+// in exactly one place.
 
 /// Auto-selecting forward FFT (unnormalized, f64).
 #[inline]
@@ -127,10 +121,10 @@ pub fn fft_inverse_unnorm_32(data: &mut [Complex32]) {
     mixed_radix::inverse_inplace_unnorm_32(data);
 }
 
-/// Auto-selecting forward FFT over `Cf16` (f16 storage, mixed-precision arithmetic).
+/// Auto-selecting forward FFT over `Cf16` (f16 storage; arithmetic via Stockham f32).
 ///
-/// Power-of-two lengths use the native f16 SIMD/scalar radix kernel.
-/// Non-PoT lengths promote to f32, run Bluestein-f32, then demote.
+/// All power-of-two lengths promote to f32, run Stockham autosort, then demote back to f16.
+/// Non-PoT lengths promote to f32, run composite radix or Bluestein, then demote.
 #[inline]
 pub fn fft_forward_f16(data: &mut [Cf16]) {
     mixed_radix::forward_inplace_f16(data);

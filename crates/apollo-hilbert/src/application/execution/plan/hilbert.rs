@@ -2,9 +2,19 @@
 
 use crate::domain::contracts::error::{HilbertError, HilbertResult};
 use crate::domain::metadata::length::SignalLength;
-use crate::domain::signal::analytic::AnalyticSignal;
-use crate::infrastructure::kernel::direct::{analytic_signal, hilbert_transform};
+use crate::domain::signal::analytic::{envelope_values_into, phase_values_into, AnalyticSignal};
+use crate::infrastructure::kernel::direct::{
+    analytic_signal, analytic_signal_into, hilbert_transform, hilbert_transform_into,
+};
 use apollo_fft::{f16, PrecisionProfile};
+use num_complex::Complex64;
+use std::cell::RefCell;
+
+thread_local! {
+    static TYPED_INPUT64_SCRATCH: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+    static TYPED_OUTPUT64_SCRATCH: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+    static OBSERVABLE_ANALYTIC_SCRATCH: RefCell<Vec<Complex64>> = const { RefCell::new(Vec::new()) };
+}
 
 /// Reusable 1D Hilbert transform plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +56,18 @@ impl HilbertPlan {
         Ok(AnalyticSignal::new(analytic_signal(signal)?))
     }
 
+    /// Compute the analytic signal `x + i H{x}` into caller-owned storage.
+    pub fn analytic_signal_into(
+        &self,
+        signal: &[f64],
+        output: &mut [Complex64],
+    ) -> HilbertResult<()> {
+        if signal.len() != self.len() || output.len() != self.len() {
+            return Err(HilbertError::LengthMismatch);
+        }
+        analytic_signal_into(signal, output)
+    }
+
     /// Compute the analytic signal for `f64`, `f32`, or mixed `f16` input storage.
     ///
     /// The owner computation remains the `f64` analytic-mask path. Lower
@@ -72,9 +94,7 @@ impl HilbertPlan {
         if signal.len() != self.len() || output.len() != self.len() {
             return Err(HilbertError::LengthMismatch);
         }
-        let quadrature = hilbert_transform(signal)?;
-        output.copy_from_slice(&quadrature);
-        Ok(())
+        hilbert_transform_into(signal, output)
     }
 
     /// Compute Hilbert quadrature for `f64`, `f32`, or mixed `f16` storage.
@@ -89,13 +109,95 @@ impl HilbertPlan {
 
     /// Compute the instantaneous envelope from the analytic signal.
     pub fn envelope(&self, signal: &[f64]) -> HilbertResult<Vec<f64>> {
-        Ok(self.analytic_signal(signal)?.envelope())
+        if signal.len() != self.len() {
+            return Err(HilbertError::LengthMismatch);
+        }
+        let mut output = vec![0.0; self.len()];
+        self.envelope_into(signal, &mut output)?;
+        Ok(output)
+    }
+
+    /// Compute the instantaneous envelope into caller-owned storage.
+    pub fn envelope_into(&self, signal: &[f64], output: &mut [f64]) -> HilbertResult<()> {
+        if signal.len() != self.len() || output.len() != self.len() {
+            return Err(HilbertError::LengthMismatch);
+        }
+        with_observable_analytic_workspace(self.len(), |analytic| {
+            analytic_signal_into(signal, analytic)?;
+            envelope_values_into(analytic, output)
+        })
     }
 
     /// Compute the wrapped instantaneous phase from the analytic signal.
     pub fn phase(&self, signal: &[f64]) -> HilbertResult<Vec<f64>> {
-        Ok(self.analytic_signal(signal)?.phase())
+        if signal.len() != self.len() {
+            return Err(HilbertError::LengthMismatch);
+        }
+        let mut output = vec![0.0; self.len()];
+        self.phase_into(signal, &mut output)?;
+        Ok(output)
     }
+
+    /// Compute the wrapped instantaneous phase into caller-owned storage.
+    pub fn phase_into(&self, signal: &[f64], output: &mut [f64]) -> HilbertResult<()> {
+        if signal.len() != self.len() || output.len() != self.len() {
+            return Err(HilbertError::LengthMismatch);
+        }
+        with_observable_analytic_workspace(self.len(), |analytic| {
+            analytic_signal_into(signal, analytic)?;
+            phase_values_into(analytic, output)
+        })
+    }
+}
+
+fn with_typed_signal_workspace<R>(
+    len: usize,
+    f: impl FnOnce(&mut [f64]) -> HilbertResult<R>,
+) -> HilbertResult<R> {
+    TYPED_INPUT64_SCRATCH.with(|scratch| {
+        let mut scratch = scratch.borrow_mut();
+        scratch.resize(len, 0.0);
+        f(&mut scratch[..len])
+    })
+}
+
+fn with_typed_transform_workspaces<R>(
+    len: usize,
+    f: impl FnOnce(&mut [f64], &mut [f64]) -> HilbertResult<R>,
+) -> HilbertResult<R> {
+    TYPED_INPUT64_SCRATCH.with(|input| {
+        TYPED_OUTPUT64_SCRATCH.with(|output| {
+            let mut input = input.borrow_mut();
+            let mut output = output.borrow_mut();
+            input.resize(len, 0.0);
+            output.resize(len, 0.0);
+            f(&mut input[..len], &mut output[..len])
+        })
+    })
+}
+
+fn with_observable_analytic_workspace<R>(
+    len: usize,
+    f: impl FnOnce(&mut [Complex64]) -> HilbertResult<R>,
+) -> HilbertResult<R> {
+    OBSERVABLE_ANALYTIC_SCRATCH.with(|scratch| {
+        let mut scratch = scratch.borrow_mut();
+        scratch.resize(len, Complex64::new(0.0, 0.0));
+        f(&mut scratch[..len])
+    })
+}
+
+#[cfg(test)]
+fn typed_workspace_capacities() -> (usize, usize) {
+    TYPED_INPUT64_SCRATCH.with(|input| {
+        TYPED_OUTPUT64_SCRATCH
+            .with(|output| (input.borrow().capacity(), output.borrow().capacity()))
+    })
+}
+
+#[cfg(test)]
+fn observable_workspace_capacity() -> usize {
+    OBSERVABLE_ANALYTIC_SCRATCH.with(|scratch| scratch.borrow().capacity())
 }
 
 /// Real storage accepted by typed Hilbert input and quadrature paths.
@@ -119,8 +221,12 @@ pub trait HilbertStorage: Copy + Send + Sync + 'static {
         if signal.len() != plan.len() {
             return Err(HilbertError::LengthMismatch);
         }
-        let input64: Vec<f64> = signal.iter().copied().map(Self::to_f64).collect();
-        plan.analytic_signal(&input64)
+        with_typed_signal_workspace(plan.len(), |input64| {
+            for (slot, sample) in input64.iter_mut().zip(signal.iter().copied()) {
+                *slot = Self::to_f64(sample);
+            }
+            plan.analytic_signal(input64)
+        })
     }
 
     /// Compute the Hilbert quadrature component into caller-owned storage.
@@ -134,13 +240,16 @@ pub trait HilbertStorage: Copy + Send + Sync + 'static {
         if signal.len() != plan.len() || output.len() != plan.len() {
             return Err(HilbertError::LengthMismatch);
         }
-        let input64: Vec<f64> = signal.iter().copied().map(Self::to_f64).collect();
-        let mut output64 = vec![0.0_f64; plan.len()];
-        plan.transform_into(&input64, &mut output64)?;
-        for (slot, value) in output.iter_mut().zip(output64.into_iter()) {
-            *slot = Self::from_f64(value);
-        }
-        Ok(())
+        with_typed_transform_workspaces(plan.len(), |input64, output64| {
+            for (slot, sample) in input64.iter_mut().zip(signal.iter().copied()) {
+                *slot = Self::to_f64(sample);
+            }
+            plan.transform_into(input64, output64)?;
+            for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+                *slot = Self::from_f64(value);
+            }
+            Ok(())
+        })
     }
 }
 
@@ -229,6 +338,54 @@ mod tests {
     }
 
     #[test]
+    fn caller_owned_analytic_signal_matches_allocating_path() {
+        let len = 16;
+        let signal: Vec<f64> = (0..len)
+            .map(|n| (std::f64::consts::TAU * n as f64 / len as f64).cos())
+            .collect();
+        let plan = HilbertPlan::new(len).expect("plan");
+        let expected = plan.analytic_signal(&signal).expect("analytic");
+        let mut output = vec![Complex64::new(f64::NAN, f64::NAN); len];
+
+        plan.analytic_signal_into(&signal, &mut output)
+            .expect("caller-owned analytic");
+
+        for (actual, expected) in output.iter().zip(expected.values().iter()) {
+            assert_abs_diff_eq!(actual.re, expected.re, epsilon = 1.0e-12);
+            assert_abs_diff_eq!(actual.im, expected.im, epsilon = 1.0e-12);
+        }
+    }
+
+    #[test]
+    fn caller_owned_envelope_and_phase_match_allocating_paths() {
+        let len = 16;
+        let signal: Vec<f64> = (0..len)
+            .map(|n| (std::f64::consts::TAU * n as f64 / len as f64).cos())
+            .collect();
+        let plan = HilbertPlan::new(len).expect("plan");
+        let expected_envelope = plan.envelope(&signal).expect("envelope");
+        let expected_phase = plan.phase(&signal).expect("phase");
+        let mut envelope = vec![0.0; len];
+        let mut phase = vec![0.0; len];
+
+        plan.envelope_into(&signal, &mut envelope)
+            .expect("caller-owned envelope");
+        let after_envelope = observable_workspace_capacity();
+        plan.phase_into(&signal, &mut phase)
+            .expect("caller-owned phase");
+        let after_phase = observable_workspace_capacity();
+
+        assert!(after_envelope >= len);
+        assert_eq!(after_phase, after_envelope);
+        for (actual, expected) in envelope.iter().zip(expected_envelope.iter()) {
+            assert_abs_diff_eq!(actual, expected, epsilon = 1.0e-12);
+        }
+        for (actual, expected) in phase.iter().zip(expected_phase.iter()) {
+            assert_abs_diff_eq!(actual, expected, epsilon = 1.0e-12);
+        }
+    }
+
+    #[test]
     fn typed_paths_support_f64_f32_and_mixed_f16_storage() {
         let len = 16;
         let signal64: Vec<f64> = (0..len)
@@ -280,6 +437,32 @@ mod tests {
         for (actual, expected) in out16.iter().zip(expected16.iter()) {
             let quantization_bound = expected.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
             assert!((f64::from(actual.to_f32()) - *expected).abs() <= quantization_bound);
+        }
+    }
+
+    #[test]
+    fn typed_paths_reuse_workspace_capacity() {
+        let len = 16;
+        let signal: Vec<f32> = (0..len)
+            .map(|n| (std::f32::consts::TAU * n as f32 / len as f32).cos())
+            .collect();
+        let plan = HilbertPlan::new(len).expect("plan");
+        let mut first = vec![0.0_f32; len];
+        let mut second = vec![0.0_f32; len];
+
+        plan.transform_typed_into(&signal, &mut first, PrecisionProfile::LOW_PRECISION_F32)
+            .expect("first typed transform");
+        let after_first = typed_workspace_capacities();
+        assert!(after_first.0 >= len);
+        assert!(after_first.1 >= len);
+
+        plan.transform_typed_into(&signal, &mut second, PrecisionProfile::LOW_PRECISION_F32)
+            .expect("second typed transform");
+        let after_second = typed_workspace_capacities();
+        assert_eq!(after_second, after_first);
+
+        for (actual, expected) in second.iter().zip(first.iter()) {
+            assert_eq!(actual.to_bits(), expected.to_bits());
         }
     }
 

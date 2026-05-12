@@ -11,7 +11,13 @@ use crate::infrastructure::kernel::sliding::{
 };
 use apollo_fft::{f16, PrecisionProfile};
 use num_complex::{Complex32, Complex64};
+use std::cell::RefCell;
 use std::collections::VecDeque;
+
+thread_local! {
+    static TYPED_WINDOW64_SCRATCH: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+    static TYPED_BINS64_SCRATCH: RefCell<Vec<Complex64>> = const { RefCell::new(Vec::new()) };
+}
 
 /// Reusable SDFT plan.
 #[derive(Debug, Clone, PartialEq)]
@@ -98,14 +104,40 @@ impl SdftPlan {
         if output.len() != self.bin_count() {
             return Err(SdftError::OutputBinLengthMismatch);
         }
-        let input64: Vec<f64> = window.iter().copied().map(T::to_f64).collect();
-        let mut output64 = vec![Complex64::new(0.0, 0.0); self.bin_count()];
-        self.direct_bins_into(&input64, &mut output64)?;
-        for (slot, value) in output.iter_mut().zip(output64.into_iter()) {
-            *slot = O::from_complex64(value);
-        }
-        Ok(())
+        with_typed_direct_workspaces(window.len(), output.len(), |input64, output64| {
+            for (slot, value) in input64.iter_mut().zip(window.iter().copied()) {
+                *slot = T::to_f64(value);
+            }
+            self.direct_bins_into(input64, output64)?;
+            for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+                *slot = O::from_complex64(value);
+            }
+            Ok(())
+        })
     }
+}
+
+fn with_typed_direct_workspaces<R>(
+    window_len: usize,
+    bin_count: usize,
+    f: impl FnOnce(&mut [f64], &mut [Complex64]) -> SdftResult<R>,
+) -> SdftResult<R> {
+    TYPED_WINDOW64_SCRATCH.with(|window_cell| {
+        TYPED_BINS64_SCRATCH.with(|bins_cell| {
+            let mut window = window_cell.borrow_mut();
+            let mut bins = bins_cell.borrow_mut();
+            window.resize(window_len, 0.0);
+            bins.resize(bin_count, Complex64::new(0.0, 0.0));
+            f(window.as_mut_slice(), bins.as_mut_slice())
+        })
+    })
+}
+
+#[cfg(test)]
+fn typed_direct_workspace_capacities() -> (usize, usize) {
+    let window = TYPED_WINDOW64_SCRATCH.with(|cell| cell.borrow().capacity());
+    let bins = TYPED_BINS64_SCRATCH.with(|cell| cell.borrow().capacity());
+    (window, bins)
 }
 
 /// Real input storage accepted by typed SDFT direct-bin paths.
@@ -300,6 +332,28 @@ mod tests {
             let im_bound = expected.im.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
             assert!((f64::from(actual[0].to_f32()) - expected.re).abs() <= re_bound);
             assert!((f64::from(actual[1].to_f32()) - expected.im).abs() <= im_bound);
+        }
+    }
+
+    #[test]
+    fn typed_direct_bins_reuse_workspace_capacity() {
+        let plan = SdftPlan::new(4, 4).expect("plan");
+        let window = [1.0_f32, -2.0, 0.5, 3.0];
+        let mut first = vec![Complex32::new(0.0, 0.0); plan.bin_count()];
+        let mut second = vec![Complex32::new(0.0, 0.0); plan.bin_count()];
+
+        plan.direct_bins_typed_into(&window, &mut first, PrecisionProfile::LOW_PRECISION_F32)
+            .expect("first typed direct");
+        let after_first = typed_direct_workspace_capacities();
+        assert!(after_first.0 >= plan.window_len());
+        assert!(after_first.1 >= plan.bin_count());
+
+        plan.direct_bins_typed_into(&window, &mut second, PrecisionProfile::LOW_PRECISION_F32)
+            .expect("second typed direct");
+        assert_eq!(typed_direct_workspace_capacities(), after_first);
+        for (first, second) in first.iter().zip(second.iter()) {
+            assert_eq!(first.re.to_bits(), second.re.to_bits());
+            assert_eq!(first.im.to_bits(), second.im.to_bits());
         }
     }
 

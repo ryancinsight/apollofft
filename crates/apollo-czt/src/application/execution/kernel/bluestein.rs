@@ -1,5 +1,5 @@
-use apollo_fft::application::plan::FftPlan1D;
-use ndarray::{Array1, Zip};
+use apollo_fft::FftPlan1D;
+use ndarray::Array1;
 use num_complex::Complex64;
 
 /// Evaluates Bluestein's fast algorithm over precomputed chirp variables
@@ -58,6 +58,38 @@ pub fn czt_bluestein_forward_into(
     fft_kernel: &Array1<Complex64>,
     fft_plan: &FftPlan1D,
 ) {
+    let mut workspace = vec![Complex64::new(0.0, 0.0); convolution_len];
+    czt_bluestein_forward_into_with_workspace(
+        input.as_slice().expect("CZT input must be contiguous"),
+        output
+            .as_slice_mut()
+            .expect("CZT output must be contiguous"),
+        &mut workspace,
+        convolution_len,
+        chirp_n,
+        chirp_k,
+        fft_kernel
+            .as_slice()
+            .expect("CZT FFT kernel must be contiguous"),
+        fft_plan,
+    );
+}
+
+/// Evaluates Bluestein's fast CZT into caller-owned output using caller-owned workspace.
+///
+/// The workspace length must equal `convolution_len`. Reusing it across calls
+/// removes the O(P) allocation from the hot path while preserving the same
+/// Bluestein convolution identity as `czt_bluestein_forward_into`.
+pub(crate) fn czt_bluestein_forward_into_with_workspace(
+    input: &[Complex64],
+    output: &mut [Complex64],
+    workspace: &mut [Complex64],
+    convolution_len: usize,
+    chirp_n: &[Complex64],
+    chirp_k: &[Complex64],
+    fft_kernel: &[Complex64],
+    fft_plan: &FftPlan1D,
+) {
     assert_eq!(
         output.len(),
         chirp_k.len(),
@@ -73,20 +105,24 @@ pub fn czt_bluestein_forward_into(
         convolution_len,
         "CZT FFT kernel length must match convolution length"
     );
+    assert_eq!(
+        workspace.len(),
+        convolution_len,
+        "CZT workspace length must match convolution length"
+    );
 
-    let mut workspace = vec![Complex64::new(0.0, 0.0); convolution_len];
+    workspace.fill(Complex64::new(0.0, 0.0));
     for n_idx in 0..input.len() {
         workspace[n_idx] = input[n_idx] * chirp_n[n_idx];
     }
 
-    let mut workspace = Array1::from_vec(workspace);
-    fft_plan.forward_complex_inplace(&mut workspace);
+    fft_plan.forward_complex_slice_inplace(workspace);
 
-    Zip::from(&mut workspace)
-        .and(fft_kernel)
-        .for_each(|value, &kernel_value| *value *= kernel_value);
+    for (value, &kernel_value) in workspace.iter_mut().zip(fft_kernel.iter()) {
+        *value *= kernel_value;
+    }
 
-    fft_plan.inverse_complex_inplace(&mut workspace);
+    fft_plan.inverse_complex_slice_inplace(workspace);
 
     for (k, out) in output.iter_mut().enumerate() {
         *out = chirp_k[k] * workspace[k];
@@ -119,45 +155,69 @@ pub fn czt_bjork_pereyra_inverse(
     a: Complex64,
     w: Complex64,
 ) -> Result<Vec<Complex64>, crate::domain::contracts::error::CztError> {
-    use crate::domain::contracts::error::CztError;
     let n = spectrum.len();
+    let z = czt_inverse_nodes(n, w);
+    let mut output = vec![Complex64::new(0.0, 0.0); n];
+    czt_bjork_pereyra_inverse_into(spectrum, &mut output, &z, a)?;
+    Ok(output)
+}
 
-    // z_k = W^k for k = 0..N-1
+/// Precompute Vandermonde nodes `z_k = W^k` for inverse CZT plans.
+#[must_use]
+pub(crate) fn czt_inverse_nodes(n: usize, w: Complex64) -> Vec<Complex64> {
     let mut z: Vec<Complex64> = Vec::with_capacity(n);
     let mut wk = Complex64::new(1.0, 0.0);
     for _ in 0..n {
         z.push(wk);
         wk *= w;
     }
+    z
+}
+
+/// Computes the inverse chirp z-transform into caller-owned output storage.
+///
+/// `nodes[k]` must equal `W^k`. Passing precomputed nodes removes one O(N)
+/// allocation from repeated inverse calls on the same square CZT plan.
+pub(crate) fn czt_bjork_pereyra_inverse_into(
+    spectrum: &[Complex64],
+    output: &mut [Complex64],
+    nodes: &[Complex64],
+    a: Complex64,
+) -> Result<(), crate::domain::contracts::error::CztError> {
+    use crate::domain::contracts::error::CztError;
+    let n = spectrum.len();
+    if output.len() != n || nodes.len() != n {
+        return Err(CztError::LengthMismatch);
+    }
 
     // Björck-Pereyra phase 1: forward divided-differences
-    let mut c: Vec<Complex64> = spectrum.to_vec();
+    output.copy_from_slice(spectrum);
     for j in 0..(n.saturating_sub(1)) {
         for k in (j + 1..n).rev() {
-            let denom = z[k] - z[k - j - 1];
+            let denom = nodes[k] - nodes[k - j - 1];
             if denom.norm() < f64::EPSILON * 1024.0 {
                 return Err(CztError::NotInvertible {
                     reason: "Vandermonde nodes z_k collide; W is a root of unity of order <= N",
                 });
             }
-            c[k] = (c[k] - c[k - 1]) / denom;
+            output[k] = (output[k] - output[k - 1]) / denom;
         }
     }
 
     // Björck-Pereyra phase 2: Newton evaluation (reverse)
     for j in (0..n.saturating_sub(1)).rev() {
         for k in j..(n - 1) {
-            let ck1 = c[k + 1];
-            c[k] -= z[j] * ck1;
+            let ck1 = output[k + 1];
+            output[k] -= nodes[j] * ck1;
         }
     }
 
     // x[n] = y[n] * A^n  (undo the A^{-n} scaling from the forward CZT)
     let mut a_pow = Complex64::new(1.0, 0.0);
-    for xn in c.iter_mut() {
+    for xn in output.iter_mut() {
         *xn *= a_pow;
         a_pow *= a;
     }
 
-    Ok(c)
+    Ok(())
 }

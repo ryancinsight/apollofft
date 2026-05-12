@@ -1,6 +1,6 @@
 //! Sparse spectral representation.
 
-use apollo_fft::error::{ApolloError, ApolloResult};
+use apollo_fft::{ApolloError, ApolloResult};
 use num_complex::Complex64;
 
 /// Sparse spectral representation of a complex-valued signal.

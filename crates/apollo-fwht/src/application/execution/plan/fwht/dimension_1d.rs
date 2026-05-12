@@ -66,11 +66,24 @@ impl FwhtPlan {
         input: &Array1<f64>,
         output: &mut Array1<f64>,
     ) -> Result<(), FwhtError> {
+        self.forward_f64_slice_into(
+            input.as_slice().expect("Array must be contiguous"),
+            output.as_slice_mut().expect("Array must be contiguous"),
+        )
+    }
+
+    /// Forward WHT over contiguous f64 slices.
+    pub(crate) fn forward_f64_slice_into(
+        &self,
+        input: &[f64],
+        output: &mut [f64],
+    ) -> Result<(), FwhtError> {
         if input.len() != self.n || output.len() != self.n {
             return Err(FwhtError::LengthMismatch);
         }
-        output.assign(input);
-        self.forward_inplace(output)
+        output.copy_from_slice(input);
+        wht_inplace(output);
+        Ok(())
     }
 
     /// Forward WHT in-place. O(N log N) butterfly operations.
@@ -105,11 +118,28 @@ impl FwhtPlan {
         input: &Array1<f64>,
         output: &mut Array1<f64>,
     ) -> Result<(), FwhtError> {
+        self.inverse_f64_slice_into(
+            input.as_slice().expect("Array must be contiguous"),
+            output.as_slice_mut().expect("Array must be contiguous"),
+        )
+    }
+
+    /// Inverse WHT over contiguous f64 slices.
+    pub(crate) fn inverse_f64_slice_into(
+        &self,
+        input: &[f64],
+        output: &mut [f64],
+    ) -> Result<(), FwhtError> {
         if input.len() != self.n || output.len() != self.n {
             return Err(FwhtError::LengthMismatch);
         }
-        output.assign(input);
-        self.inverse_inplace(output)
+        output.copy_from_slice(input);
+        wht_inplace(output);
+        let scale = 1.0 / self.n as f64;
+        for value in output.iter_mut() {
+            *value *= scale;
+        }
+        Ok(())
     }
 
     /// Inverse WHT in-place. Applies WHT then divides by N.

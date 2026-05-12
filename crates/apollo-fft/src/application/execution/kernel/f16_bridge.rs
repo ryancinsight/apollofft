@@ -13,17 +13,6 @@ where
 }
 
 #[inline]
-pub(crate) fn run_f16_via_f32_with_twiddles<F>(data: &mut [Cf16], twiddles: &[Cf16], kernel: F)
-where
-    F: FnOnce(&mut [Complex32], &[Complex32]),
-{
-    let mut promoted = promote_cf16(data);
-    let tw32 = promote_cf16(twiddles);
-    kernel(&mut promoted, &tw32);
-    demote_cf16_into(data, &promoted);
-}
-
-#[inline]
 fn promote_cf16(input: &[Cf16]) -> Vec<Complex32> {
     input
         .iter()

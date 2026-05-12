@@ -12,7 +12,8 @@ mod tests {
     use num_complex::{Complex32, Complex64};
 
     use crate::{
-        NufftWgpuBackend, NufftWgpuCapabilities, NufftWgpuError, NufftWgpuPlan1D, NufftWgpuPlan3D,
+        NufftGpuBuffers1D, NufftGpuBuffers3D, NufftWgpuBackend, NufftWgpuCapabilities,
+        NufftWgpuError, NufftWgpuPlan1D, NufftWgpuPlan3D,
     };
 
     #[test]
@@ -95,6 +96,53 @@ mod tests {
             NufftWgpuError::InputLengthMismatch {
                 expected: 2,
                 actual: 1
+            }
+        );
+    }
+
+    #[test]
+    fn fast_1d_reusable_buffers_reject_sample_capacity_overflow_when_device_exists() {
+        let Some(backend) = backend_or_skip() else {
+            return;
+        };
+        let domain = UniformDomain1D::new(8, 0.25).expect("domain");
+        let plan = NufftWgpuPlan1D::new(domain, 2, 6);
+        let buffers = NufftGpuBuffers1D::new(backend.device().as_ref(), 8, 16, 1);
+        let error = backend
+            .execute_fast_type1_1d_with_buffers(
+                &plan,
+                &buffers,
+                &[0.0, 0.25],
+                &[Complex32::new(1.0, 0.0), Complex32::new(0.5, -0.25)],
+            )
+            .expect_err("sample capacity overflow must fail");
+        assert_eq!(
+            error,
+            NufftWgpuError::InputLengthMismatch {
+                expected: 1,
+                actual: 2
+            }
+        );
+    }
+
+    #[test]
+    fn fast_3d_reusable_buffers_reject_sample_capacity_overflow_when_device_exists() {
+        let Some(backend) = backend_or_skip() else {
+            return;
+        };
+        let grid = UniformGrid3D::new(3, 2, 2, 0.5, 0.75, 1.0).expect("grid");
+        let plan = NufftWgpuPlan3D::new(grid, 2, 6);
+        let buffers = NufftGpuBuffers3D::new(backend.device().as_ref(), (3, 2, 2), (16, 16, 16), 1);
+        let positions = [(0.0_f32, 0.0, 0.0), (0.35, 0.7, 0.5)];
+        let values = [Complex32::new(1.0, 0.0), Complex32::new(-0.25, 0.5)];
+        let error = backend
+            .execute_fast_type1_3d_with_buffers(&plan, &buffers, &positions, &values)
+            .expect_err("sample capacity overflow must fail");
+        assert_eq!(
+            error,
+            NufftWgpuError::InputLengthMismatch {
+                expected: 1,
+                actual: 2
             }
         );
     }

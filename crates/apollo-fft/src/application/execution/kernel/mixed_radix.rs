@@ -1,37 +1,45 @@
 //! Mixed-radix strategy facade.
 //!
-//! Routes in-place FFTs to the best available radix kernel for the given length:
-//! - Power-of-8  → `radix8` (Winograd DFT-8 inner butterfly, optional rayon).
-//! - Power-of-4  → `radix4` (radix-4 DIT butterfly).
-//! - Other PoT   → `radix2` (iterative Cooley-Tukey, stages 1-4 use
-//!                 compile-time constants to avoid trig calls).
-//! - Non-power-of-two 2/3/5/7-smooth → composite radix (coalesced into cached radices),
-//!                          then mixed-radix FFT.
-//! - Other arbitrary lengths → Bluestein chirp-Z (no-alloc on the hot path when
-//!                            the caller supplies `Some(twiddles)`).
+//! Routes in-place FFTs to the best available kernel for the given length:
+//!
+//! ## Dispatch hierarchy (f64 / f32)
+//!
+//! | Input length       | Kernel selected |
+//! |--------------------|------------------|
+//! | Power of two ≥ 2   | **Stockham autosort** — out-of-place ping-pong FFT between `data` and a thread-local scratch buffer; no bit-reversal permutation. AVX/FMA SIMD codelets for N = 4, 8, 64, 4096 (f32); N = 64 (f64). Falls back to generic `transform<F>` loop for other PoT sizes. |
+//! | 2/3/5/7-smooth     | **Composite mixed-radix** — Cooley-Tukey DIT with digit-reversal permutation. |
+//! | Other non-PoT      | **Bluestein chirp-Z** — pads to next PoT and runs Stockham internally. |
+//!
+//! ## Dispatch hierarchy (f16)
+//!
+//! f16 is a storage-only precision. All PoT sizes are promoted to f32, run
+//! through the Stockham f32 kernel, and demoted back to f16 via
+//! `run_f16_via_f32`. The bit-reversal radix2/radix4 kernels are **not** used
+//! on the PoT path for any precision.
 //!
 //! ## SSOT principle
 //!
-//! The inner dispatch tree (`is_power_of_eight` → `radix8`, `is_power_of_four`
-//! → `radix4`, `is_power_of_two` → `radix2`, else → `bluestein`) is expressed
-//! **once** via the `pow2_dispatch!` macro and reused for every precision ×
-//! operation combination.  Adding a new precision requires one new set of
-//! 6 one-liner public wrappers; no algorithm body needs to change.
+//! Each precision × operation combination delegates to one of the above three
+//! authoritative algorithm implementations. No algorithm body is duplicated
+//! across precision variants.
 //!
 //! ## Precision strategy
 //!
 //! | Variant | Element type | Notes |
 //! |---------|--------------|-------|
-//! | `_64`   | `Complex64`  | Native f64 throughout. |
-//! | `_32`   | `Complex32`  | Native f32 throughout. |
-//! | `_f16`  | `Cf16`       | Each sub-kernel promotes to f32 internally; non-PoT sizes use `run_f16_via_f32` + Bluestein-f32. |
+//! | `_64`   | `Complex64`  | Native f64; Stockham for PoT. |
+//! | `_32`   | `Complex32`  | Native f32; Stockham for PoT. |
+//! | `_f16`  | `Cf16`       | Promotes to f32 for all arithmetic; Stockham f32 for PoT. |
+
+#![allow(clippy::empty_line_after_doc_comments)]
+#![allow(clippy::type_complexity)]
+#![allow(clippy::uninit_vec)]
 
 use super::f16_bridge::run_f16_via_f32;
 use super::radix2_f16::Cf16;
-use super::radix_shape::{factorize_composite, is_power_of_eight, is_power_of_four, should_use_bluestein_instead_of_composite};
-use super::{bluestein, radix2, radix2_f16, radix4, radix8, radix_composite};
+use super::radix_shape::{factorize_composite, should_use_bluestein_instead_of_composite};
+use super::{bluestein, radix2, radix2_f16, radix_composite, stockham};
 use num_complex::{Complex32, Complex64};
-use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -39,20 +47,20 @@ use std::sync::Arc;
 
 // ── Global backing caches (cross-thread sharing, written once per size) ───────
 
-static TWIDDLE_FWD_64_CACHE: Lazy<RwLock<HashMap<usize, Arc<[Complex64]>>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
-static TWIDDLE_INV_64_CACHE: Lazy<RwLock<HashMap<usize, Arc<[Complex64]>>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
-static TWIDDLE_FWD_32_CACHE: Lazy<RwLock<HashMap<usize, Arc<[Complex32]>>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
-static TWIDDLE_INV_32_CACHE: Lazy<RwLock<HashMap<usize, Arc<[Complex32]>>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
-static TWIDDLE_FWD_F16_CACHE: Lazy<RwLock<HashMap<usize, Arc<[Cf16]>>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
-static TWIDDLE_INV_F16_CACHE: Lazy<RwLock<HashMap<usize, Arc<[Cf16]>>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
-static COMPOSITE_RADIX_CACHE: Lazy<RwLock<HashMap<usize, Option<Arc<[usize]>>>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
+static TWIDDLE_FWD_64_CACHE: std::sync::LazyLock<RwLock<HashMap<usize, Arc<[Complex64]>>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+static TWIDDLE_INV_64_CACHE: std::sync::LazyLock<RwLock<HashMap<usize, Arc<[Complex64]>>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+static TWIDDLE_FWD_32_CACHE: std::sync::LazyLock<RwLock<HashMap<usize, Arc<[Complex32]>>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+static TWIDDLE_INV_32_CACHE: std::sync::LazyLock<RwLock<HashMap<usize, Arc<[Complex32]>>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+static TWIDDLE_FWD_F16_CACHE: std::sync::LazyLock<RwLock<HashMap<usize, Arc<[Cf16]>>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+static TWIDDLE_INV_F16_CACHE: std::sync::LazyLock<RwLock<HashMap<usize, Arc<[Cf16]>>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+static COMPOSITE_RADIX_CACHE: std::sync::LazyLock<RwLock<HashMap<usize, Option<Arc<[usize]>>>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
 
 // ── Thread-local fast-path caches (zero locking on the hot path after warmup) ─
 //
@@ -76,6 +84,38 @@ thread_local! {
         RefCell::new(HashMap::with_capacity(8));
     static TL_COMPOSITE_RADIX: RefCell<HashMap<usize, Option<Arc<[usize]>>>> =
         RefCell::new(HashMap::with_capacity(8));
+    // Single-size Stockham ping-pong scratch (one per thread; grows but never shrinks).
+    static TL_STOCKHAM_SCRATCH_64: RefCell<Vec<Complex64>> =
+        const { RefCell::new(Vec::new()) };
+    static TL_STOCKHAM_SCRATCH_32: RefCell<Vec<Complex32>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+#[inline]
+fn with_stockham_scratch_64<R>(n: usize, f: impl FnOnce(&mut [Complex64]) -> R) -> R {
+    TL_STOCKHAM_SCRATCH_64.with(|scratch| {
+        let mut scratch = scratch.borrow_mut();
+        if scratch.len() < n {
+            // Grow without zero-init: Stockham kernel overwrites before reading.
+            let cur = scratch.len();
+            scratch.reserve(n.saturating_sub(cur));
+            unsafe { scratch.set_len(n) };
+        }
+        f(&mut scratch[..n])
+    })
+}
+
+#[inline]
+fn with_stockham_scratch_32<R>(n: usize, f: impl FnOnce(&mut [Complex32]) -> R) -> R {
+    TL_STOCKHAM_SCRATCH_32.with(|scratch| {
+        let mut scratch = scratch.borrow_mut();
+        if scratch.len() < n {
+            let cur = scratch.len();
+            scratch.reserve(n.saturating_sub(cur));
+            unsafe { scratch.set_len(n) };
+        }
+        f(&mut scratch[..n])
+    })
 }
 
 /// Retrieves the Arc from the thread-local map or falls back to global.
@@ -83,7 +123,7 @@ thread_local! {
 #[inline]
 fn tl_cached<T: Clone>(
     tl: &'static std::thread::LocalKey<RefCell<HashMap<usize, Arc<[T]>>>>,
-    global: &'static Lazy<RwLock<HashMap<usize, Arc<[T]>>>>,
+    global: &'static std::sync::LazyLock<RwLock<HashMap<usize, Arc<[T]>>>>,
     n: usize,
     build_fn: impl FnOnce(usize) -> Vec<T>,
 ) -> Arc<[T]> {
@@ -187,55 +227,6 @@ pub(crate) fn cached_twiddle_inv_f16(n: usize) -> Arc<[Cf16]> {
 /// When `$twiddles` is `None`, the cache is consulted (O(1) HashMap lookup
 /// on the hot path after the first per-thread per-size warm-up, no locks).
 /// The previous `_no` (twiddle-rebuilding) variants are no longer needed.
-macro_rules! pow2_dispatch {
-    (
-        $data:expr, $twiddles:expr,
-        cache = $cache:path,
-        r8 = $r8_tw:path,
-        r4 = $r4_tw:path,
-        r2 = $r2_tw:path
-    ) => {{
-        if is_power_of_eight($data.len()) {
-            if let Some(tw) = $twiddles {
-                $r8_tw($data, tw);
-            } else {
-                $r8_tw($data, &$cache($data.len()));
-            }
-        } else if is_power_of_four($data.len()) {
-            if let Some(tw) = $twiddles {
-                $r4_tw($data, tw);
-            } else {
-                $r4_tw($data, &$cache($data.len()));
-            }
-        } else if let Some(tw) = $twiddles {
-            $r2_tw($data, tw);
-        } else {
-            $r2_tw($data, &$cache($data.len()));
-        }
-    }};
-}
-
-macro_rules! pow2_dispatch_no_r8 {
-    (
-        $data:expr, $twiddles:expr,
-        cache = $cache:path,
-        r4 = $r4_tw:path,
-        r2 = $r2_tw:path
-    ) => {{
-        if is_power_of_four($data.len()) {
-            if let Some(tw) = $twiddles {
-                $r4_tw($data, tw);
-            } else {
-                $r4_tw($data, &$cache($data.len()));
-            }
-        } else if let Some(tw) = $twiddles {
-            $r2_tw($data, tw);
-        } else {
-            $r2_tw($data, &$cache($data.len()));
-        }
-    }};
-}
-
 // ── f64 ───────────────────────────────────────────────────────────────────────
 
 /// In-place forward FFT (unnormalized, f64) with optional precomputed twiddles.
@@ -245,17 +236,20 @@ pub fn forward_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: Option
         return;
     }
     if data.len().is_power_of_two() {
-        pow2_dispatch!(
-            data, twiddles,
-            cache = cached_twiddle_fwd_64,
-            r8 = radix8::forward_inplace_64_with_twiddles,
-            r4 = radix4::forward_inplace_64_with_twiddles,
-            r2 = radix2::forward_inplace_64_with_twiddles
-        );
+        if let Some(tw) = twiddles {
+            with_stockham_scratch_64(data.len(), |scratch| {
+                <f64 as stockham::StockhamKernel>::forward_with_scratch(data, scratch, tw);
+            });
+        } else {
+            let tw = cached_twiddle_fwd_64(data.len());
+            with_stockham_scratch_64(data.len(), |scratch| {
+                <f64 as stockham::StockhamKernel>::forward_with_scratch(data, scratch, tw.as_ref());
+            });
+        }
     } else {
         if !should_use_bluestein_instead_of_composite(data.len()) {
             if let Some(radices) = cached_composite_radices(data.len()) {
-                radix_composite::forward_inplace_64_with_radices(data, &radices);
+                radix_composite::forward_inplace_with_radices(data, &radices);
                 return;
             }
         }
@@ -269,17 +263,26 @@ fn cached_composite_radices(n: usize) -> Option<Arc<[usize]>> {
         return radices;
     }
 
+    // Slow path: factorize and populate global + thread-local cache.
+    // new_radices is cloned at most once: once for the global cache insert
+    // (if a race requires it), zero times otherwise.
     let radices = {
         let maybe_cached = COMPOSITE_RADIX_CACHE.read().get(&n).cloned();
         if let Some(radices) = maybe_cached {
             radices
         } else {
             let new_radices = factorize_composite(n).map(|rad| Arc::from(rad.into_boxed_slice()));
-            COMPOSITE_RADIX_CACHE
+            // or_insert_with needs an owned value; clone the Arc (cheap refcount bump).
+            // Returns &Arc<[usize]>; clone once more to get owned Arc back.
+            let inserted = COMPOSITE_RADIX_CACHE
                 .write()
                 .entry(n)
-                .or_insert_with(|| new_radices.clone());
-            new_radices
+                .or_insert_with(|| match &new_radices {
+                    Some(a) => Some(Arc::clone(a)),
+                    None => None,
+                })
+                .clone();
+            inserted
         }
     };
 
@@ -297,17 +300,20 @@ pub fn inverse_inplace_unnorm_64_with_twiddles(
         return;
     }
     if data.len().is_power_of_two() {
-        pow2_dispatch!(
-            data, twiddles,
-            cache = cached_twiddle_inv_64,
-            r8 = radix8::inverse_inplace_unnorm_64_with_twiddles,
-            r4 = radix4::inverse_inplace_unnorm_64_with_twiddles,
-            r2 = radix2::inverse_inplace_unnorm_64_with_twiddles
-        );
+        if let Some(tw) = twiddles {
+            with_stockham_scratch_64(data.len(), |scratch| {
+                <f64 as stockham::StockhamKernel>::forward_with_scratch(data, scratch, tw);
+            });
+        } else {
+            let tw = cached_twiddle_inv_64(data.len());
+            with_stockham_scratch_64(data.len(), |scratch| {
+                <f64 as stockham::StockhamKernel>::forward_with_scratch(data, scratch, tw.as_ref());
+            });
+        }
     } else {
         if !should_use_bluestein_instead_of_composite(data.len()) {
             if let Some(radices) = cached_composite_radices(data.len()) {
-                radix_composite::inverse_inplace_unnorm_64_with_radices(data, &radices);
+                radix_composite::inverse_inplace_unnorm_with_radices(data, &radices);
                 return;
             }
         }
@@ -322,17 +328,13 @@ pub fn inverse_inplace_64_with_twiddles(data: &mut [Complex64], twiddles: Option
         return;
     }
     if data.len().is_power_of_two() {
-        pow2_dispatch!(
-            data, twiddles,
-            cache = cached_twiddle_inv_64,
-            r8 = radix8::inverse_inplace_64_with_twiddles,
-            r4 = radix4::inverse_inplace_64_with_twiddles,
-            r2 = radix2::inverse_inplace_64_with_twiddles
-        );
+        inverse_inplace_unnorm_64_with_twiddles(data, twiddles);
+        let scale = 1.0 / data.len() as f64;
+        data.iter_mut().for_each(|value| *value *= scale);
     } else {
         if !should_use_bluestein_instead_of_composite(data.len()) {
             if let Some(radices) = cached_composite_radices(data.len()) {
-                radix_composite::inverse_inplace_64_with_radices(data, &radices);
+                radix_composite::inverse_inplace_with_radices(data, &radices);
                 return;
             }
         }
@@ -388,17 +390,20 @@ pub fn forward_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: Option
         return;
     }
     if data.len().is_power_of_two() {
-        pow2_dispatch!(
-            data, twiddles,
-            cache = cached_twiddle_fwd_32,
-            r8 = radix8::forward_inplace_32_with_twiddles,
-            r4 = radix4::forward_inplace_32_with_twiddles,
-            r2 = radix2::forward_inplace_32_with_twiddles
-        );
+        if let Some(tw) = twiddles {
+            with_stockham_scratch_32(data.len(), |scratch| {
+                <f32 as stockham::StockhamKernel>::forward_with_scratch(data, scratch, tw);
+            });
+        } else {
+            let tw = cached_twiddle_fwd_32(data.len());
+            with_stockham_scratch_32(data.len(), |scratch| {
+                <f32 as stockham::StockhamKernel>::forward_with_scratch(data, scratch, tw.as_ref());
+            });
+        }
     } else {
         if !should_use_bluestein_instead_of_composite(data.len()) {
             if let Some(radices) = cached_composite_radices(data.len()) {
-                radix_composite::forward_inplace_32_with_radices(data, &radices);
+                radix_composite::forward_inplace_with_radices(data, &radices);
                 return;
             }
         }
@@ -416,17 +421,20 @@ pub fn inverse_inplace_unnorm_32_with_twiddles(
         return;
     }
     if data.len().is_power_of_two() {
-        pow2_dispatch!(
-            data, twiddles,
-            cache = cached_twiddle_inv_32,
-            r8 = radix8::inverse_inplace_unnorm_32_with_twiddles,
-            r4 = radix4::inverse_inplace_unnorm_32_with_twiddles,
-            r2 = radix2::inverse_inplace_unnorm_32_with_twiddles
-        );
+        if let Some(tw) = twiddles {
+            with_stockham_scratch_32(data.len(), |scratch| {
+                <f32 as stockham::StockhamKernel>::forward_with_scratch(data, scratch, tw);
+            });
+        } else {
+            let tw = cached_twiddle_inv_32(data.len());
+            with_stockham_scratch_32(data.len(), |scratch| {
+                <f32 as stockham::StockhamKernel>::forward_with_scratch(data, scratch, tw.as_ref());
+            });
+        }
     } else {
         if !should_use_bluestein_instead_of_composite(data.len()) {
             if let Some(radices) = cached_composite_radices(data.len()) {
-                radix_composite::inverse_inplace_unnorm_32_with_radices(data, &radices);
+                radix_composite::inverse_inplace_unnorm_with_radices(data, &radices);
                 return;
             }
         }
@@ -441,17 +449,13 @@ pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: Option
         return;
     }
     if data.len().is_power_of_two() {
-        pow2_dispatch!(
-            data, twiddles,
-            cache = cached_twiddle_inv_32,
-            r8 = radix8::inverse_inplace_32_with_twiddles,
-            r4 = radix4::inverse_inplace_32_with_twiddles,
-            r2 = radix2::inverse_inplace_32_with_twiddles
-        );
+        inverse_inplace_unnorm_32_with_twiddles(data, twiddles);
+        let scale = 1.0 / data.len() as f32;
+        data.iter_mut().for_each(|value| *value *= scale);
     } else {
         if !should_use_bluestein_instead_of_composite(data.len()) {
             if let Some(radices) = cached_composite_radices(data.len()) {
-                radix_composite::inverse_inplace_32_with_radices(data, &radices);
+                radix_composite::inverse_inplace_with_radices(data, &radices);
                 return;
             }
         }
@@ -460,13 +464,16 @@ pub fn inverse_inplace_32_with_twiddles(data: &mut [Complex32], twiddles: Option
 }
 
 /// In-place forward FFT (unnormalized, f32).
+#[inline]
 pub fn forward_inplace_32(data: &mut [Complex32]) {
     if data.len() <= 1 {
         return;
     }
     if data.len().is_power_of_two() {
         let tw = cached_twiddle_fwd_32(data.len());
-        forward_inplace_32_with_twiddles(data, Some(tw.as_ref()));
+        with_stockham_scratch_32(data.len(), |scratch| {
+            <f32 as stockham::StockhamKernel>::forward_with_scratch(data, scratch, tw.as_ref());
+        });
     } else {
         forward_inplace_32_with_twiddles(data, None);
     }
@@ -502,24 +509,36 @@ pub fn inverse_inplace_32(data: &mut [Complex32]) {
 
 /// In-place forward FFT (unnormalized, f16 storage) with optional precomputed twiddles.
 ///
-/// Non-PoT lengths promote to f32, then run composite radix for 2/3/5/7-smooth
-/// lengths or Bluestein-f32 otherwise, and demote via `run_f16_via_f32`.
+/// ## Dispatch
+///
+/// All power-of-two sizes promote to f32, run the Stockham f32 autosort kernel
+/// (no bit-reversal), and demote back to f16. Non-PoT 2/3/5/7-smooth sizes use
+/// the composite mixed-radix path via `run_f16_via_f32`. Other lengths use
+/// Bluestein-f32.
+///
+/// The `twiddles` parameter is accepted for API uniformity but is unused for
+/// PoT sizes: the f32 Stockham kernel builds and caches its own f32 twiddle
+/// table. Callers may pass `None`.
 #[inline]
-pub fn forward_inplace_f16_with_twiddles(data: &mut [Cf16], twiddles: Option<&[Cf16]>) {
+pub fn forward_inplace_f16_with_twiddles(data: &mut [Cf16], _twiddles: Option<&[Cf16]>) {
     if data.len() <= 1 {
         return;
     }
     if data.len().is_power_of_two() {
-        pow2_dispatch_no_r8!(
-            data, twiddles,
-            cache = cached_twiddle_fwd_f16,
-            r4 = radix4::forward_inplace_f16_with_twiddles,
-            r2 = radix2_f16::forward_inplace_f16_with_twiddles
-        );
+        // Promote f16 → f32, run Stockham (no bit-reversal), demote f32 → f16.
+        let n = data.len();
+        let tw = cached_twiddle_fwd_32(n);
+        run_f16_via_f32(data, |buf| {
+            with_stockham_scratch_32(n, |scratch| {
+                <f32 as stockham::StockhamKernel>::forward_with_scratch(buf, scratch, tw.as_ref());
+            });
+        });
     } else {
         if !should_use_bluestein_instead_of_composite(data.len()) {
             if let Some(radices) = cached_composite_radices(data.len()) {
-                run_f16_via_f32(data, |buf| radix_composite::forward_inplace_32_with_radices(buf, &radices));
+                run_f16_via_f32(data, |buf| {
+                    radix_composite::forward_inplace_with_radices(buf, &radices)
+                });
                 return;
             }
         }
@@ -528,23 +547,27 @@ pub fn forward_inplace_f16_with_twiddles(data: &mut [Cf16], twiddles: Option<&[C
 }
 
 /// In-place inverse FFT (unnormalized, f16 storage) with optional precomputed twiddles.
+///
+/// PoT sizes: promote f16→f32, run Stockham f32 (inverse twiddles, no 1/N scale),
+/// demote f32→f16. See `forward_inplace_f16_with_twiddles` for the dispatch rationale.
 #[inline]
-pub fn inverse_inplace_unnorm_f16_with_twiddles(data: &mut [Cf16], twiddles: Option<&[Cf16]>) {
+pub fn inverse_inplace_unnorm_f16_with_twiddles(data: &mut [Cf16], _twiddles: Option<&[Cf16]>) {
     if data.len() <= 1 {
         return;
     }
     if data.len().is_power_of_two() {
-        pow2_dispatch_no_r8!(
-            data, twiddles,
-            cache = cached_twiddle_inv_f16,
-            r4 = radix4::inverse_inplace_unnorm_f16_with_twiddles,
-            r2 = radix2_f16::inverse_inplace_unnorm_f16_with_twiddles
-        );
+        let n = data.len();
+        let tw = cached_twiddle_inv_32(n);
+        run_f16_via_f32(data, |buf| {
+            with_stockham_scratch_32(n, |scratch| {
+                <f32 as stockham::StockhamKernel>::forward_with_scratch(buf, scratch, tw.as_ref());
+            });
+        });
     } else {
         if !should_use_bluestein_instead_of_composite(data.len()) {
             if let Some(radices) = cached_composite_radices(data.len()) {
                 run_f16_via_f32(data, |buf| {
-                    radix_composite::inverse_inplace_unnorm_32_with_radices(buf, &radices)
+                    radix_composite::inverse_inplace_unnorm_with_radices(buf, &radices)
                 });
                 return;
             }
@@ -554,23 +577,29 @@ pub fn inverse_inplace_unnorm_f16_with_twiddles(data: &mut [Cf16], twiddles: Opt
 }
 
 /// In-place inverse FFT normalized by 1/N (f16 storage) with optional precomputed twiddles.
+///
+/// PoT sizes: promote f16→f32, run Stockham f32 (inverse twiddles), apply 1/N scale,
+/// demote f32→f16. See `forward_inplace_f16_with_twiddles` for the dispatch rationale.
 #[inline]
-pub fn inverse_inplace_f16_with_twiddles(data: &mut [Cf16], twiddles: Option<&[Cf16]>) {
+pub fn inverse_inplace_f16_with_twiddles(data: &mut [Cf16], _twiddles: Option<&[Cf16]>) {
     if data.len() <= 1 {
         return;
     }
     if data.len().is_power_of_two() {
-        pow2_dispatch_no_r8!(
-            data, twiddles,
-            cache = cached_twiddle_inv_f16,
-            r4 = radix4::inverse_inplace_f16_with_twiddles,
-            r2 = radix2_f16::inverse_inplace_f16_with_twiddles
-        );
+        let n = data.len();
+        let tw = cached_twiddle_inv_32(n);
+        run_f16_via_f32(data, |buf| {
+            with_stockham_scratch_32(n, |scratch| {
+                <f32 as stockham::StockhamKernel>::forward_with_scratch(buf, scratch, tw.as_ref());
+            });
+            let scale = 1.0f32 / n as f32;
+            buf.iter_mut().for_each(|v| *v *= scale);
+        });
     } else {
         if !should_use_bluestein_instead_of_composite(data.len()) {
             if let Some(radices) = cached_composite_radices(data.len()) {
                 run_f16_via_f32(data, |buf| {
-                    radix_composite::inverse_inplace_32_with_radices(buf, &radices)
+                    radix_composite::inverse_inplace_with_radices(buf, &radices)
                 });
                 return;
             }
@@ -651,5 +680,108 @@ mod tests {
             .collect::<Vec<_>>();
         let err = max_abs_err_64(&got, &expected);
         assert!(err < 1e-10, "mixed-radix inverse mismatch err={err:.2e}");
+    }
+
+    #[test]
+    fn mixed_f32_stockham_forward_inverse_roundtrip_n256() {
+        let n = 256usize;
+        let input: Vec<Complex32> = (0..n)
+            .map(|k| Complex32::new((k as f32 * 0.013).sin(), (k as f32 * 0.017).cos()))
+            .collect();
+        let mut got = input.clone();
+
+        forward_inplace_32(&mut got);
+        inverse_inplace_32(&mut got);
+
+        let err = got
+            .iter()
+            .zip(input.iter())
+            .map(|(a, b)| (*a - *b).norm())
+            .fold(0.0f32, f32::max);
+        assert!(
+            err < 1.0e-4,
+            "f32 Stockham roundtrip mismatch err={err:.2e}"
+        );
+    }
+
+    #[test]
+    fn mixed_f32_stockham_forward_inverse_roundtrip_n512() {
+        let n = 512usize;
+        let input: Vec<Complex32> = (0..n)
+            .map(|k| Complex32::new((k as f32 * 0.011).sin(), (k as f32 * 0.019).cos()))
+            .collect();
+        let mut got = input.clone();
+
+        forward_inplace_32(&mut got);
+        inverse_inplace_32(&mut got);
+
+        let err = got
+            .iter()
+            .zip(input.iter())
+            .map(|(a, b)| (*a - *b).norm())
+            .fold(0.0f32, f32::max);
+        assert!(
+            err < 1.0e-4,
+            "f32 Stockham N=512 roundtrip mismatch err={err:.2e}"
+        );
+    }
+
+    #[test]
+    fn mixed_f32_stockham_forward_inverse_roundtrip_n4096() {
+        let n = 4096usize;
+        let input: Vec<Complex32> = (0..n)
+            .map(|k| Complex32::new((k as f32 * 0.007).sin(), (k as f32 * 0.011).cos()))
+            .collect();
+        let mut got = input.clone();
+
+        forward_inplace_32(&mut got);
+        inverse_inplace_32(&mut got);
+
+        let err = got
+            .iter()
+            .zip(input.iter())
+            .map(|(a, b)| (*a - *b).norm())
+            .fold(0.0f32, f32::max);
+        let tolerance = 8.0 * n as f32 * f32::EPSILON;
+        assert!(
+            err < tolerance,
+            "f32 Stockham N=4096 roundtrip mismatch err={err:.2e} tolerance={tolerance:.2e}"
+        );
+    }
+
+    #[test]
+    fn mixed_f64_stockham_forward_inverse_roundtrip_n256() {
+        let n = 256usize;
+        let input: Vec<Complex64> = (0..n)
+            .map(|k| Complex64::new((k as f64 * 0.013).sin(), (k as f64 * 0.017).cos()))
+            .collect();
+        let mut got = input.clone();
+
+        forward_inplace_64(&mut got);
+        inverse_inplace_64(&mut got);
+
+        let err = max_abs_err_64(&got, &input);
+        assert!(
+            err < 1.0e-10,
+            "f64 Stockham roundtrip mismatch err={err:.2e}"
+        );
+    }
+
+    #[test]
+    fn mixed_f64_stockham_forward_inverse_roundtrip_n512() {
+        let n = 512usize;
+        let input: Vec<Complex64> = (0..n)
+            .map(|k| Complex64::new((k as f64 * 0.011).sin(), (k as f64 * 0.019).cos()))
+            .collect();
+        let mut got = input.clone();
+
+        forward_inplace_64(&mut got);
+        inverse_inplace_64(&mut got);
+
+        let err = max_abs_err_64(&got, &input);
+        assert!(
+            err < 1.0e-10,
+            "f64 Stockham N=512 roundtrip mismatch err={err:.2e}"
+        );
     }
 }

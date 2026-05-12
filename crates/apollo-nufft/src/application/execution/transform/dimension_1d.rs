@@ -33,10 +33,7 @@
 //! - oversampling factor must satisfy `sigma >= 2`
 //! - kernel width must satisfy `kernel_width >= 2`
 
-use apollo_fft::application::plan::FftPlan1D;
-use apollo_fft::error::{ApolloError, ApolloResult};
-use apollo_fft::f16;
-use apollo_fft::types::{PrecisionProfile, Shape1D};
+use apollo_fft::{f16, ApolloError, ApolloResult, FftPlan1D, PrecisionProfile, Shape1D};
 use ndarray::Array1;
 use num_complex::{Complex32, Complex64};
 use std::f64::consts::PI;

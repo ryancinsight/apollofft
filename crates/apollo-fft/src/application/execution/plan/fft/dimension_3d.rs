@@ -1,4 +1,4 @@
-//! 3D FFT plan.
+﻿//! 3D FFT plan.
 //!
 //! Apollo-owned 3D FFT implementation based on separable FFT passes.
 //!
@@ -10,15 +10,14 @@
 //!
 //! # Mathematical contract
 //!
-//! For a complex field `x ∈ ℂ^{n_x × n_y × n_z}`, the forward transform is the
+//! For a complex field x in C^(nx x ny x nz), the forward transform is the
 //! separable 3D DFT
 //!
-//! `X_{k_x,k_y,k_z} = Σ_x Σ_y Σ_z x_{x,y,z} · exp(-2πi (k_x x / n_x + k_y y / n_y + k_z z / n_z))`
+//! X[kx,ky,kz] = sum x[x,y,z] * exp(-2*pi*i*(kx*x/nx + ky*y/ny + kz*z/nz))
 //!
 //! and the inverse transform is
 //!
-//! `x_{x,y,z} = (1 / (n_x n_y n_z)) Σ_kx Σ_ky Σ_kz X_{k_x,k_y,k_z}
-//! · exp(2πi (k_x x / n_x + k_y y / n_y + k_z z / n_z))`.
+//! x[x,y,z] = (1/(nx*ny*nz)) * sum X[kx,ky,kz] * exp(2*pi*i*(kx*x/nx+ky*y/ny+kz*z/nz))
 //!
 //! Because the transform is separable, the implementation applies the 1D FFT
 //! kernel independently along each axis. This preserves linearity and the
@@ -39,13 +38,9 @@
 //! - non-contiguous ndarray buffers panic when a contiguous slice is required
 
 use crate::application::execution::kernel::mixed_radix::{
-    cached_twiddle_fwd_32, cached_twiddle_fwd_64, cached_twiddle_inv_32,
-    cached_twiddle_inv_64,
-};
-use crate::application::execution::kernel::radix2::{
-    forward_inplace_32_with_twiddles,
-    forward_inplace_64_with_twiddles, inverse_inplace_32_with_twiddles,
-    inverse_inplace_64_with_twiddles,
+    cached_twiddle_fwd_32, cached_twiddle_fwd_64, cached_twiddle_inv_32, cached_twiddle_inv_64,
+    forward_inplace_32_with_twiddles, forward_inplace_64_with_twiddles,
+    inverse_inplace_32_with_twiddles, inverse_inplace_64_with_twiddles,
 };
 use crate::application::execution::kernel::{
     fft_forward_32, fft_forward_64, fft_inverse_32, fft_inverse_64,
@@ -56,41 +51,22 @@ use crate::domain::metadata::shape::Shape3D;
 use half::f16;
 use ndarray::{Array3, Axis, Zip};
 use num_complex::Complex32;
-
-/// Use rayon parallel iteration when total elements exceed this threshold.
-/// Below the threshold, sequential iteration avoids rayon task-spawn overhead
-/// that dominates for small volumes (e.g. 8³ = 512 elements).
-const RAYON_THRESHOLD: usize = 32768;
-
-/// Tile size for cache-blocked gather/scatter in axis-1 and axis-0 passes.
-///
-/// For each i-slice in axis-1, the gather is a [ny][nz] → [nz][ny] transpose.
-/// A 32×32 tile of Complex64 = 16 KB, fitting in L1 (32–48 KB). The same
-/// value works for axis-0 ([j,k]-plane transposes). Corresponds to the same
-/// TRANSPOSE_TILE used in dimension_2d.rs.
-const GATHER_TILE: usize = 32;
 use num_complex::Complex64;
 use rayon::prelude::*;
 use std::sync::Arc;
 
-/// Reusable 3D FFT plan.
+/// Use rayon parallel iteration when total elements exceed this threshold.
+/// Below the threshold, sequential iteration avoids rayon task-spawn overhead
+/// that dominates for small volumes (e.g. 8^3 = 512 elements).
+const RAYON_THRESHOLD: usize = 32768;
+
+/// Tile size for cache-blocked gather/scatter in axis-1 and axis-0 passes.
 ///
-/// # Precomputed twiddle tables and scratch buffers
-///
-/// For power-of-two axis lengths, the plan precomputes contiguous per-stage
-/// twiddle tables at construction time (total N-1 entries per axis). All
-/// butterfly passes use these tables, eliminating the per-lane twiddle-table
-/// allocation that naïve dispatch via `fft_forward_64` would otherwise perform.
-///
-/// Axis-1 (y) and axis-0 (x) passes require gathering non-contiguous lanes
-/// into a temporary buffer before the FFT and scattering results back. This
-/// buffer is preallocated at plan construction time (`scratch_y_64`,
-/// `scratch_x_64`) and reused via a Mutex, avoiding a fresh `Vec<Complex64>`
-/// allocation of size `nx * ny * nz` on every transform call.
-///
-/// For non-power-of-two axis lengths, the plan falls back to the
-/// auto-selecting `fft_forward_64` / `fft_inverse_64` dispatch which handles
-/// Bluestein with per-call scratch allocation.
+/// For each i-slice in axis-1, the gather is a [ny][nz] -> [nz][ny] transpose.
+/// A 32x32 tile of Complex64 = 16 KB, fitting in L1 (32-48 KB).
+const GATHER_TILE: usize = 32;
+
+/// Reusable separable 3D FFT plan with precomputed axis twiddles and scratch buffers.
 pub struct FftPlan3D {
     nx: usize,
     ny: usize,
@@ -122,23 +98,12 @@ pub struct FftPlan3D {
     // factors for the length-m sub-FFT (precomputed when m is a power of two).
     twiddle_zh_fwd_64: Option<Arc<[Complex64]>>,
     twiddle_zh_inv_64: Option<Arc<[Complex64]>>,
-    // f32 r2c/c2r fields reserved for future Complex32 r2c implementation.
-    #[allow(dead_code)]
-    twiddle_zh_fwd_32: Option<Arc<[Complex32]>>,
-    #[allow(dead_code)]
-    twiddle_zh_inv_32: Option<Arc<[Complex32]>>,
-    /// Extraction twiddles W_k = exp(−2πi·k/nz) for k = 0..nz_c−1.
+    /// Extraction twiddles W_k = exp(âˆ’2Ï€iÂ·k/nz) for k = 0..nz_câˆ’1.
     /// Used in the Cooley-Tukey r2c split step and its inverse.
     r2c_twiddles_64: Vec<Complex64>,
-    #[allow(dead_code)]
-    r2c_twiddles_32: Vec<Complex32>,
     // --- preallocated scratch for r2c y and x passes (half-spectrum volume) ---
     scratch_r2c_y_64: std::sync::Mutex<Vec<Complex64>>,
     scratch_r2c_x_64: std::sync::Mutex<Vec<Complex64>>,
-    #[allow(dead_code)]
-    scratch_r2c_y_32: std::sync::Mutex<Vec<Complex32>>,
-    #[allow(dead_code)]
-    scratch_r2c_x_32: std::sync::Mutex<Vec<Complex32>>,
 }
 
 impl std::fmt::Debug for FftPlan3D {
@@ -191,17 +156,11 @@ impl FftPlan3D {
         let m = nz / 2;
         let nz_c_val = m + 1; // = nz/2+1
         let r2c_vol = nx * ny * nz_c_val;
-        // Extraction twiddles W_k = exp(−2πi·k/nz) for k = 0..nz_c_val−1.
+        // Extraction twiddles W_k = exp(âˆ’2Ï€iÂ·k/nz) for k = 0..nz_c_valâˆ’1.
         let r2c_twiddles_64: Vec<Complex64> = (0..nz_c_val)
             .map(|k| {
                 let a = -std::f64::consts::TAU * k as f64 / nz as f64;
                 Complex64::new(a.cos(), a.sin())
-            })
-            .collect();
-        let r2c_twiddles_32: Vec<Complex32> = (0..nz_c_val)
-            .map(|k| {
-                let a = -std::f32::consts::TAU * k as f32 / nz as f32;
-                Complex32::new(a.cos(), a.sin())
             })
             .collect();
         Self {
@@ -228,14 +187,9 @@ impl FftPlan3D {
             scratch_x_32: std::sync::Mutex::new(vec![Complex32::default(); vol]),
             twiddle_zh_fwd_64: make64(m, true),
             twiddle_zh_inv_64: make64(m, false),
-            twiddle_zh_fwd_32: make32(m, true),
-            twiddle_zh_inv_32: make32(m, false),
             r2c_twiddles_64,
-            r2c_twiddles_32,
             scratch_r2c_y_64: std::sync::Mutex::new(vec![Complex64::default(); r2c_vol]),
             scratch_r2c_x_64: std::sync::Mutex::new(vec![Complex64::default(); r2c_vol]),
-            scratch_r2c_y_32: std::sync::Mutex::new(vec![Complex32::default(); r2c_vol]),
-            scratch_r2c_x_32: std::sync::Mutex::new(vec![Complex32::default(); r2c_vol]),
         }
     }
 
@@ -358,11 +312,6 @@ impl FftPlan3D {
         self.forward_real_to_complex_into_full(input, output);
     }
 
-    /// Compatibility alias for `forward_real_to_complex_into`.
-    pub fn forward_into(&self, input: &Array3<f64>, output: &mut Array3<Complex64>) {
-        self.forward_real_to_complex_into_full(input, output);
-    }
-
     /// Inverse transform of a full complex spectrum to a real field.
     #[must_use]
     pub fn inverse_complex_to_real(&self, input: &Array3<Complex64>) -> Array3<f64> {
@@ -386,16 +335,6 @@ impl FftPlan3D {
         Zip::from(output).and(scratch).for_each(|out, value| {
             *out = value.re;
         });
-    }
-
-    /// Compatibility alias for `inverse_complex_to_real_into`.
-    pub fn inverse_into(
-        &self,
-        input: &Array3<Complex64>,
-        output: &mut Array3<f64>,
-        scratch: &mut Array3<Complex64>,
-    ) {
-        self.inverse_complex_to_real_into(input, output, scratch);
     }
 
     /// Forward transform of a complex field in-place.
@@ -651,7 +590,7 @@ impl FftPlan3D {
             .scratch_y_64
             .lock()
             .expect("scratch_y_64 mutex poisoned");
-        // Cache-blocked gather: data[i,j,k] (row-major) → scratch[i,k,j].
+        // Cache-blocked gather: data[i,j,k] (row-major) â†’ scratch[i,k,j].
         // j-outer / k-inner: reads data_slice[i][j][k] sequentially in k (stride 1),
         // writes scratch[i][k][j] with stride ny. Strided stores buffer in the store
         // queue; strided loads stall the pipeline.
@@ -674,8 +613,8 @@ impl FftPlan3D {
             &self.twiddle_y_fwd_64,
             &self.twiddle_y_inv_64,
         ) {
-            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_ref()),
-            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_ref()),
+            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
+            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
                     fft_forward_64(lane)
@@ -689,7 +628,7 @@ impl FftPlan3D {
         } else {
             scratch.chunks_mut(self.ny).for_each(lane_fn_64);
         }
-        // Cache-blocked scatter: scratch[i,k,j] → data[i,j,k].
+        // Cache-blocked scatter: scratch[i,k,j] â†’ data[i,j,k].
         // j-outer / k-inner: writes data_slice[i][j][k] sequentially in k (stride 1),
         // reads scratch[i][k][j] with stride ny.
         for i in 0..self.nx {
@@ -716,7 +655,7 @@ impl FftPlan3D {
             .scratch_x_64
             .lock()
             .expect("scratch_x_64 mutex poisoned");
-        // Cache-blocked gather: data[i,j,k] → scratch[j,k,i].
+        // Cache-blocked gather: data[i,j,k] â†’ scratch[j,k,i].
         // i-outer loop: for each i reads data_slice[i][j][k] sequentially in k (stride 1),
         // writes scratch[j][k][i] with stride nx. Strided stores buffer in the store
         // queue; strided loads (stride ny*nz) stall the pipeline catastrophically.
@@ -740,8 +679,8 @@ impl FftPlan3D {
             &self.twiddle_x_fwd_64,
             &self.twiddle_x_inv_64,
         ) {
-            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_ref()),
-            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_ref()),
+            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
+            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
                     fft_forward_64(lane)
@@ -755,7 +694,7 @@ impl FftPlan3D {
         } else {
             scratch.chunks_mut(self.nx).for_each(lane_fn_64);
         }
-        // Cache-blocked scatter: scratch[j,k,i] → data[i,j,k].
+        // Cache-blocked scatter: scratch[j,k,i] â†’ data[i,j,k].
         // i-outer loop: writes data_slice[i][j][k] sequentially in k (stride 1),
         // reads scratch[j][k][i] with stride nx.
         for i in 0..self.nx {
@@ -787,8 +726,8 @@ impl FftPlan3D {
             &self.twiddle_z_fwd_64,
             &self.twiddle_z_inv_64,
         ) {
-            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_ref()),
-            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_ref()),
+            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
+            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
                     fft_forward_64(lane)
@@ -848,8 +787,8 @@ impl FftPlan3D {
             &self.twiddle_y_fwd_32,
             &self.twiddle_y_inv_32,
         ) {
-            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_ref()),
-            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_ref()),
+            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, Some(tw.as_ref())),
+            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
                     fft_forward_32(lane)
@@ -907,8 +846,8 @@ impl FftPlan3D {
             &self.twiddle_x_fwd_32,
             &self.twiddle_x_inv_32,
         ) {
-            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_ref()),
-            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_ref()),
+            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, Some(tw.as_ref())),
+            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
                     fft_forward_32(lane)
@@ -951,8 +890,8 @@ impl FftPlan3D {
             &self.twiddle_z_fwd_32,
             &self.twiddle_z_inv_32,
         ) {
-            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_ref()),
-            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_ref()),
+            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, Some(tw.as_ref())),
+            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
                     fft_forward_32(lane)
@@ -984,47 +923,47 @@ impl FftPlan3D {
         );
     }
 
-    // ── Real-to-Complex (R2C) and Complex-to-Real (C2R) transforms ──────────
+    // â”€â”€ Real-to-Complex (R2C) and Complex-to-Real (C2R) transforms â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// Forward real-to-complex 3D transform.
     ///
     /// # Mathematical Contract
     ///
-    /// For real `x ∈ ℝ^{nx × ny × nz}`, computes the unique half-spectrum
-    /// `X ∈ ℂ^{nx × ny × (nz/2+1)}`. The omitted conjugate-symmetric modes
+    /// For real `x âˆˆ â„^{nx Ã— ny Ã— nz}`, computes the unique half-spectrum
+    /// `X âˆˆ â„‚^{nx Ã— ny Ã— (nz/2+1)}`. The omitted conjugate-symmetric modes
     /// satisfy `X[kx,ky,kz] = X*[(-kx)%nx, (-ky)%ny, nz-kz]` for `kz > nz/2`.
     ///
-    /// ## Algorithm — Separable R2C via Cooley-Tukey Split (Sorensen et al. 1987)
+    /// ## Algorithm â€” Separable R2C via Cooley-Tukey Split (Sorensen et al. 1987)
     ///
-    /// **Z-axis (real → half-complex)**: For each (i,j) row:
-    /// 1. Pack real pairs: `h[k] = x[2k] + j·x[2k+1]` for `k = 0..m-1`, `m = nz/2`.
+    /// **Z-axis (real â†’ half-complex)**: For each (i,j) row:
+    /// 1. Pack real pairs: `h[k] = x[2k] + jÂ·x[2k+1]` for `k = 0..m-1`, `m = nz/2`.
     /// 2. Apply length-m complex FFT: `H = DFT_m(h)`.
     /// 3. Extract half-spectrum via the split identity (Theorem below):
-    ///    `X[k] = (H_k + H_mk*)/2 − j·W_k·(H_k − H_mk*)/2`
-    ///    where `H_k = H[k mod m]`, `H_mk = conj(H[(m−k) mod m])`,
-    ///    and `W_k = exp(−2πi·k/nz)` (precomputed in `r2c_twiddles_64`).
+    ///    `X[k] = (H_k + H_mk*)/2 âˆ’ jÂ·W_kÂ·(H_k âˆ’ H_mk*)/2`
+    ///    where `H_k = H[k mod m]`, `H_mk = conj(H[(mâˆ’k) mod m])`,
+    ///    and `W_k = exp(âˆ’2Ï€iÂ·k/nz)` (precomputed in `r2c_twiddles_64`).
     ///
     /// **Y-axis and X-axis**: Standard complex FFT passes on the `(nx,ny,nz_c)` data.
     ///
     /// ## Theorem: Cooley-Tukey R2C Split
     ///
-    /// For real `x[n]`, the N-point DFT splits as `X[k] = E[k] + W_N^k · O[k]`
+    /// For real `x[n]`, the N-point DFT splits as `X[k] = E[k] + W_N^k Â· O[k]`
     /// where `E[k]` and `O[k]` are M = N/2 point DFTs of even/odd samples.
-    /// Forming `h[k] = x[2k] + j·x[2k+1]` gives `H[k] = E[k] + j·O[k]`.
+    /// Forming `h[k] = x[2k] + jÂ·x[2k+1]` gives `H[k] = E[k] + jÂ·O[k]`.
     /// Hermitian symmetry of `E` and `O` (both DFTs of real sequences) gives
-    /// `E[M−k] = E[k]*` and `O[M−k] = O[k]*`, hence `H[(M−k)%M] = E[k]* + j·O[k]*`.
-    /// Therefore `E[k] = (H[k] + H[(M−k)%M]*)/2` and
-    /// `O[k] = (H[k] − H[(M−k)%M]*)/(2j)`, yielding the split formula above. □
+    /// `E[Mâˆ’k] = E[k]*` and `O[Mâˆ’k] = O[k]*`, hence `H[(Mâˆ’k)%M] = E[k]* + jÂ·O[k]*`.
+    /// Therefore `E[k] = (H[k] + H[(Mâˆ’k)%M]*)/2` and
+    /// `O[k] = (H[k] âˆ’ H[(Mâˆ’k)%M]*)/(2j)`, yielding the split formula above. â–¡
     ///
     /// ## Normalization
     ///
     /// Forward: no normalization (unnormalized DFT). Inverse `inverse_c2r_into`
-    /// normalizes by `1/(nx·ny·nz)`, matching FFTW convention.
+    /// normalizes by `1/(nxÂ·nyÂ·nz)`, matching FFTW convention.
     ///
     /// ## Correctness Invariant
     ///
     /// `inverse_c2r_into(forward_r2c_into(x), out, scratch)` recovers `x` with
-    /// absolute error `< 1e-10` for f64 on 64³ grids.
+    /// absolute error `< 1e-10` for f64 on 64Â³ grids.
     #[must_use]
     pub fn forward_r2c(&self, input: &Array3<f64>) -> Array3<Complex64> {
         let mut out = Array3::<Complex64>::zeros((self.nx, self.ny, self.nz_c));
@@ -1041,14 +980,14 @@ impl FftPlan3D {
         let nz_c = self.nz_c;
         let m = nz / 2;
 
-        // ── Step 1: Z-axis R2C pass ──────────────────────────────────────────
+        // â”€â”€ Step 1: Z-axis R2C pass â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         //
-        // nz == 1: trivial — cast each real sample to complex with zero imaginary
+        // nz == 1: trivial â€” cast each real sample to complex with zero imaginary
         // part (DC-only spectrum). No sub-FFT or Cooley-Tukey extraction needed.
         // Falls through to x/y FFT passes below so the full 3D transform is
         // computed even when nz == 1 (e.g. purely 1D or 2D grids).
         //
-        // nz > 1: split-radix r2c — processes each (i,j) row independently via
+        // nz > 1: split-radix r2c â€” processes each (i,j) row independently via
         // rayon par_chunks zip. Pack m complex values, FFT of length m,
         // Cooley-Tukey extraction.
         if nz == 1 {
@@ -1083,7 +1022,7 @@ impl FftPlan3D {
             }
         }
 
-        // ── Step 2: Y-axis complex FFT on (nx, ny, nz_c) data ───────────────
+        // â”€â”€ Step 2: Y-axis complex FFT on (nx, ny, nz_c) data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // r2c_axis1_pass_64 returns trivially when ny == 1.
         {
             let out_sl = output
@@ -1092,7 +1031,7 @@ impl FftPlan3D {
             self.r2c_axis1_pass_64(out_sl, true);
         }
 
-        // ── Step 3: X-axis complex FFT on (nx, ny, nz_c) data ───────────────
+        // â”€â”€ Step 3: X-axis complex FFT on (nx, ny, nz_c) data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // r2c_axis0_pass_64 returns trivially when nx == 1.
         {
             let out_sl = output
@@ -1106,24 +1045,24 @@ impl FftPlan3D {
     ///
     /// # Mathematical Contract
     ///
-    /// For `X ∈ ℂ^{nx × ny × (nz/2+1)}` (the r2c half-spectrum), recovers
-    /// `x ∈ ℝ^{nx × ny × nz}` via the conjugate-symmetric IDFT.
+    /// For `X âˆˆ â„‚^{nx Ã— ny Ã— (nz/2+1)}` (the r2c half-spectrum), recovers
+    /// `x âˆˆ â„^{nx Ã— ny Ã— nz}` via the conjugate-symmetric IDFT.
     ///
-    /// ## Algorithm — Inverse Cooley-Tukey Split
+    /// ## Algorithm â€” Inverse Cooley-Tukey Split
     ///
     /// **X-axis and Y-axis**: Standard complex IFFT passes on `(nx,ny,nz_c)`.
     ///
-    /// **Z-axis (half-complex → real)**: For each (i,j) row:
+    /// **Z-axis (half-complex â†’ real)**: For each (i,j) row:
     /// 1. Recover H[k] from X[0..m] using the inverse split formula:
-    ///    `H[k] = (X[k] + conj(X[(m−k)%m]) + j·W_k* · (X[k] − conj(X[(m−k)%m]))) / 2`
-    ///    where `W_k* = conj(exp(−2πi·k/nz)) = exp(+2πi·k/nz)`.
+    ///    `H[k] = (X[k] + conj(X[(mâˆ’k)%m]) + jÂ·W_k* Â· (X[k] âˆ’ conj(X[(mâˆ’k)%m]))) / 2`
+    ///    where `W_k* = conj(exp(âˆ’2Ï€iÂ·k/nz)) = exp(+2Ï€iÂ·k/nz)`.
     /// 2. Apply normalized length-m IFFT: `h = IFFT_m(H)` (divides by m).
-    /// 3. Extract: `x[2k] = Re(h[k])/2`, `x[2k+1] = Im(h[k])/2` for k=0..m-1.
-    ///    The `/2` corrects for the 1/m normalization of the sub-IFFT (we want
-    ///    total z-axis normalization `1/nz = 1/(2m)`).
+    /// 3. Extract: `x[2k] = Re(h[k])`, `x[2k+1] = Im(h[k])` for k=0..m-1.
+    ///    The inverse split recovers the packed length-m spectrum exactly; the
+    ///    normalized length-m IFFT then recovers the packed real-pair sequence.
     ///
     /// Combined with the x- and y-axis IFFT normalizations by `1/nx` and `1/ny`,
-    /// the total normalization is `1/(nx·ny·nz)`. □
+    /// the total normalization is `1/(nxÂ·nyÂ·nz)`. â–¡
     #[must_use]
     pub fn inverse_c2r(&self, input: &Array3<Complex64>) -> Array3<f64> {
         let mut out = Array3::<f64>::zeros((self.nx, self.ny, self.nz));
@@ -1158,7 +1097,7 @@ impl FftPlan3D {
         let nz_c = self.nz_c;
         let m = nz / 2;
 
-        // ── Step 1: X-axis complex IFFT on (nx, ny, nz_c) data ──────────────
+        // â”€â”€ Step 1: X-axis complex IFFT on (nx, ny, nz_c) data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // r2c_axis0_pass_64 returns trivially when nx == 1.
         // Applies normalization 1/nx.
         {
@@ -1168,7 +1107,7 @@ impl FftPlan3D {
             self.r2c_axis0_pass_64(sc_sl, false);
         }
 
-        // ── Step 2: Y-axis complex IFFT on (nx, ny, nz_c) data ──────────────
+        // â”€â”€ Step 2: Y-axis complex IFFT on (nx, ny, nz_c) data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // r2c_axis1_pass_64 returns trivially when ny == 1.
         // Applies normalization 1/ny.
         {
@@ -1178,14 +1117,14 @@ impl FftPlan3D {
             self.r2c_axis1_pass_64(sc_sl, false);
         }
 
-        // ── Step 3: Z-axis C2R pass ──────────────────────────────────────────
+        // â”€â”€ Step 3: Z-axis C2R pass â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         //
-        // nz == 1: trivial — extract the real part of each DC-bin complex sample.
+        // nz == 1: trivial â€” extract the real part of each DC-bin complex sample.
         // Steps 1 and 2 above already applied 1/nx and 1/ny normalization, so no
-        // additional factor is needed here (total = 1/(nx·ny·1) = 1/(nx·ny·nz)).
+        // additional factor is needed here (total = 1/(nxÂ·nyÂ·1) = 1/(nxÂ·nyÂ·nz)).
         //
-        // nz > 1: split-radix c2r — inverse Cooley-Tukey extraction + length-m
-        // IFFT (applies 1/(2m) = 1/nz normalization) → total 1/(nx·ny·nz). □
+        // nz > 1: split-radix c2r â€” inverse Cooley-Tukey extraction + length-m
+        // IFFT (applies 1/(2m) = 1/nz normalization) â†’ total 1/(nxÂ·nyÂ·nz). â–¡
         if nz == 1 {
             ndarray::Zip::from(output)
                 .and(&*scratch)
@@ -1194,7 +1133,7 @@ impl FftPlan3D {
                 });
         } else {
             let sc_sl = scratch
-                .as_slice_memory_order()
+                .as_slice_memory_order_mut()
                 .expect("c2r scratch must be contiguous");
             let out_sl = output
                 .as_slice_memory_order_mut()
@@ -1203,14 +1142,14 @@ impl FftPlan3D {
             let large = n_rows > RAYON_THRESHOLD / nz_c.max(1);
             if large {
                 sc_sl
-                    .par_chunks(nz_c)
+                    .par_chunks_mut(nz_c)
                     .zip(out_sl.par_chunks_mut(nz))
                     .for_each(|(in_row, out_row)| {
                         self.r2c_z_inverse_row_64(in_row, out_row, m);
                     });
             } else {
                 sc_sl
-                    .chunks(nz_c)
+                    .chunks_mut(nz_c)
                     .zip(out_sl.chunks_mut(nz))
                     .for_each(|(in_row, out_row)| {
                         self.r2c_z_inverse_row_64(in_row, out_row, m);
@@ -1223,28 +1162,27 @@ impl FftPlan3D {
     ///
     /// `in_row` has `nz` f64 values; `out_row` receives `nz_c = m+1` Complex64 values.
     fn r2c_z_forward_row_64(&self, in_row: &[f64], out_row: &mut [Complex64], m: usize) {
-        let nz = self.nz;
-
-        // Stage 1: pack pairs → complex of length m.
-        let mut h: Vec<Complex64> = (0..m)
-            .map(|k| Complex64::new(in_row[2 * k], in_row[2 * k + 1]))
-            .collect();
+        // Stage 1: pack pairs into the caller-owned output row prefix.
+        for k in 0..m {
+            out_row[k] = Complex64::new(in_row[2 * k], in_row[2 * k + 1]);
+        }
 
         // Stage 2: length-m complex FFT in-place.
         match &self.twiddle_zh_fwd_64 {
-            Some(tw) => forward_inplace_64_with_twiddles(&mut h, tw.as_ref()),
-            None => fft_forward_64(&mut h),
+            Some(tw) => forward_inplace_64_with_twiddles(&mut out_row[..m], Some(tw.as_ref())),
+            None => fft_forward_64(&mut out_row[..m]),
         }
 
-        // Stage 3: Cooley-Tukey extraction — X[k] for k = 0..m (inclusive).
-        // X[k] = (H_k + H_mk*) / 2 − j·W_k·(H_k − H_mk*) / 2
-        // where H_k = h[k % m] and H_mk = conj(h[(m−k) % m]).
+        // Stage 3: Cooley-Tukey extraction â€” X[k] for k = 0..m (inclusive).
+        // X[k] = (H_k + H_mk*) / 2 âˆ’ jÂ·W_kÂ·(H_k âˆ’ H_mk*) / 2
+        // where H_k = h[k % m] and H_mk = conj(h[(mâˆ’k) % m]).
         // Process pairs simultaneously to avoid read-after-write aliasing.
         let j = Complex64::new(0.0, 1.0);
 
+        let h0 = out_row[0];
+
         // k = 0: H_0 = h[0], H_m0 = conj(h[0]).
         {
-            let h0 = h[0];
             let hm0_conj = h0.conj(); // conj(h[(m-0)%m]) = conj(h[0])
             let wk = self.r2c_twiddles_64[0]; // W_0 = 1
             let sum = h0 + hm0_conj;
@@ -1254,20 +1192,19 @@ impl FftPlan3D {
 
         // k = m: H_km = h[0] (same slot), H_mk = conj(h[0]).
         {
-            let h0 = h[0];
             let hm_conj = h0.conj();
-            let wk = self.r2c_twiddles_64[m]; // W_m = exp(−πi) = −1
+            let wk = self.r2c_twiddles_64[m]; // W_m = exp(âˆ’Ï€i) = âˆ’1
             let sum = h0 + hm_conj;
             let diff = h0 - hm_conj;
             out_row[m] = sum * 0.5 - j * wk * diff * 0.5;
         }
 
         // k = 1..m/2 and symmetric counterpart m-k (processed as pairs).
-        let k_max = m / 2 + if m % 2 == 1 { 1 } else { 0 };
+        let k_max = m / 2 + usize::from(m % 2 == 1);
         for k in 1..k_max {
             let mk = m - k;
-            let hk = h[k];
-            let hmk = h[mk]; // h[(m-k)]
+            let hk = out_row[k];
+            let hmk = out_row[mk]; // h[(m-k)]
             let wk = self.r2c_twiddles_64[k];
             let wmk = self.r2c_twiddles_64[mk];
 
@@ -1278,7 +1215,7 @@ impl FftPlan3D {
             out_row[k] = sum_k * 0.5 - j * wk * diff_k * 0.5;
 
             if k != mk {
-                // X[m-k] — distinct slot, process as pair.
+                // X[m-k] â€” distinct slot, process as pair.
                 let hk_conj = hk.conj();
                 let sum_mk = hmk + hk_conj;
                 let diff_mk = hmk - hk_conj;
@@ -1289,15 +1226,13 @@ impl FftPlan3D {
         // When m is even, k = m/2 is its own symmetric partner.
         if m % 2 == 0 && m >= 2 {
             let k = m / 2;
-            let hk = h[k];
+            let hk = out_row[k];
             let wk = self.r2c_twiddles_64[k];
             let hk_conj = hk.conj();
             let sum_k = hk + hk_conj;
             let diff_k = hk - hk_conj;
             out_row[k] = sum_k * 0.5 - j * wk * diff_k * 0.5;
         }
-
-        let _ = nz; // suppress unused warning when nz used only via m
     }
 
     /// Z-axis c2r inverse for a single row: inverse split + sub-IFFT + unpack.
@@ -1306,21 +1241,17 @@ impl FftPlan3D {
     /// `out_row` receives `nz` f64 values.
     ///
     /// Normalization: each output value is divided by `nz` so that combined with
-    /// the x-axis (÷nx) and y-axis (÷ny) IFFT normalizations, the total is `÷(nx·ny·nz)`.
-    fn r2c_z_inverse_row_64(&self, in_row: &[Complex64], out_row: &mut [f64], m: usize) {
-        let nz = self.nz;
-
+    /// the x-axis (Ã·nx) and y-axis (Ã·ny) IFFT normalizations, the total is `Ã·(nxÂ·nyÂ·nz)`.
+    fn r2c_z_inverse_row_64(&self, in_row: &mut [Complex64], out_row: &mut [f64], m: usize) {
         // Stage 1: Recover H[k] for k = 0..m-1 from X[0..m] using the inverse split.
         //
-        // Theorem (inverse split): from X[k] = (H_k + H_mk*)/2 − j·W_k·(H_k − H_mk*)/2
-        // and X[m−k] = (H_mk + H_k*)/2 + j·conj(W_k)·(H_mk − H_k*)/2, solving gives:
-        //   H[k] = (X[k] + conj(X[m−k]) + j·conj(W_k)·(X[k] − conj(X[m−k]))) / 2
-        // for k = 0..m−1, where conj(W_k) = exp(+2πi·k/nz) and X[m−k] is at index
-        // m−k in the nz_c = m+1 half-spectrum (k=0 uses X[m], the Nyquist bin). □
+        // Theorem (inverse split): from X[k] = (H_k + H_mk*)/2 âˆ’ jÂ·W_kÂ·(H_k âˆ’ H_mk*)/2
+        // and X[mâˆ’k] = (H_mk + H_k*)/2 + jÂ·conj(W_k)Â·(H_mk âˆ’ H_k*)/2, solving gives:
+        //   H[k] = (X[k] + conj(X[mâˆ’k]) + jÂ·conj(W_k)Â·(X[k] âˆ’ conj(X[mâˆ’k]))) / 2
+        // for k = 0..mâˆ’1, where conj(W_k) = exp(+2Ï€iÂ·k/nz) and X[mâˆ’k] is at index
+        // mâˆ’k in the nz_c = m+1 half-spectrum (k=0 uses X[m], the Nyquist bin). â–¡
 
         let j = Complex64::new(0.0, 1.0);
-
-        let mut h: Vec<Complex64> = vec![Complex64::default(); m];
 
         // k = 0: conj(X[m-0]) = conj(X[m]).
         //
@@ -1328,32 +1259,33 @@ impl FftPlan3D {
         // For real input X[m] is real, so conj(X[m]) = X[m].
         // conj(W_0) = conj(1) = 1.
         //
-        // Derivation: X[0] = Re{H[0]} + Im{H[0]}, X[m] = Re{H[0]} − Im{H[0]}.
-        // H[0] = (X[0] + X[m])/2 + j·(X[0] − X[m])/2, which matches the general
+        // Derivation: X[0] = Re{H[0]} + Im{H[0]}, X[m] = Re{H[0]} âˆ’ Im{H[0]}.
+        // H[0] = (X[0] + X[m])/2 + jÂ·(X[0] âˆ’ X[m])/2, which matches the general
         // formula with xmk_conj = conj(X[m]).
         {
             let xk = in_row[0];
             let xmk_conj = in_row[m].conj(); // X[m] is at index m in the half-spectrum
             let w_conj = self.r2c_twiddles_64[0].conj(); // = 1
-            h[0] = (xk + xmk_conj + j * w_conj * (xk - xmk_conj)) * 0.5;
+            in_row[0] = (xk + xmk_conj + j * w_conj * (xk - xmk_conj)) * 0.5;
         }
 
         // k = 1..m-1: symmetric pairs.
-        let k_max = m / 2 + if m % 2 == 1 { 1 } else { 0 };
+        let k_max = m / 2 + usize::from(m % 2 == 1);
         for k in 1..k_max {
             let mk = m - k;
             let xk = in_row[k];
             let xmk_conj = in_row[mk].conj();
-            let w_conj = self.r2c_twiddles_64[k].conj(); // exp(+2πi·k/nz)
+            let w_conj = self.r2c_twiddles_64[k].conj(); // exp(+2Ï€iÂ·k/nz)
 
-            h[k] = (xk + xmk_conj + j * w_conj * (xk - xmk_conj)) * 0.5;
+            let h_k = (xk + xmk_conj + j * w_conj * (xk - xmk_conj)) * 0.5;
 
             if k != mk {
                 let xmk = in_row[mk];
                 let xk_conj = in_row[k].conj();
                 let wm_conj = self.r2c_twiddles_64[mk].conj();
-                h[mk] = (xmk + xk_conj + j * wm_conj * (xmk - xk_conj)) * 0.5;
+                in_row[mk] = (xmk + xk_conj + j * wm_conj * (xmk - xk_conj)) * 0.5;
             }
+            in_row[k] = h_k;
         }
 
         // k = m/2 singleton (even m).
@@ -1362,32 +1294,30 @@ impl FftPlan3D {
             let xk = in_row[k];
             let xmk_conj = in_row[k].conj(); // self-conjugate slot
             let w_conj = self.r2c_twiddles_64[k].conj();
-            h[k] = (xk + xmk_conj + j * w_conj * (xk - xmk_conj)) * 0.5;
+            in_row[k] = (xk + xmk_conj + j * w_conj * (xk - xmk_conj)) * 0.5;
         }
 
         // Stage 2: normalized IFFT of length m in-place.
         match &self.twiddle_zh_inv_64 {
-            Some(tw) => inverse_inplace_64_with_twiddles(&mut h, tw.as_ref()),
-            None => fft_inverse_64(&mut h),
+            Some(tw) => inverse_inplace_64_with_twiddles(&mut in_row[..m], Some(tw.as_ref())),
+            None => fft_inverse_64(&mut in_row[..m]),
         }
 
-        // Stage 3: unpack h[k] → out_row[2k], out_row[2k+1].
+        // Stage 3: unpack h[k] â†’ out_row[2k], out_row[2k+1].
         //
         // No additional scaling factor. The normalized IFFT_m satisfies
         //   IFFT_m(FFT_m(h)) = h
         // so stage 2 recovers h exactly. The forward z r2c packs
-        // h[n] = x[2n] + j·x[2n+1] and applies an unnormalized FFT_m;
+        // h[n] = x[2n] + jÂ·x[2n+1] and applies an unnormalized FFT_m;
         // stage 1 recovers H_true, stage 2 recovers h_true; unpacking gives
         // x back directly. No residual normalization factor arises here: the
         // z-axis forward/inverse pair is its own identity (H_true recovered via
         // the inverse split, IFFT_m cancels FFT_m). The x- and y-axis normalized
         // IFFTs in the outer c2r caller cancel their respective DFTs identically.
         for k in 0..m {
-            out_row[2 * k] = h[k].re;
-            out_row[2 * k + 1] = h[k].im;
+            out_row[2 * k] = in_row[k].re;
+            out_row[2 * k + 1] = in_row[k].im;
         }
-
-        let _ = nz; // suppress unused warning
     }
 
     /// Y-axis (axis-1) complex FFT/IFFT pass on `(nx, ny, nz_c)` half-spectrum data.
@@ -1407,7 +1337,7 @@ impl FftPlan3D {
             .lock()
             .expect("scratch_r2c_y_64 mutex poisoned");
 
-        // Cache-blocked gather: data[i,j,k] → scratch[i,k,j] (transpose j↔k).
+        // Cache-blocked gather: data[i,j,k] â†’ scratch[i,k,j] (transpose jâ†”k).
         for i in 0..nx {
             for j_t in (0..ny).step_by(GATHER_TILE) {
                 let j_end = (j_t + GATHER_TILE).min(ny);
@@ -1428,8 +1358,8 @@ impl FftPlan3D {
             &self.twiddle_y_fwd_64,
             &self.twiddle_y_inv_64,
         ) {
-            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_ref()),
-            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_ref()),
+            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
+            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
                     fft_forward_64(lane);
@@ -1445,7 +1375,7 @@ impl FftPlan3D {
             scratch[..total].chunks_mut(ny).for_each(lane_fn);
         }
 
-        // Cache-blocked scatter: scratch[i,k,j] → data[i,j,k].
+        // Cache-blocked scatter: scratch[i,k,j] â†’ data[i,j,k].
         for i in 0..nx {
             for j_t in (0..ny).step_by(GATHER_TILE) {
                 let j_end = (j_t + GATHER_TILE).min(ny);
@@ -1476,7 +1406,7 @@ impl FftPlan3D {
             .lock()
             .expect("scratch_r2c_x_64 mutex poisoned");
 
-        // Cache-blocked gather: data[i,j,k] → scratch[j,k,i].
+        // Cache-blocked gather: data[i,j,k] â†’ scratch[j,k,i].
         for i in 0..nx {
             let src_base = i * ny * nz_c;
             for j_t in (0..ny).step_by(GATHER_TILE) {
@@ -1498,8 +1428,8 @@ impl FftPlan3D {
             &self.twiddle_x_fwd_64,
             &self.twiddle_x_inv_64,
         ) {
-            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_ref()),
-            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_ref()),
+            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
+            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
                     fft_forward_64(lane);
@@ -1515,7 +1445,7 @@ impl FftPlan3D {
             scratch[..total].chunks_mut(nx).for_each(lane_fn);
         }
 
-        // Cache-blocked scatter: scratch[j,k,i] → data[i,j,k].
+        // Cache-blocked scatter: scratch[j,k,i] â†’ data[i,j,k].
         for i in 0..nx {
             let dst_base = i * ny * nz_c;
             for j_t in (0..ny).step_by(GATHER_TILE) {
@@ -1747,12 +1677,12 @@ mod tests {
         }
     }
 
-    /// Parseval identity for r2c: sum|x|² == sum|X_half|² * 2 / (nx*ny*nz), eps 1e-6.
+    /// Parseval identity for r2c: sum|x|Â² == sum|X_half|Â² * 2 / (nx*ny*nz), eps 1e-6.
     ///
-    /// For real x, the full spectrum satisfies sum|X|² = nx*ny*nz * sum|x|².
+    /// For real x, the full spectrum satisfies sum|X|Â² = nx*ny*nz * sum|x|Â².
     /// The half-spectrum has nz_c = nz/2+1 slabs; the interior slabs (k=1..nz/2-1)
     /// are duplicated (Hermitian symmetry), so their energy counts double:
-    ///   sum|x|² = [|X[*,*,0]|² + |X[*,*,nz/2]|² + 2*sum_{k=1}^{nz/2-1} |X[*,*,k]|²] / (nx*ny*nz)
+    ///   sum|x|Â² = [|X[*,*,0]|Â² + |X[*,*,nz/2]|Â² + 2*sum_{k=1}^{nz/2-1} |X[*,*,k]|Â²] / (nx*ny*nz)
     #[test]
     fn r2c_parseval_holds() {
         let (nx, ny, nz) = (8usize, 6usize, 8usize);
@@ -1816,7 +1746,7 @@ mod tests {
     ///
     /// Physical motivation: kwavers 1D PSTD simulations use (nx, 1, 1) grids;
     /// the bug this test guards against caused `forward_r2c_into` to return
-    /// after a real→complex cast without performing the x-axis FFT, making
+    /// after a realâ†’complex cast without performing the x-axis FFT, making
     /// every spectral derivative zero and the solver a no-op.
     #[test]
     fn r2c_roundtrip_nz1_1d_grid() {

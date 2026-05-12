@@ -30,9 +30,7 @@
 //! - oversampling factor must satisfy `sigma >= 2`
 //! - kernel width must satisfy `kernel_width >= 2`
 
-use apollo_fft::application::plan::FftPlan1D;
-use apollo_fft::error::{ApolloError, ApolloResult};
-use apollo_fft::types::{PrecisionProfile, Shape1D};
+use apollo_fft::{ApolloError, ApolloResult, FftPlan1D, PrecisionProfile, Shape1D};
 use ndarray::{Array1, Array3};
 use num_complex::Complex64;
 use std::cmp::Ordering;

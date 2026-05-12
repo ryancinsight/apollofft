@@ -8,8 +8,8 @@
 //!
 //! This crate owns Hilbert-domain contracts, analytic-signal storage,
 //! frequency-domain masking kernels, and value-semantic verification. The
-//! implementation uses Apollo-owned direct DFT/IDFT kernels and does not
-//! depend on an external FFT implementation.
+//! implementation uses Apollo FFT plan execution rather than private
+//! transform kernels.
 
 /// Application-layer Hilbert plans.
 pub mod application;
@@ -24,4 +24,6 @@ pub use application::execution::plan::hilbert::{HilbertPlan, HilbertStorage};
 pub use domain::contracts::error::{HilbertError, HilbertResult};
 pub use domain::metadata::length::SignalLength;
 pub use domain::signal::analytic::AnalyticSignal;
-pub use infrastructure::kernel::direct::{analytic_signal, hilbert_transform};
+pub use infrastructure::kernel::direct::{
+    analytic_signal, analytic_signal_into, hilbert_transform,
+};

@@ -22,6 +22,30 @@
 //!
 //! # Complexity
 //!
+//! 2D FFT plan.
+//!
+//! Apollo-owned 2D FFT implementation.
+//!
+//! The 2D DFT is separable, so this plan applies the in-repo auto-selected 1D
+//! FFT kernel across rows and columns. The inverse path is normalized on each
+//! inverse axis pass, which gives the standard `1 / (nx * ny)` inverse
+//! normalization.
+//!
+//! # Mathematical contract
+//!
+//! For a complex input field `x in C^(nx x ny)`, the forward transform is
+//!
+//! `X[k,l] = sum_i sum_j x[i,j] exp(-2*pi*i*(k*i/nx + l*j/ny))`.
+//!
+//! The inverse transform is
+//!
+//! `x[i,j] = (1/(nx*ny)) sum_k sum_l X[k,l] exp(2*pi*i*(k*i/nx + l*j/ny))`.
+//!
+//! The implementation is linear and separable. Floating-point error follows
+//! from the selected scalar precision and the selected 1D FFT kernel.
+//!
+//! # Complexity
+//!
 //! Let `C(n)` be the selected 1D FFT cost. The plan costs
 //! `O(ny * C(nx) + nx * C(ny))`, with `C(n) = O(n log n)` for both radix-2 and
 //! Bluestein plan paths. Contiguous innermost-axis passes mutate row chunks in
@@ -29,13 +53,9 @@
 //! scattering them back.
 
 use crate::application::execution::kernel::mixed_radix::{
-    cached_twiddle_fwd_32, cached_twiddle_fwd_64, cached_twiddle_inv_32,
-    cached_twiddle_inv_64,
-};
-use crate::application::execution::kernel::radix2::{
-    forward_inplace_32_with_twiddles,
-    forward_inplace_64_with_twiddles, inverse_inplace_32_with_twiddles,
-    inverse_inplace_64_with_twiddles,
+    cached_twiddle_fwd_32, cached_twiddle_fwd_64, cached_twiddle_inv_32, cached_twiddle_inv_64,
+    forward_inplace_32_with_twiddles, forward_inplace_64_with_twiddles,
+    inverse_inplace_32_with_twiddles, inverse_inplace_64_with_twiddles,
 };
 use crate::application::execution::kernel::{
     fft_forward_32, fft_forward_64, fft_inverse_32, fft_inverse_64,
@@ -55,8 +75,8 @@ use crate::domain::metadata::shape::Shape2D;
 use half::f16;
 use ndarray::{Array2, Axis, Zip};
 use num_complex::{Complex32, Complex64};
-use std::sync::Arc;
 use rayon::prelude::*;
+use std::sync::Arc;
 
 /// Reusable 2D FFT plan.
 ///
@@ -239,11 +259,6 @@ impl FftPlan2D {
         self.forward_complex_inplace(output);
     }
 
-    /// Compatibility alias for `forward_real_to_complex_into`.
-    pub fn forward_into(&self, input: &Array2<f64>, output: &mut Array2<Complex64>) {
-        self.forward_real_to_complex_into(input, output);
-    }
-
     /// Inverse transform returning a real array.
     #[must_use]
     pub fn inverse_complex_to_real(&self, input: &Array2<Complex64>) -> Array2<f64> {
@@ -301,16 +316,6 @@ impl FftPlan2D {
         Zip::from(output).and(&transformed).for_each(|out, value| {
             *out = value.re;
         });
-    }
-
-    /// Compatibility alias for `inverse_complex_to_real_into`.
-    pub fn inverse_into(
-        &self,
-        input: &Array2<Complex64>,
-        output: &mut Array2<f64>,
-        scratch: &mut Array2<Complex64>,
-    ) {
-        self.inverse_complex_to_real_into(input, output, scratch);
     }
 
     /// Forward transform of a complex array in-place.
@@ -423,23 +428,7 @@ impl FftPlan2D {
             return;
         }
 
-        let mut lanes: Vec<Vec<Complex64>> = data
-            .lanes(axis)
-            .into_iter()
-            .map(|lane| lane.to_vec())
-            .collect();
-        lanes.par_iter_mut().for_each(|lane| {
-            if forward {
-                fft_forward_64(lane);
-            } else {
-                fft_inverse_64(lane);
-            }
-        });
-        for (mut lane, values) in data.lanes_mut(axis).into_iter().zip(lanes.into_iter()) {
-            for (slot, value) in lane.iter_mut().zip(values.into_iter()) {
-                *slot = value;
-            }
-        }
+        unreachable!("2D FFT axis index must be 0 or 1");
     }
 
     fn axis1_pass_complex(&self, data: &mut Array2<Complex64>, forward: bool) {
@@ -451,8 +440,8 @@ impl FftPlan2D {
             &self.twiddle_row_fwd_64,
             &self.twiddle_row_inv_64,
         ) {
-            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_ref()),
-            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_ref()),
+            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
+            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
                     fft_forward_64(lane)
@@ -495,8 +484,8 @@ impl FftPlan2D {
             &self.twiddle_col_fwd_64,
             &self.twiddle_col_inv_64,
         ) {
-            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, tw.as_ref()),
-            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, tw.as_ref()),
+            (true, Some(tw), _) => forward_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
+            (false, _, Some(tw)) => inverse_inplace_64_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
                     fft_forward_64(lane)
@@ -544,23 +533,7 @@ impl FftPlan2D {
             return;
         }
 
-        let mut lanes: Vec<Vec<Complex32>> = data
-            .lanes(axis)
-            .into_iter()
-            .map(|lane| lane.to_vec())
-            .collect();
-        lanes.par_iter_mut().for_each(|lane| {
-            if forward {
-                fft_forward_32(lane);
-            } else {
-                fft_inverse_32(lane);
-            }
-        });
-        for (mut lane, values) in data.lanes_mut(axis).into_iter().zip(lanes.into_iter()) {
-            for (slot, value) in lane.iter_mut().zip(values.into_iter()) {
-                *slot = value;
-            }
-        }
+        unreachable!("2D FFT axis index must be 0 or 1");
     }
 
     fn axis1_pass_complex_f32(&self, data: &mut Array2<Complex32>, forward: bool) {
@@ -572,8 +545,8 @@ impl FftPlan2D {
             &self.twiddle_row_fwd_32,
             &self.twiddle_row_inv_32,
         ) {
-            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_ref()),
-            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_ref()),
+            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, Some(tw.as_ref())),
+            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
                     fft_forward_32(lane)
@@ -613,8 +586,8 @@ impl FftPlan2D {
             &self.twiddle_col_fwd_32,
             &self.twiddle_col_inv_32,
         ) {
-            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, tw.as_ref()),
-            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, tw.as_ref()),
+            (true, Some(tw), _) => forward_inplace_32_with_twiddles(lane, Some(tw.as_ref())),
+            (false, _, Some(tw)) => inverse_inplace_32_with_twiddles(lane, Some(tw.as_ref())),
             _ => {
                 if forward {
                     fft_forward_32(lane)

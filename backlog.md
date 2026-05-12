@@ -1,5 +1,300 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure LV phase)
+- [x] [minor] Add caller-owned `apollo-hilbert` analytic observable
+  projections and route envelope/phase through reusable analytic scratch.
+  `AnalyticSignal` now exposes `*_into` projection methods for real,
+  quadrature, envelope, phase, and instantaneous frequency; allocating
+  projection methods delegate to the same non-generic helpers; `HilbertPlan`
+  exposes `envelope_into` and `phase_into`; plan-level envelope/phase avoid
+  per-call owned analytic vectors; parity/mismatch/capacity tests cover the new
+  paths; and `apollo-hilbert` was bumped to 0.3.0.
+- [x] [minor] Add caller-owned `apollo-hilbert` analytic-signal execution and
+  remove per-call analytic allocation from caller-owned quadrature. The direct
+  kernel now exposes `analytic_signal_into`, `HilbertPlan` exposes
+  `analytic_signal_into`, owned analytic execution routes through the
+  caller-owned path, quadrature projection reuses a thread-local Complex64
+  analytic scratch buffer, crate-root docs no longer claim private DFT
+  ownership, parity/capacity/mismatch tests cover the new paths, and
+  `apollo-hilbert` was bumped to 0.2.0.
+- [x] [minor] Add `apollo-fft` 1D real-forward slice execution and remove the
+  final `apollo-hilbert` ndarray input bridge. `FftPlan1D` now exposes one
+  non-generic caller-owned slice path that the existing ndarray path delegates
+  to, Hilbert analytic-signal execution uses the cached FFT plan directly on
+  real slices, 1D precision methods and tests were split into leaf modules so
+  `dimension_1d.rs` stays below 500 lines, `apollo-hilbert` no longer depends
+  on `ndarray`, `apollo-fft` was bumped to 0.3.0, and `apollo-hilbert` was
+  bumped to 0.1.4.
+- [x] [patch] Remove `apollo-hilbert` analytic-signal spectrum and inverse
+  copy allocations. The owner kernel now keeps the forward FFT output as the
+  analytic spectrum, applies the Hilbert mask in place, runs the complex
+  inverse in place, moves the contiguous buffer out once for the allocating
+  API, routes owned quadrature through the caller-owned writer, and bumps
+  `apollo-hilbert` to 0.1.3.
+- [x] [patch] Remove `apollo-hilbert` caller-owned quadrature copy-through
+  allocation and dead direct `rayon` dependency. The owner kernel now exposes a
+  slice-level quadrature writer, `HilbertPlan::transform_into` routes through
+  it, typed transform workspaces inherit the allocation reduction, direct
+  kernel parity/mismatch tests cover the new path, and `apollo-hilbert` was
+  bumped to 0.1.2.
+- [x] [patch] Remove `apollo-hilbert` typed quadrature and analytic input
+  bridge allocations. Typed Hilbert `f32`/`f16` paths now reuse thread-local
+  f64 input/output workspaces, keep `f64` storage on the zero-copy owner path,
+  preserve shared analytic-mask execution, add repeated-call capacity/value
+  coverage, and bump `apollo-hilbert` to 0.1.1.
+- [x] [patch] Remove `apollo-sdft` typed direct-bin bridge allocations. Typed
+  direct-bin execution now reuses thread-local f64 input and Complex64 output
+  workspaces, keeps arithmetic in the shared direct-bin owner kernel, adds
+  repeated-call capacity/value coverage, and bumps `apollo-sdft` to 0.1.1.
+- [x] [patch] Remove `apollo-stft` inverse WOLA per-call workspace
+  allocations. `inverse_into`, `inverse`, and typed inverse now reuse
+  thread-local frame, complex, overlap, and weight workspaces through the
+  shared slice-level inverse owner path; repeated-call value tests prove
+  capacity reuse; the ADR now reflects the owner inverse workspace design; and
+  `apollo-stft` was bumped to 0.2.1.
+- [x] [major] Remove `apollo-stft` per-call typed bridge allocations and
+  deprecated allocating alias methods. STFT typed forward/inverse now reuse
+  thread-local f64/Complex64 bridge workspaces through shared slice-level
+  kernels, storage/profile traits moved to a dedicated leaf module, the 1D
+  plan file is below the 500-line structural limit, a co-located ADR records
+  the breaking cleanup, and `apollo-stft` was bumped to 0.2.0.
+- [x] [patch] Remove `apollo-qft` plan-path dense output allocation and typed
+  Complex64 bridge allocations. QFT dense kernels now expose caller-owned
+  output execution, plan `forward_into`/`inverse_into` route through slices,
+  typed paths reuse thread-local Complex64 input/output workspaces, and
+  `apollo-qft` was bumped to 0.1.1.
+- [x] [patch] Remove per-call `apollo-gft` typed storage f64 bridge
+  allocations. GFT typed paths now reuse thread-local f64 input/output
+  workspaces through slice-level graph-basis multiply, and `apollo-gft` was
+  bumped to 0.1.1.
+- [x] [patch] Remove per-call `apollo-fwht` typed storage bridge and f16
+  compute allocations. FWHT typed defaults now reuse thread-local f64
+  input/output workspaces through slice-level f64 execution, mixed f16 paths
+  reuse a thread-local f32 compute workspace, and `apollo-fwht` was bumped to
+  0.1.1.
+- [x] [patch] Remove per-call `apollo-czt` plan-path convolution and typed
+  bridge allocations. `CztPlan` now owns a reusable Bluestein convolution
+  workspace, precomputes square-plan inverse Vandermonde nodes, exposes
+  internal Complex64 slice execution for typed storage, and reuses thread-local
+  Complex64 typed input/output workspaces. `apollo-czt` was bumped to 0.2.1.
+- [x] [patch] Remove newly surfaced `apollo-fft` dead radix-2 butterfly helper
+  section after the Stockham path became canonical, add missing `FftPlan3D`
+  Rustdoc, and bump `apollo-fft` to 0.2.2.
+- [x] [patch] Remove per-call `apollo-frft` typed-storage Complex64 bridge
+  allocations. `Complex32` and `[f16; 2]` FrFT paths now reuse thread-local
+  Complex64 input/output workspaces and call internal slice entry points on the
+  canonical direct FrFT kernel, eliminating two O(N) heap allocations per typed
+  forward/inverse call. `apollo-frft` was bumped to 0.1.2.
+- [x] [patch] Restore `apollo-fft` dependency compilation after current module
+  header drift. Reinstated the kernel module declarations/`FftPrecision` trait
+  header and imported `radix2_f16` in `mixed_radix`; `apollo-fft` was bumped to
+  0.2.1.
+- [x] [patch] Remove current `apollo-fft` dead generic helper surface. Deleted
+  the unused f16 with-twiddles bridge, obsolete uniform power-of-two
+  digit-reversal helper, obsolete power-of-four/eight shape predicates, and
+  unused Winograd stage traits after Stockham/composite routing became
+  canonical.
+- [x] [patch] Remove per-call `apollo-frft` unitary coefficient allocation.
+  `UnitaryFrftPlan` now reuses a thread-local O(N) coefficient workspace for
+  `V^T x`, phase multiplication, and reconstruction, preserving the
+  Candan-Grünbaum unitary DFrFT contract while eliminating repeated heap
+  allocation in forward/inverse calls. Removed stale backward-compatibility
+  wording on live crate-root exports and bumped `apollo-frft` to 0.1.1.
+- [x] [major] Remove remaining `apollo-fft` compatibility re-export surfaces.
+  Public root exports now point directly at canonical `application`,
+  `domain::contracts`, and `domain::metadata` owners; in-repo callers no longer
+  use `apollo_fft::{backend,error,types}` or `apollo_fft::application::plan`.
+  The legacy `FFT_CACHE` alias and unused
+  `infrastructure::cpu::simd::power_of_two::{radix4,radix8}` forwarding modules
+  were removed, and `apollo-fft` was bumped to 0.2.0.
+- [x] [major] Remove deprecated `apollo-stft-wgpu` non-power-of-two error
+  variant and explicit dead-code suppressions. `FrameLenNotPowerOfTwo` was no
+  longer returned after Chirp-Z support; non-power-of-two tests now assert
+  successful forward, inverse, and reusable-buffer paths. GPU-retained buffer
+  fields now use `_`-prefixed ownership names instead of `#[allow(dead_code)]`.
+- [x] [patch] Remove remaining WGPU dead-code suppressions in NUFFT/NTT cleanup.
+  NUFFT reusable buffers now reject dispatches whose sample count exceeds the
+  pre-allocated capacity before any GPU write, and NTT reusable buffers removed
+  duplicated scalar `n_inv` storage while retaining GPU resources through
+  `_`-prefixed ownership fields.
+- [x] [patch] Remove NUFFT-WGPU per-dispatch layout-placeholder allocations.
+  Fast Type-1 and 3D Type-2 paths now bind one retained `layout_padding_buffer`
+  for shader entries that are structurally required by the shared layout but not
+  read by that entry point.
+- [x] [patch] Remove dead `apollo-dctdst` DCT-II/DST-II fast-path output
+  allocations. Single-projection fast DCT-II/DST-II now reuse the 2N-point FFT
+  setup and fill only the requested projection instead of allocating an N-length
+  unused sibling output.
+- [x] [patch] Continue Apollo-vs-RustFFT f32 N=4096 investigation. Reject disabling
+  the f32 N=4096 radix-16 quad suffix: same-session Criterion measured Apollo
+  6.5098 µs vs RustFFT 3.7433 µs with the quad predicate disabled.
+- [x] [patch] Restore local `vs_rustfft` benchmark compilation against the current
+  public API by adding the missing RustFFT dev-dependency, registering the bench,
+  repairing Winograd typed entry points, and routing the untracked benchmark
+  through the present mixed-radix precomputed-twiddle surface.
+- [x] [patch] Record residual performance gap: current f32 N=4096
+  precomputed-twiddle row measures Apollo 22.790 µs vs RustFFT 3.5969 µs. This
+  row is not comparable to the earlier plan-scratch row because the plan-scratch
+  API used by that row is absent in this checkout.
+- [x] [patch] Route large f32 power-of-two mixed-radix dispatch through the
+  monomorphized Stockham scratch-backed kernel instead of the radix-8 facade.
+  Final retained f32 N=4096 Criterion measured Apollo zero-alloc reused
+  7.0463 µs, Apollo caller-twiddle reused 8.9737 µs, and RustFFT reused
+  6.2814 µs. Rejected the initial production 8x512 hybrid and direct
+  no-argument micro-dispatch probes because both regressed the then-retained
+  route.
+- [x] [patch] Improve f32 N=4096 Stockham scheduling and public-path cache
+  overhead. Disable the spilling radix-16 quad suffix on the retained
+  scratch-backed path, keep the stride-64 triple suppression, and add a
+  single-entry thread-local f32 forward-twiddle fast cache that borrows the
+  cached table instead of cloning `Arc` on each public call. Longer Criterion
+  measured Apollo zero-alloc reused 6.3347 µs, Apollo caller-twiddle reused
+  6.0315 µs, and RustFFT reused 4.2974 µs.
+- [x] [patch] Audit and reject the terminal groups=1 in-place Stockham hook:
+  the groups=1 source layout is interleaved (`src[2j]`, `src[2j+1]`), while
+  the hook assumed split halves and was not a valid generic copyback removal.
+  Retain the f32 public dispatch inlining and consolidated f32 Stockham
+  workspace, and reject the static N=4096 twiddle specialization because it
+  regressed Apollo public zero-alloc to 5.4357 µs.
+- [x] [patch] Reject the promoted f32 8x512 N=4096 production route after
+  same-tree Criterion showed the generic Stockham route was faster. Retain the
+  f32 N=4096 radix-8/radix-8 tail schedule and split public scratch/twiddle
+  cache, removing the dead combined workspace. Final retained Criterion
+  measured Apollo public zero-alloc reused 5.4298 µs, Apollo caller-twiddle
+  reused 5.2661 µs, and RustFFT reused 3.6958 µs; an earlier same-state run
+  measured Apollo public 4.8645 µs and caller-twiddle 4.7913 µs, so the
+  remaining spread is benchmark variance.
+- [x] [patch] Continue f32 N=4096 probe discipline. Reject the 64 KiB low-live
+  threshold, a separate single-entry Stockham twiddle cache, a direct N=4096
+  four-pass specialization, and unchecked twiddle subslices because repeated
+  Criterion did not show a stable retained improvement.
+- [x] [patch] Continue f32 N=4096 monomorphization and memory-efficiency probes.
+  Reject stride-64 radix-16 fusion after Criterion regressed Apollo public to
+  9.7711 µs and caller-twiddle to 9.3225 µs versus RustFFT 3.7232 µs. Reject
+  forced `#[inline(always)]` at the Stockham AVX/cache boundaries because rustc
+  rejects the target-feature combination and repeat Criterion did not retain an
+  improvement. Current retained run after reverts measured Apollo public
+  5.4895 µs, Apollo caller-twiddle 5.4176 µs, and RustFFT 4.3328 µs.
+- [x] [patch] Continue f32 N=4096 hot-codelet probes. Reject paired 128-bit
+  stores in the quarter-groups-one suffix because Criterion regressed Apollo
+  public to 7.1908 µs and caller-twiddle to 6.1711 µs versus RustFFT
+  3.8321 µs. Reject even-radix tail monomorphization and const-generic
+  radix-1 quarter-turn signs because repeat Criterion did not retain a caller
+  improvement and the const-sign probe regressed the public row to 8.1940 µs.
+- [x] [patch] Continue assembly-level f32 N=4096 investigation. Release assembly
+  showed the Windows ABI saves XMM6-XMM15 around the separate f32 Stockham
+  codelets. A private raw-pointer `sysv64` ABI removed the XMM save block from
+  the suffix assembly, but focused Criterion did not retain a kernel-row
+  improvement: first combined run measured Apollo caller-twiddle 5.4358 µs
+  versus RustFFT 3.5192 µs, while repeat measured Apollo caller-twiddle
+  7.7158 µs versus RustFFT 5.2601 µs. Reverted the ABI probe.
+- [x] [patch] Add nonsimd scalar permutation cleanup. Replace generic
+  power-of-two digit reversal division/modulo with shift/mask digit extraction
+  in the shared radix permutation helper. This is SWAR-adjacent scalar work for
+  non-Stockham routes; focused f32 N=256 Criterion remained effectively neutral
+  at Apollo public 983.67 ns and caller-twiddle 991.61 ns, so the residual
+  N=256 gap is in radix-4 butterflies/scheduling rather than digit reversal.
+- [x] [patch] Expand f32 forward autosort coverage. Lower the f32 Stockham
+  dispatch threshold from 1024 to 256 so N=256 bypasses radix-4 digit reversal.
+  Focused Criterion improved N=256 from the prior digit-reversal route near
+  983.67 ns public / 991.61 ns caller-twiddle to 197.50 ns public /
+  218.36 ns caller-twiddle on repeat. Rejected lowering the threshold to 64:
+  N=64 public regressed to 64.969 ns while caller-twiddle was neutral.
+- [x] [patch] Integrate f32 inverse autosort coverage and benchmark it. Route
+  f32 power-of-two inverse paths at lengths >=256 through Stockham with inverse
+  twiddles, and scale explicitly for normalized inverse. Add inverse zero-alloc
+  rows to `vs_rustfft`. Focused Criterion showed old inverse digit-reversal
+  baseline at 963.10 ns for N=256 and 23.104 µs for N=4096, while retained
+  Stockham inverse measured 230.60 ns and 5.5408 µs after restoration.
+- [x] [patch] Expand f64 autosort coverage for forward and inverse
+  power-of-two paths at lengths >=256. Add f64 inverse zero-allocation
+  benchmark rows and an N=256 forward+normalized-inverse value test. Focused
+  Criterion showed the old f64 digit-reversal baseline at 830.23 ns forward /
+  778.38 ns inverse for N=256 and 25.456 µs forward / 32.167 µs inverse for
+  N=4096; retained Stockham measured 315.24 ns / 257.88 ns and 10.050 µs /
+  10.731 µs. Rejected f64 threshold 64 because it regressed N=64 public and
+  caller-twiddle rows.
+- [x] [patch] Improve N=256/N=512 Stockham memory efficiency by removing
+  production f64 N=256/N=512 and f32 N=512 fixed single-pass kernels from
+  dispatch in favor of the fused generic AVX scheduler. Focused Criterion
+  measured f64 N=256 at 255.90 ns public / 228.16 ns caller-twiddle /
+  225.37 ns inverse, f64 N=512 at 591.36 ns public / 581.33 ns caller-twiddle,
+  and f32 N=512 at 366.39 ns public / 346.71 ns caller-twiddle /
+  328.85 ns inverse. Added N=512 f32/f64 roundtrip tests.
+- [x] [patch] Add a static f32 N=4096 four-triple Stockham schedule that skips
+  the generic scheduler loop and directly executes the four retained radix-8
+  fused stages. Focused Criterion improved f32 N=4096 caller-twiddle forward
+  from 6.9498 µs to 5.4670 µs and inverse from 6.5585 µs to 5.1970 µs in the
+  same retained benchmark history, but RustFFT still measured 3.7807 µs
+  forward and 3.7765 µs inverse on the latest run. Rejected the same static
+  N=4096 schedule for f64 because it regressed forward to 11.264 µs, and
+  rejected an f32 N=512 no-copy tail schedule because it regressed forward to
+  440.90 ns and inverse to 570.83 ns.
+- [x] [patch] Probe RustFFT-like f32 8x512 production decomposition using the
+  verified column radix-8 step, mixed twiddles, retained row-local N=512 fused
+  Stockham, and final transpose. Correctness held, but Criterion regressed
+  f32 N=4096 forward/inverse to 11.792 µs / 11.786 µs. Reordering the final
+  transpose to contiguous destination stores improved the failed route to
+  9.9378 µs / 9.9228 µs but remained slower than the retained four-triple
+  schedule, so the production probe was reverted.
+- [x] [patch] Implement and reject a f32 Butterfly512-style 8x64 production
+  candidate. It used the verified radix-8 column pass, mixed twiddles, eight
+  fixed 64-point row butterflies, and final transpose. Correctness held, but
+  Criterion regressed N=512 forward/inverse to 546.25 ns / 573.94 ns versus the
+  retained fused scheduler. A vectorized mixed-twiddle variant regressed
+  forward further to 773.36 ns, so the production dispatch was reverted.
+- [x] [patch] Audit the complete RustFFT `Butterfly512Avx` pathway and encode
+  its twiddle-layout precondition as Apollo tests. The prior 8x64 candidate was
+  arithmetically valid but did not satisfy RustFFT's actual 16x32 base-kernel
+  memory contract. New f32/f64 tests pin the separated-column packed twiddle
+  order used by the fused twiddle+transpose stage, giving the next production
+  kernel a verified layout target without weakening the retained dispatch.
+- [x] [patch] Benchmark the current open zero-allocation rows and retain only
+  measured improvements. Rejected production f32/f64 N=512 fixed single-pass
+  leaves because they regressed both precisions. Retained f64 N=4096
+  forward-only static four-triple dispatch selected by the forward twiddle sign:
+  current baseline Apollo forward 17.686 µs improved to 15.844 µs, while inverse
+  stays on the generic schedule because the same static schedule regressed
+  inverse under inverse twiddles.
+- [x] [patch] Improve 3D R2C/C2R memory efficiency by eliminating per-row
+  temporary `Vec<Complex64>` allocation in the Z-axis split/extraction passes.
+  Forward R2C now packs the length-`nz/2` complex subproblem into the
+  caller-owned half-spectrum row prefix; inverse C2R reuses the mutable
+  half-spectrum scratch row for recovered packed spectrum values before the
+  sub-IFFT. Removed unused f32 R2C future-reservation fields and their plan-time
+  allocations.
+- [x] [patch] Reject the closure-borrowed thread-local twiddle cache probe.
+  It removed hot-path `Arc` clones in source form but regressed focused f32
+  N=4096 public zero-allocation Criterion to 8.4200 µs median. Restored the
+  retained cache route; the repeat row measured 7.0245 µs median in this
+  session.
+- [x] [patch] Remove unreachable 2D FFT fallback lane materialization.
+  `FftPlan2D` axis dispatch only calls `Axis(0)` and `Axis(1)`; the previous
+  fallback for impossible axes allocated `Vec<Vec<Complex64>>` or
+  `Vec<Vec<Complex32>>`, copied every lane, transformed the nested buffers, and
+  scattered them back. The invalid-axis branch is now an explicit invariant, so
+  row/column fast paths remain the only production paths.
+- [x] [patch] Correct the monomorphized generic DFT-8 twiddle sign used by the
+  composite-radix path. The generic Winograd helper now uses forward roots
+  `exp(-2πik/8)` and inverse roots `exp(+2πik/8)` for both f64 and f32,
+  restoring composite sizes such as N=24, N=48, N=192, N=384, N=1000, and
+  N=10000 without reintroducing type-specific helper clones.
+- [x] [major] Remove deprecated FFT compatibility aliases. Deleted
+  `FftPlan1D/2D/3D::{forward_into,inverse_into}` forwarding methods and the
+  legacy `ProcessorFft3d` type alias, then updated in-repo Python bindings to
+  call `forward_real_to_complex_into` / `inverse_complex_to_real_into`
+  directly. This leaves one authoritative caller-owned API surface.
+
+## Open performance target
+- [ ] [patch] Surpass RustFFT across the full `vs_rustfft` zero-allocation
+  matrix. Current retained rows already beat RustFFT for f64 N=512 forward and
+  inverse and intermittently for f32 N=256 forward, but f64 N=256, f64 N=4096,
+  f32 N=512, and f32 N=4096 remain open gaps.
+- [ ] [patch] Replace the retained N=512/N=4096 f32 Stockham base path with a
+  complete 16x32 Butterfly512 pathway: column butterfly16, packed twiddle
+  multiply, fused 4x4 transpose stores, row butterfly32, then mixed-radix8xn
+  composition for N=4096.
+
 ## Closed in this sprint (Closure XLI phase)
 - [x] [minor] Add separable CPU 2D DHT: `DhtPlan::forward_2d`, `inverse_2d` (N×N, involutory scaling 1/N²).
 - [x] [minor] Add separable CPU 3D DHT: `DhtPlan::forward_3d`, `inverse_3d` (N×N×N, involutory scaling 1/N³).

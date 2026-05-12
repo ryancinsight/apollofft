@@ -1,3 +1,5 @@
+//! Composite FFT bench
+#![allow(missing_docs)]
 use num_complex::Complex64;
 use std::time::{Duration, Instant};
 
@@ -21,11 +23,19 @@ fn time_fft<F: Fn(&mut Vec<Complex64>)>(n: usize, f: F, iters: usize) -> Duratio
 }
 
 fn main() {
-    use apollo_fft::application::execution::kernel::{mixed_radix, bluestein};
+    use apollo_fft::application::execution::kernel::{bluestein, mixed_radix};
 
     // Test various 5-smooth and non-5-smooth sizes
-    for &n in &[100usize, 125, 200, 300, 500, 625, 1000, 1250, 2000, 5000, 10000] {
-        let iters = if n <= 100 { 50000 } else if n <= 1000 { 5000 } else { 500 };
+    for &n in &[
+        100usize, 125, 200, 300, 500, 625, 1000, 1250, 2000, 5000, 10000,
+    ] {
+        let iters = if n <= 100 {
+            50000
+        } else if n <= 1000 {
+            5000
+        } else {
+            500
+        };
 
         let composite_time = time_fft(n, |buf| mixed_radix::forward_inplace_64(buf), iters);
         let bluestein_time = time_fft(n, |buf| bluestein::forward_inplace_64(buf), iters);

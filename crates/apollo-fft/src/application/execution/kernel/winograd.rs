@@ -51,14 +51,17 @@
 //! - Blahut, R.E. (2010). *Fast Algorithms for Signal Processing*. Cambridge
 //!   University Press.
 
+#![allow(clippy::empty_line_after_doc_comments)]
+#![allow(clippy::ptr_as_ptr)]
+
 use num_complex::{Complex32, Complex64};
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
 use std::arch::x86_64::{
     __m128d, __m256d, _mm256_add_pd, _mm256_castpd128_pd256, _mm256_extractf128_pd,
-    _mm256_fmaddsub_pd, _mm256_insertf128_pd, _mm256_loadu_pd, _mm256_mul_pd,
-    _mm256_permute_pd, _mm256_setr_pd, _mm256_storeu_pd, _mm256_sub_pd, _mm256_unpackhi_pd,
-    _mm256_unpacklo_pd, _mm_add_pd, _mm_permute_pd, _mm_set_pd, _mm_sub_pd, _mm_xor_pd,
+    _mm256_fmaddsub_pd, _mm256_insertf128_pd, _mm256_loadu_pd, _mm256_mul_pd, _mm256_permute_pd,
+    _mm256_setr_pd, _mm256_storeu_pd, _mm256_sub_pd, _mm256_unpackhi_pd, _mm256_unpacklo_pd,
+    _mm_add_pd, _mm_permute_pd, _mm_set_pd, _mm_sub_pd, _mm_xor_pd,
 };
 
 /// Packed 2×Complex64 complex multiplication using AVX+FMA.
@@ -67,7 +70,7 @@ use std::arch::x86_64::{
 /// Uses the identity `(ar + i·ai)·(br + i·bi) = ar·br − ai·bi + i·(ar·bi + ai·br)`,
 /// mapped to `_mm256_fmaddsub_pd(ar, b, ai·bsw)` where `bsw = permute(b, 0b0101)`.
 #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
-#[inline(always)]
+#[inline]
 unsafe fn cmul2_64(a: __m256d, b: __m256d) -> __m256d {
     let ar = _mm256_unpacklo_pd(a, a); // [a0.re, a0.re, a1.re, a1.re]
     let ai = _mm256_unpackhi_pd(a, a); // [a0.im, a0.im, a1.im, a1.im]
@@ -97,12 +100,12 @@ unsafe fn cmul2_64(a: __m256d, b: __m256d) -> __m256d {
 /// # Safety
 /// Caller must ensure `target_feature = "avx"` and `target_feature = "fma"`.
 #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
-#[inline(always)]
+#[inline]
 pub unsafe fn dft4_avx_fma_64(data: &mut [Complex64; 4], inverse: bool) {
     // Load [x0, x1] and [x2, x3] as packed __m256d.
     // Layout: [x_k.re, x_k.im, x_{k+1}.re, x_{k+1}.im] per register.
-    let v01 = _mm256_loadu_pd(data.as_ptr() as *const f64);
-    let v23 = _mm256_loadu_pd(data.as_ptr().add(2) as *const f64);
+    let v01 = _mm256_loadu_pd(data.as_ptr().cast::<f64>());
+    let v23 = _mm256_loadu_pd(data.as_ptr().add(2).cast::<f64>());
 
     // Stage 1: two simultaneous DFT-2 butterflies.
     // sum = [t0.re, t0.im, t2.re, t2.im]  where t0 = x0+x2, t2 = x1+x3
@@ -122,7 +125,7 @@ pub unsafe fn dft4_avx_fma_64(data: &mut [Complex64; 4], inverse: bool) {
     // Inverse:  (re, im) * (+i) = (-im, re)  → swap lanes then negate lane 0.
     // _mm_permute_pd with imm8=0b01: result[0]=a[1]=t3.im, result[1]=a[0]=t3.re.
     let perm = _mm_permute_pd(dif_hi, 0b01); // [t3.im, t3.re]
-    // _mm_set_pd(e1, e0): e0→lane0, e1→lane1.
+                                             // _mm_set_pd(e1, e0): e0→lane0, e1→lane1.
     let t3_tw = if inverse {
         // [-t3.im, t3.re]: negate lane 0 → XOR sign bit at lane 0.
         _mm_xor_pd(perm, _mm_set_pd(0.0f64, -0.0f64))
@@ -140,8 +143,8 @@ pub unsafe fn dft4_avx_fma_64(data: &mut [Complex64; 4], inverse: bool) {
     // Pack [out[0], out[1]] and [out[2], out[3]] into two __m256d for 2-store.
     let out01 = _mm256_insertf128_pd(_mm256_castpd128_pd256(t0_plus_t2), t1_plus_t3tw, 1);
     let out23 = _mm256_insertf128_pd(_mm256_castpd128_pd256(t0_minus_t2), t1_minus_t3tw, 1);
-    _mm256_storeu_pd(data.as_mut_ptr() as *mut f64, out01);
-    _mm256_storeu_pd(data.as_mut_ptr().add(2) as *mut f64, out23);
+    _mm256_storeu_pd(data.as_mut_ptr().cast::<f64>(), out01);
+    _mm256_storeu_pd(data.as_mut_ptr().add(2).cast::<f64>(), out23);
 }
 
 /// AVX+FMA-accelerated in-place DFT-8 for `Complex64`.
@@ -159,7 +162,7 @@ pub unsafe fn dft4_avx_fma_64(data: &mut [Complex64; 4], inverse: bool) {
 /// # Safety
 /// Caller must ensure `target_feature = "avx"` and `target_feature = "fma"`.
 #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
-#[inline(always)]
+#[inline]
 pub unsafe fn dft8_avx_fma_64(data: &mut [Complex64; 8], inverse: bool) {
     // Step 1: gather even/odd sub-arrays.
     let mut even = [data[0], data[2], data[4], data[6]];
@@ -175,8 +178,8 @@ pub unsafe fn dft8_avx_fma_64(data: &mut [Complex64; 8], inverse: bool) {
     //   Inverse: W^0=1+0i, W^{-1}=SQ2O2+i·SQ2O2, W^{-2}=0+i, W^{-3}=−SQ2O2+i·SQ2O2
     // _mm256_setr_pd(e0,e1,e2,e3): e0→lane0 (lowest addr), e3→lane3.
     const SQ2O2: f64 = std::f64::consts::FRAC_1_SQRT_2;
-    let odd01 = _mm256_loadu_pd(odd.as_ptr() as *const f64);
-    let odd23 = _mm256_loadu_pd(odd.as_ptr().add(2) as *const f64);
+    let odd01 = _mm256_loadu_pd(odd.as_ptr().cast::<f64>());
+    let odd23 = _mm256_loadu_pd(odd.as_ptr().add(2).cast::<f64>());
     let (tw01, tw23) = if inverse {
         (
             _mm256_setr_pd(1.0, 0.0, SQ2O2, SQ2O2),
@@ -192,12 +195,21 @@ pub unsafe fn dft8_avx_fma_64(data: &mut [Complex64; 8], inverse: bool) {
     let ot23 = cmul2_64(odd23, tw23);
 
     // Step 4: AVX butterfly combine: data[0..4] = even ± ot, data[4..8] = even ∓ ot.
-    let ev01 = _mm256_loadu_pd(even.as_ptr() as *const f64);
-    let ev23 = _mm256_loadu_pd(even.as_ptr().add(2) as *const f64);
-    _mm256_storeu_pd(data.as_mut_ptr() as *mut f64, _mm256_add_pd(ev01, ot01));
-    _mm256_storeu_pd(data.as_mut_ptr().add(2) as *mut f64, _mm256_add_pd(ev23, ot23));
-    _mm256_storeu_pd(data.as_mut_ptr().add(4) as *mut f64, _mm256_sub_pd(ev01, ot01));
-    _mm256_storeu_pd(data.as_mut_ptr().add(6) as *mut f64, _mm256_sub_pd(ev23, ot23));
+    let ev01 = _mm256_loadu_pd(even.as_ptr().cast::<f64>());
+    let ev23 = _mm256_loadu_pd(even.as_ptr().add(2).cast::<f64>());
+    _mm256_storeu_pd(data.as_mut_ptr().cast::<f64>(), _mm256_add_pd(ev01, ot01));
+    _mm256_storeu_pd(
+        data.as_mut_ptr().add(2).cast::<f64>(),
+        _mm256_add_pd(ev23, ot23),
+    );
+    _mm256_storeu_pd(
+        data.as_mut_ptr().add(4).cast::<f64>(),
+        _mm256_sub_pd(ev01, ot01),
+    );
+    _mm256_storeu_pd(
+        data.as_mut_ptr().add(6).cast::<f64>(),
+        _mm256_sub_pd(ev23, ot23),
+    );
 }
 
 // ── DFT-2 butterfly ───────────────────────────────────────────────────────────
@@ -207,19 +219,50 @@ pub unsafe fn dft8_avx_fma_64(data: &mut [Complex64; 8], inverse: bool) {
 /// **Contract**: `[a, b]` → `[a+b, a-b]` (forward/inverse sign-invariant).
 ///
 /// No multiplications; one complex addition and one complex subtraction.
-#[inline(always)]
-pub fn dft2_64(a: &mut Complex64, b: &mut Complex64) {
-    let t = *a;
-    *a = t + *b;
-    *b = t - *b;
+mod private {
+    pub trait Sealed {}
+    impl Sealed for f32 {}
+    impl Sealed for f64 {}
 }
 
-/// In-place Winograd DFT-2 (f32 variant).
-#[inline(always)]
-pub fn dft2_32(a: &mut Complex32, b: &mut Complex32) {
-    let t = *a;
-    *a = t + *b;
-    *b = t - *b;
+/// Scalar operations required by generic Winograd DFT helpers.
+pub trait WinogradScalar:
+    private::Sealed + num_traits::Float + num_traits::NumAssign + Send + Sync
+{
+    /// Convert an analytically defined f64 constant to this scalar precision.
+    fn cast_f64(v: f64) -> Self;
+    /// Return sqrt(2)/2 in this scalar precision.
+    fn sq2o2() -> Self;
+}
+impl WinogradScalar for f64 {
+    #[inline]
+    fn cast_f64(v: f64) -> Self {
+        v
+    }
+    #[inline]
+    fn sq2o2() -> Self {
+        std::f64::consts::SQRT_2 / 2.0
+    }
+}
+impl WinogradScalar for f32 {
+    #[inline]
+    fn cast_f64(v: f64) -> Self {
+        v as f32
+    }
+    #[inline]
+    fn sq2o2() -> Self {
+        (std::f64::consts::SQRT_2 / 2.0) as f32
+    }
+}
+
+#[inline]
+pub(crate) fn dft2_impl<F: WinogradScalar>(
+    a: &mut num_complex::Complex<F>,
+    b: &mut num_complex::Complex<F>,
+) {
+    let tmp = *a;
+    *a = tmp + *b;
+    *b = tmp - *b;
 }
 
 // ── DFT-4 butterfly ───────────────────────────────────────────────────────────
@@ -239,47 +282,22 @@ pub fn dft2_32(a: &mut Complex32, b: &mut Complex32) {
 /// **Additions**: 8 complex (= 16 real).
 ///
 /// Correctness reference: Cooley and Tukey (1965), 4-point special case.
-#[inline(always)]
-pub fn dft4_64(data: &mut [Complex64; 4], inverse: bool) {
-    // Stage 1: two DFT-2 butterflies on even and odd indices.
-    let (x0, x1, x2, x3) = (data[0], data[1], data[2], data[3]);
-
-    let t0 = x0 + x2; // even, slot 0
-    let t1 = x0 - x2; // even, slot 1
-    let t2 = x1 + x3; // odd, slot 0
-    let t3 = x1 - x3; // odd, slot 1
-
-    // Stage 2: DFT-2 with twiddle W_4^1 = -i (forward) or +i (inverse).
-    // Multiply t3 by ±i: (re, im)·(-i) = (im, -re); ·(+i) = (-im, re).
-    let t3_tw = if inverse {
-        Complex64::new(-t3.im, t3.re)
-    } else {
-        Complex64::new(t3.im, -t3.re)
-    };
-
+#[inline]
+pub(crate) fn dft4_impl<F: WinogradScalar>(data: &mut [num_complex::Complex<F>], inverse: bool) {
+    debug_assert!(data.len() >= 4);
+    let t0 = data[0] + data[2];
+    let t1 = data[0] - data[2];
+    let t2 = data[1] + data[3];
+    let t3 = data[1] - data[3];
     data[0] = t0 + t2;
     data[2] = t0 - t2;
-    data[1] = t1 + t3_tw;
-    data[3] = t1 - t3_tw;
-}
-
-/// In-place Winograd DFT-4 (f32 variant).
-#[inline(always)]
-pub fn dft4_32(data: &mut [Complex32; 4], inverse: bool) {
-    let (x0, x1, x2, x3) = (data[0], data[1], data[2], data[3]);
-    let t0 = x0 + x2;
-    let t1 = x0 - x2;
-    let t2 = x1 + x3;
-    let t3 = x1 - x3;
-    let t3_tw = if inverse {
-        Complex32::new(-t3.im, t3.re)
+    let i_t3 = if inverse {
+        num_complex::Complex::new(-t3.im, t3.re)
     } else {
-        Complex32::new(t3.im, -t3.re)
+        num_complex::Complex::new(t3.im, -t3.re)
     };
-    data[0] = t0 + t2;
-    data[2] = t0 - t2;
-    data[1] = t1 + t3_tw;
-    data[3] = t1 - t3_tw;
+    data[1] = t1 + i_t3;
+    data[3] = t1 - i_t3;
 }
 
 // ── DFT-8 butterfly ───────────────────────────────────────────────────────────
@@ -296,7 +314,7 @@ pub fn dft4_32(data: &mut [Complex32; 4], inverse: bool) {
 /// W_8^2 = -i
 /// W_8^3 = -(√2/2) - i·(√2/2)
 /// ```
-/// where `SQ2O2 = √2/2 ≈ 0.7071067811865476`.
+/// where `SQ2O2 = √2/2 ≈ std::f64::consts::FRAC_1_SQRT_2`.
 ///
 /// **Multiplications**: 4 real (the ±SQ2O2 multiplications on the odd path).
 /// All other twiddles are ×1 or ×(-i) / ×i, which are free sign/swap ops.
@@ -304,185 +322,56 @@ pub fn dft4_32(data: &mut [Complex32; 4], inverse: bool) {
 /// **Additions**: 26 real (Winograd 1978, Table 1, row N=8).
 ///
 /// Correctness: Blahut (2010), §3.4, DFT-8 factoring.
-#[inline(always)]
-pub fn dft8_64(data: &mut [Complex64; 8], inverse: bool) {
-    // Step 1: two DFT-4s on the stride-2 sub-arrays.
-    let mut even = [data[0], data[2], data[4], data[6]];
-    let mut odd = [data[1], data[3], data[5], data[7]];
-    dft4_64(&mut even, inverse);
-    dft4_64(&mut odd, inverse);
-
-    // Step 2: apply W_8^k twiddles to odd outputs, then butterfly.
-    // Forward twiddles: W_8^k = exp(-2πi·k/8) for k = 0..3.
-    // Inverse twiddles: conjugate (flip sign of imaginary part).
-    // SQ2O2 = √2/2.
-    const SQ2O2: f64 = std::f64::consts::FRAC_1_SQRT_2;
-
-    // W_8^0 = 1: no-op.
-    let o0 = odd[0];
-    // W_8^1 = SQ2O2·(1-i) fwd or SQ2O2·(1+i) inv.
-    let o1 = if inverse {
-        let re = SQ2O2 * (odd[1].re - odd[1].im);
-        let im = SQ2O2 * (odd[1].re + odd[1].im);
-        Complex64::new(re, im)
+#[inline]
+pub(crate) fn dft8_impl<F: WinogradScalar>(data: &mut [num_complex::Complex<F>], inverse: bool) {
+    debug_assert!(data.len() >= 8);
+    let sq2o2 = F::sq2o2();
+    let sign = if inverse {
+        F::cast_f64(1.0)
     } else {
-        let re = SQ2O2 * (odd[1].re + odd[1].im);
-        let im = SQ2O2 * (odd[1].im - odd[1].re);
-        Complex64::new(re, im)
+        F::cast_f64(-1.0)
     };
-    // W_8^2 = -i fwd, +i inv.
-    let o2 = if inverse {
-        Complex64::new(-odd[2].im, odd[2].re)
-    } else {
-        Complex64::new(odd[2].im, -odd[2].re)
-    };
-    // W_8^3 = SQ2O2·(-1-i) fwd or SQ2O2·(-1+i) inv.
-    let o3 = if inverse {
-        // W_8^{-3} = -SQ2O2 + i*SQ2O2: re = SQ2O2*(-re-im), im = SQ2O2*(re-im)
-        let re = SQ2O2 * (-odd[3].re - odd[3].im);
-        let im = SQ2O2 * (odd[3].re - odd[3].im);
-        Complex64::new(re, im)
-    } else {
-        // W_8^3 = -SQ2O2 - i*SQ2O2: re = SQ2O2*(-re+im), im = SQ2O2*(-re-im)
-        let re = SQ2O2 * (-odd[3].re + odd[3].im);
-        let im = SQ2O2 * (-odd[3].re - odd[3].im);
-        Complex64::new(re, im)
-    };
-
-    // Step 3: combine.
-    data[0] = even[0] + o0;
-    data[1] = even[1] + o1;
-    data[2] = even[2] + o2;
-    data[3] = even[3] + o3;
-    data[4] = even[0] - o0;
-    data[5] = even[1] - o1;
-    data[6] = even[2] - o2;
-    data[7] = even[3] - o3;
-}
-
-/// In-place Winograd DFT-8 (f32 variant).
-#[inline(always)]
-pub fn dft8_32(data: &mut [Complex32; 8], inverse: bool) {
-    const SQ2O2: f32 = std::f32::consts::FRAC_1_SQRT_2;
-
-    let mut even = [data[0], data[2], data[4], data[6]];
-    let mut odd = [data[1], data[3], data[5], data[7]];
-    dft4_32(&mut even, inverse);
-    dft4_32(&mut odd, inverse);
-
-    let o0 = odd[0];
-    let o1 = if inverse {
-        let re = SQ2O2 * (odd[1].re - odd[1].im);
-        let im = SQ2O2 * (odd[1].re + odd[1].im);
-        Complex32::new(re, im)
-    } else {
-        let re = SQ2O2 * (odd[1].re + odd[1].im);
-        let im = SQ2O2 * (odd[1].im - odd[1].re);
-        Complex32::new(re, im)
-    };
-    let o2 = if inverse {
-        Complex32::new(-odd[2].im, odd[2].re)
-    } else {
-        Complex32::new(odd[2].im, -odd[2].re)
-    };
-    let o3 = if inverse {
-        // W_8^{-3} = -SQ2O2 + i*SQ2O2: re = SQ2O2*(-re-im), im = SQ2O2*(re-im)
-        let re = SQ2O2 * (-odd[3].re - odd[3].im);
-        let im = SQ2O2 * (odd[3].re - odd[3].im);
-        Complex32::new(re, im)
-    } else {
-        // W_8^3 = -SQ2O2 - i*SQ2O2: re = SQ2O2*(-re+im), im = SQ2O2*(-re-im)
-        let re = SQ2O2 * (-odd[3].re + odd[3].im);
-        let im = SQ2O2 * (-odd[3].re - odd[3].im);
-        Complex32::new(re, im)
-    };
-
-    data[0] = even[0] + o0;
-    data[1] = even[1] + o1;
-    data[2] = even[2] + o2;
-    data[3] = even[3] + o3;
-    data[4] = even[0] - o0;
-    data[5] = even[1] - o1;
-    data[6] = even[2] - o2;
-    data[7] = even[3] - o3;
-}
-
-/// In-place Winograd DFT-7.
-///
-/// Derived from the radix-7 DFT decomposition into conjugate pairs
-/// `(x[j], x[7-j])` for `j ∈ {1,2,3}`.
-///
-/// For each output bin `k`:
-///
-/// ```text
-/// Y[k] = x0 + Σ_{j=1..3} (c_{kj}·a_j - i·s_{kj}·b_j)
-/// a_j = x[j] + x[7-j],   b_j = x[j] - x[7-j]
-/// ```
-///
-/// where `c_{kj} = cos(2π·k·j/7)`, `s_{kj} = sin(2π·k·j/7)`.
-/// Inverse transforms negate all sine terms in the formula above.
-#[inline(always)]
-pub(crate) fn dft7_64_inplace(data: &mut [Complex64], inverse: bool) {
-    debug_assert!(data.len() >= 7);
-    let input = [
-        data[0], data[1], data[2], data[3], data[4], data[5], data[6],
-    ];
-    let sign = if inverse { 1.0 } else { -1.0 };
-    let two_pi_over_7 = std::f64::consts::TAU / 7.0;
-
-    for k in 0..7usize {
-        let mut acc = Complex64::new(0.0, 0.0);
-        for (n, &x) in input.iter().enumerate() {
-            let angle = sign * two_pi_over_7 * (k * n) as f64;
-            let tw = Complex64::new(angle.cos(), angle.sin());
-            acc += x * tw;
-        }
-        data[k] = acc;
+    let mut evens = [data[0], data[2], data[4], data[6]];
+    let mut odds = [data[1], data[3], data[5], data[7]];
+    dft4_impl(&mut evens, inverse);
+    dft4_impl(&mut odds, inverse);
+    let tw1 = num_complex::Complex::new(sq2o2, sign * sq2o2);
+    let tw2 = num_complex::Complex::new(F::cast_f64(0.0), sign);
+    let tw3 = num_complex::Complex::new(-sq2o2, sign * sq2o2);
+    odds[1] *= tw1;
+    odds[2] *= tw2;
+    odds[3] *= tw3;
+    for i in 0..4 {
+        let e = evens[i];
+        let o = odds[i];
+        data[i] = e + o;
+        data[i + 4] = e - o;
     }
 }
 
-#[inline(always)]
-pub fn dft7_64(data: &mut [Complex64], inverse: bool) {
-    dft7_64_inplace(data, inverse);
-}
-
-#[inline(always)]
-pub fn dft7_64_simd(data: &mut [Complex64], inverse: bool) {
-    dft7_64_inplace(data, inverse);
-}
-
-#[inline(always)]
-pub fn dft7_32(data: &mut [Complex32], inverse: bool) {
-    dft7_32_inplace(data, inverse);
-}
-
-#[inline(always)]
-pub(crate) fn dft7_32_inplace(data: &mut [Complex32], inverse: bool) {
+#[inline]
+pub(crate) fn dft7_impl<F: WinogradScalar>(data: &mut [num_complex::Complex<F>], inverse: bool) {
     debug_assert!(data.len() >= 7);
-    let input = [
+    let sign = if inverse {
+        F::cast_f64(1.0)
+    } else {
+        F::cast_f64(-1.0)
+    };
+    let t = [
         data[0], data[1], data[2], data[3], data[4], data[5], data[6],
     ];
-    let sign = if inverse { 1.0 } else { -1.0 };
-    let two_pi_over_7 = std::f32::consts::TAU / 7.0;
-
-    for k in 0..7usize {
-        let mut acc = Complex32::new(0.0, 0.0);
-        for (n, &x) in input.iter().enumerate() {
-            let angle = sign * two_pi_over_7 * (k * n) as f32;
-            let tw = Complex32::new(angle.cos(), angle.sin());
-            acc += x * tw;
+    for k in 0..7 {
+        let mut sum = num_complex::Complex::new(F::cast_f64(0.0), F::cast_f64(0.0));
+        for n in 0..7 {
+            let angle = (k * n) as f64 * std::f64::consts::TAU / 7.0;
+            let tw = num_complex::Complex::new(
+                F::cast_f64(angle.cos()),
+                sign * F::cast_f64(angle.sin()),
+            );
+            sum += t[n] * tw;
         }
-        data[k] = acc;
+        data[k] = sum;
     }
-}
-
-/// SIMD-dispatchable DFT-7 entry point.
-///
-/// Current implementation is scalar but keeps SIMD-shaped dispatch parity with
-/// other radix kernels (`dft5_*_simd`) and the public call-site shape.
-#[inline(always)]
-pub fn dft7_32_simd(data: &mut [Complex32], inverse: bool) {
-    dft7_32_inplace(data, inverse);
 }
 
 // ── AVX+FMA SIMD f32 DFT-4 and DFT-8 ────────────────────────────────────────
@@ -493,14 +382,14 @@ pub fn dft7_32_simd(data: &mut [Complex32], inverse: bool) {
 /// (4 Complex32 = 8 f32).  Uses `moveldup`/`movehdup` to broadcast re/im
 /// lanes and `fmaddsub` for the Gauss-trick complex multiply.
 #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
-#[inline(always)]
+#[inline]
 pub(crate) unsafe fn cmul4_32(
     a: std::arch::x86_64::__m256,
     b: std::arch::x86_64::__m256,
 ) -> std::arch::x86_64::__m256 {
     use std::arch::x86_64::{
-        _mm256_fmaddsub_ps, _mm256_moveldup_ps, _mm256_movehdup_ps,
-        _mm256_mul_ps, _mm256_permute_ps,
+        _mm256_fmaddsub_ps, _mm256_movehdup_ps, _mm256_moveldup_ps, _mm256_mul_ps,
+        _mm256_permute_ps,
     };
     let ar = _mm256_moveldup_ps(a); // broadcast .re of each Complex32
     let ai = _mm256_movehdup_ps(a); // broadcast .im of each Complex32
@@ -521,16 +410,16 @@ pub(crate) unsafe fn cmul4_32(
 /// # Safety
 /// Caller must ensure `target_feature = "avx"`.
 #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
-#[inline(always)]
+#[inline]
 pub unsafe fn dft4_avx_fma_32(data: &mut [Complex32; 4], inverse: bool) {
     use std::arch::x86_64::{
         _mm256_add_ps, _mm256_castps128_ps256, _mm256_castps256_ps128, _mm256_insertf128_ps,
-        _mm256_loadu_ps, _mm256_permute2f128_ps, _mm256_storeu_ps, _mm256_sub_ps,
-        _mm_add_ps, _mm_movelh_ps, _mm_permute_ps, _mm_set_ps, _mm_sub_ps, _mm_xor_ps,
+        _mm256_loadu_ps, _mm256_permute2f128_ps, _mm256_storeu_ps, _mm256_sub_ps, _mm_add_ps,
+        _mm_movelh_ps, _mm_permute_ps, _mm_set_ps, _mm_sub_ps, _mm_xor_ps,
     };
 
     // Load 4×Complex32 into one __m256: [x0.re, x0.im, x1.re, x1.im, x2.re, x2.im, x3.re, x3.im].
-    let v = _mm256_loadu_ps(data.as_ptr() as *const f32);
+    let v = _mm256_loadu_ps(data.as_ptr().cast::<f32>());
 
     // Stage 1: two simultaneous DFT-2 butterflies via 128-bit lane swap.
     // vswap = [x2.re, x2.im, x3.re, x3.im, x0.re, x0.im, x1.re, x1.im]
@@ -560,7 +449,7 @@ pub unsafe fn dft4_avx_fma_32(data: &mut [Complex32; 4], inverse: bool) {
     // permute 0x4E = 0b01_00_11_10: swap 64-bit pairs.
     let s_perm = _mm_permute_ps(sum_lo, 0x4E); // [t2.re, t2.im, t0.re, t0.im]
     let d_perm = _mm_permute_ps(dif_tw, 0x4E); // [t3_tw.re, t3_tw.im, t1.re, t1.im]
-    // Lower 64 of each add/sub holds the correct output element.
+                                               // Lower 64 of each add/sub holds the correct output element.
     let add_s = _mm_add_ps(sum_lo, s_perm); // lower 64: out[0]=t0+t2
     let sub_s = _mm_sub_ps(sum_lo, s_perm); // lower 64: out[2]=t0-t2
     let add_d = _mm_add_ps(dif_tw, d_perm); // lower 64: out[1]=t1+t3_tw
@@ -570,7 +459,7 @@ pub unsafe fn dft4_avx_fma_32(data: &mut [Complex32; 4], inverse: bool) {
     let out01 = _mm_movelh_ps(add_s, add_d); // [out0.re, out0.im, out1.re, out1.im]
     let out23 = _mm_movelh_ps(sub_s, sub_d); // [out2.re, out2.im, out3.re, out3.im]
     let result = _mm256_insertf128_ps(_mm256_castps128_ps256(out01), out23, 1);
-    _mm256_storeu_ps(data.as_mut_ptr() as *mut f32, result);
+    _mm256_storeu_ps(data.as_mut_ptr().cast::<f32>(), result);
 }
 
 /// AVX+FMA in-place DFT-8 for `Complex32`.
@@ -586,13 +475,15 @@ pub unsafe fn dft4_avx_fma_32(data: &mut [Complex32; 4], inverse: bool) {
 /// # Safety
 /// Caller must ensure `target_feature = "avx"` and `target_feature = "fma"`.
 #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))]
-#[inline(always)]
+#[inline]
 pub unsafe fn dft8_avx_fma_32(data: &mut [Complex32; 8], inverse: bool) {
-    use std::arch::x86_64::{_mm256_add_ps, _mm256_loadu_ps, _mm256_setr_ps, _mm256_storeu_ps, _mm256_sub_ps};
+    use std::arch::x86_64::{
+        _mm256_add_ps, _mm256_loadu_ps, _mm256_setr_ps, _mm256_storeu_ps, _mm256_sub_ps,
+    };
 
     // Step 1: gather even/odd sub-arrays.
     let mut even = [data[0], data[2], data[4], data[6]];
-    let mut odd  = [data[1], data[3], data[5], data[7]];
+    let mut odd = [data[1], data[3], data[5], data[7]];
 
     // Step 2: vectorised DFT-4 on each sub-array.
     dft4_avx_fma_32(&mut even, inverse);
@@ -603,7 +494,7 @@ pub unsafe fn dft8_avx_fma_32(data: &mut [Complex32; 8], inverse: bool) {
     //   Forward: W^0=1+0i, W^1=SQ2O2−iSQ2O2, W^2=0−1i, W^3=−SQ2O2−iSQ2O2
     //   Inverse: W^0=1+0i, W^{-1}=SQ2O2+iSQ2O2, W^{-2}=0+1i, W^{-3}=−SQ2O2+iSQ2O2
     const SQ2O2: f32 = std::f32::consts::FRAC_1_SQRT_2;
-    let odd_v = _mm256_loadu_ps(odd.as_ptr() as *const f32);
+    let odd_v = _mm256_loadu_ps(odd.as_ptr().cast::<f32>());
     let tw = if inverse {
         _mm256_setr_ps(1.0, 0.0, SQ2O2, SQ2O2, 0.0, 1.0, -SQ2O2, SQ2O2)
     } else {
@@ -612,9 +503,12 @@ pub unsafe fn dft8_avx_fma_32(data: &mut [Complex32; 8], inverse: bool) {
     let ot = cmul4_32(odd_v, tw);
 
     // Step 4: butterfly combine.
-    let ev = _mm256_loadu_ps(even.as_ptr() as *const f32);
-    _mm256_storeu_ps(data.as_mut_ptr()          as *mut f32, _mm256_add_ps(ev, ot));
-    _mm256_storeu_ps(data.as_mut_ptr().add(4)   as *mut f32, _mm256_sub_ps(ev, ot));
+    let ev = _mm256_loadu_ps(even.as_ptr().cast::<f32>());
+    _mm256_storeu_ps(data.as_mut_ptr().cast::<f32>(), _mm256_add_ps(ev, ot));
+    _mm256_storeu_ps(
+        data.as_mut_ptr().add(4).cast::<f32>(),
+        _mm256_sub_ps(ev, ot),
+    );
 }
 
 // ── DFT-3 butterfly ──────────────────────────────────────────────────────────
@@ -641,49 +535,18 @@ pub unsafe fn dft8_avx_fma_32(data: &mut [Complex32; 8], inverse: bool) {
 /// **Complex additions**: 6.
 ///
 /// References: Winograd (1978), Blahut (2010) §3.2.
-#[inline(always)]
-pub fn dft3_64(data: &mut [Complex64; 3], inverse: bool) {
-    const C3: f64 = -0.5;                     // cos(2π/3) = −½
-    const S3: f64 = 0.8660254037844386767864; // sin(2π/3) = √3/2
-
-    let (x0, x1, x2) = (data[0], data[1], data[2]);
-    let s = x1 + x2; // x1 + x2
-    let d = x1 - x2; // x1 - x2
-
-    // t = x0 + C3·s = x0 − s/2
-    let t = Complex64::new(x0.re + C3 * s.re, x0.im + C3 * s.im);
-    // id = i·S3·d (forward: −i·S3·d → id = (S3·d.im, −S3·d.re) appended to t)
-    // Forward:  Y[1] = t − i·S3·d  ⟹  (.re + S3·d.im,  .im − S3·d.re)
-    //           Y[2] = t + i·S3·d  ⟹  (.re − S3·d.im,  .im + S3·d.re)
-    // Inverse:  conjugate twiddles → flip sign of S3 term.
-    data[0] = x0 + s;
-    if inverse {
-        data[1] = Complex64::new(t.re - S3 * d.im, t.im + S3 * d.re);
-        data[2] = Complex64::new(t.re + S3 * d.im, t.im - S3 * d.re);
-    } else {
-        data[1] = Complex64::new(t.re + S3 * d.im, t.im - S3 * d.re);
-        data[2] = Complex64::new(t.re - S3 * d.im, t.im + S3 * d.re);
-    }
-}
-
-/// In-place DFT-3 (f32 variant).
-#[inline(always)]
-pub fn dft3_32(data: &mut [Complex32; 3], inverse: bool) {
-    const C3: f32 = -0.5_f32;
-    const S3: f32 = 0.866_025_403_784_438_6_f32;
-
-    let (x0, x1, x2) = (data[0], data[1], data[2]);
-    let s = x1 + x2;
-    let d = x1 - x2;
-    let t = Complex32::new(x0.re + C3 * s.re, x0.im + C3 * s.im);
-    data[0] = x0 + s;
-    if inverse {
-        data[1] = Complex32::new(t.re - S3 * d.im, t.im + S3 * d.re);
-        data[2] = Complex32::new(t.re + S3 * d.im, t.im - S3 * d.re);
-    } else {
-        data[1] = Complex32::new(t.re + S3 * d.im, t.im - S3 * d.re);
-        data[2] = Complex32::new(t.re - S3 * d.im, t.im + S3 * d.re);
-    }
+#[inline]
+pub(crate) fn dft3_impl<F: WinogradScalar>(data: &mut [num_complex::Complex<F>], inverse: bool) {
+    debug_assert!(data.len() >= 3);
+    let s = F::cast_f64(0.8660254037844386);
+    let w_r = F::cast_f64(-0.5);
+    let w_i = if inverse { s } else { -s };
+    let t1 = data[1] + data[2];
+    let m0 = data[0] + t1 * w_r;
+    let m1 = (data[1] - data[2]) * num_complex::Complex::new(F::cast_f64(0.0), w_i);
+    data[0] += t1;
+    data[1] = m0 + m1;
+    data[2] = m0 - m1;
 }
 
 // ── DFT-5 butterfly ──────────────────────────────────────────────────────────
@@ -719,82 +582,36 @@ pub fn dft3_32(data: &mut [Complex32; 3], inverse: bool) {
 /// d₁,d₂ — each scalar×complex costs 2 real muls). Standard minimal-form
 /// derivation: Winograd (1978), Blahut (2010) §3.3.
 /// **Complex additions**: 10.
-#[inline(always)]
-pub fn dft5_64(data: &mut [Complex64; 5], inverse: bool) {
-    // cos(2π/5) = (√5-1)/4
-    const C1: f64 = 0.309_016_994_374_947_42_f64;
-    // cos(4π/5) = -(√5+1)/4
-    const C2: f64 = -0.809_016_994_374_947_42_f64;
-    // sin(2π/5)
-    const S1: f64 = 0.951_056_516_295_153_57_f64;
-    // sin(4π/5)
-    const S2: f64 = 0.587_785_252_292_473_13_f64;
-
-    let (x0, x1, x2, x3, x4) = (data[0], data[1], data[2], data[3], data[4]);
-
-    // Symmetric sum/difference pairs.
-    let r1 = x1 + x4;
-    let r2 = x2 + x3;
-    let d1 = x1 - x4;
-    let d2 = x2 - x3;
-
-    data[0] = x0 + r1 + r2;
-
-    // Cosine accumulator terms (real-scalar × complex via componentwise mul).
-    let ar = Complex64::new(x0.re + C1 * r1.re + C2 * r2.re, x0.im + C1 * r1.im + C2 * r2.im);
-    let br = Complex64::new(x0.re + C2 * r1.re + C1 * r2.re, x0.im + C2 * r1.im + C1 * r2.im);
-
-    // Sine rotation terms (id₁, id₂ are complex; multiplied by ±i later).
-    let id1 = Complex64::new(S1 * d1.re + S2 * d2.re, S1 * d1.im + S2 * d2.im);
-    let id2 = Complex64::new(S2 * d1.re - S1 * d2.re, S2 * d1.im - S1 * d2.im);
-
-    // Apply ±i rotation: z·(−i) = (z.im, −z.re); z·(+i) = (−z.im, z.re).
-    // Forward: Y[1] = ar − i·id₁, Y[4] = ar + i·id₁
-    // Inverse: conjugate twiddles → signs flip.
-    if inverse {
-        data[1] = Complex64::new(ar.re - id1.im, ar.im + id1.re);
-        data[2] = Complex64::new(br.re - id2.im, br.im + id2.re);
-        data[3] = Complex64::new(br.re + id2.im, br.im - id2.re);
-        data[4] = Complex64::new(ar.re + id1.im, ar.im - id1.re);
+#[inline]
+pub(crate) fn dft5_impl<F: WinogradScalar>(data: &mut [num_complex::Complex<F>], inverse: bool) {
+    debug_assert!(data.len() >= 5);
+    let c1 = F::cast_f64(0.30901699437494745);
+    let c2 = F::cast_f64(-0.8090169943749475);
+    let s1 = F::cast_f64(0.9510565162951535);
+    let s2 = F::cast_f64(0.5877852522924731);
+    let sign = if inverse {
+        F::cast_f64(1.0)
     } else {
-        data[1] = Complex64::new(ar.re + id1.im, ar.im - id1.re);
-        data[2] = Complex64::new(br.re + id2.im, br.im - id2.re);
-        data[3] = Complex64::new(br.re - id2.im, br.im + id2.re);
-        data[4] = Complex64::new(ar.re - id1.im, ar.im + id1.re);
-    }
-}
-
-/// In-place DFT-5 (f32 variant).
-#[inline(always)]
-pub fn dft5_32(data: &mut [Complex32; 5], inverse: bool) {
-    const C1: f32 = 0.309_016_994_374_947_42_f32;
-    const C2: f32 = -0.809_016_994_374_947_42_f32;
-    const S1: f32 = 0.951_056_516_295_153_57_f32;
-    const S2: f32 = 0.587_785_252_292_473_13_f32;
-
-    let (x0, x1, x2, x3, x4) = (data[0], data[1], data[2], data[3], data[4]);
-    let r1 = x1 + x4;
-    let r2 = x2 + x3;
-    let d1 = x1 - x4;
-    let d2 = x2 - x3;
-
-    data[0] = x0 + r1 + r2;
-    let ar = Complex32::new(x0.re + C1 * r1.re + C2 * r2.re, x0.im + C1 * r1.im + C2 * r2.im);
-    let br = Complex32::new(x0.re + C2 * r1.re + C1 * r2.re, x0.im + C2 * r1.im + C1 * r2.im);
-    let id1 = Complex32::new(S1 * d1.re + S2 * d2.re, S1 * d1.im + S2 * d2.im);
-    let id2 = Complex32::new(S2 * d1.re - S1 * d2.re, S2 * d1.im - S1 * d2.im);
-
-    if inverse {
-        data[1] = Complex32::new(ar.re - id1.im, ar.im + id1.re);
-        data[2] = Complex32::new(br.re - id2.im, br.im + id2.re);
-        data[3] = Complex32::new(br.re + id2.im, br.im - id2.re);
-        data[4] = Complex32::new(ar.re + id1.im, ar.im - id1.re);
-    } else {
-        data[1] = Complex32::new(ar.re + id1.im, ar.im - id1.re);
-        data[2] = Complex32::new(br.re + id2.im, br.im - id2.re);
-        data[3] = Complex32::new(br.re - id2.im, br.im + id2.re);
-        data[4] = Complex32::new(ar.re - id1.im, ar.im + id1.re);
-    }
+        F::cast_f64(-1.0)
+    };
+    let s1 = s1 * sign;
+    let s2 = s2 * sign;
+    let t1 = data[1] + data[4];
+    let t2 = data[1] - data[4];
+    let t3 = data[2] + data[3];
+    let t4 = data[2] - data[3];
+    let m0 = data[0] + t1 + t3;
+    let m1 = t1 * c1 + t3 * c2;
+    let m2 = t1 * c2 + t3 * c1;
+    let m3 = num_complex::Complex::new(F::cast_f64(0.0), F::cast_f64(1.0)) * (t2 * s1 + t4 * s2);
+    let m4 = num_complex::Complex::new(F::cast_f64(0.0), F::cast_f64(1.0)) * (t2 * s2 - t4 * s1);
+    let s1_add = data[0] + m1;
+    let s2_add = data[0] + m2;
+    data[0] = m0;
+    data[1] = s1_add + m3;
+    data[4] = s1_add - m3;
+    data[2] = s2_add + m4;
+    data[3] = s2_add - m4;
 }
 
 // ── SIMD DFT-5 fast path (AVX2) ──────────────────────────────────────────────
@@ -803,109 +620,6 @@ pub fn dft5_32(data: &mut [Complex32; 5], inverse: bool) {
 /// Falls back to scalar for non-AVX2 targets.
 ///
 /// This processes one 5-element DFT using vectorized constant multiplications
-/// and compound operations when the CPU supports AVX2.
-#[inline]
-pub fn dft5_64_simd(data: &mut [Complex64; 5], inverse: bool) {
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    {
-        const C1: f64 = 0.309_016_994_374_947_42_f64;
-        const C2: f64 = -0.809_016_994_374_947_42_f64;
-        const S1: f64 = 0.951_056_516_295_153_57_f64;
-        const S2: f64 = 0.587_785_252_292_473_13_f64;
-
-        let x0 = data[0];
-        let x1 = data[1];
-        let x2 = data[2];
-        let x3 = data[3];
-        let x4 = data[4];
-
-        let r1 = x1 + x4;
-        let r2 = x2 + x3;
-        let d1 = x1 - x4;
-        let d2 = x2 - x3;
-
-        data[0] = x0 + r1 + r2;
-
-        // Use unsafe SIMD for constant multiplications: ar, br, id1, id2.
-        // For simplicity, fall back to scalar if the intrinsics add complexity;
-        // the per-element constants are already optimized by the compiler.
-        let ar_re = x0.re + C1 * r1.re + C2 * r2.re;
-        let ar_im = x0.im + C1 * r1.im + C2 * r2.im;
-        let br_re = x0.re + C2 * r1.re + C1 * r2.re;
-        let br_im = x0.im + C2 * r1.im + C1 * r2.im;
-        let id1_re = S1 * d1.re + S2 * d2.re;
-        let id1_im = S1 * d1.im + S2 * d2.im;
-        let id2_re = S2 * d1.re - S1 * d2.re;
-        let id2_im = S2 * d1.im - S1 * d2.im;
-
-        if inverse {
-            data[1] = Complex64::new(ar_re - id1_im, ar_im + id1_re);
-            data[2] = Complex64::new(br_re - id2_im, br_im + id2_re);
-            data[3] = Complex64::new(br_re + id2_im, br_im - id2_re);
-            data[4] = Complex64::new(ar_re + id1_im, ar_im - id1_re);
-        } else {
-            data[1] = Complex64::new(ar_re + id1_im, ar_im - id1_re);
-            data[2] = Complex64::new(br_re + id2_im, br_im - id2_re);
-            data[3] = Complex64::new(br_re - id2_im, br_im + id2_re);
-            data[4] = Complex64::new(ar_re - id1_im, ar_im + id1_re);
-        }
-    }
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-    {
-        dft5_64(data, inverse);
-    }
-}
-
-/// SIMD-accelerated DFT-5 for f32 using AVX2 (when available).
-#[inline]
-pub fn dft5_32_simd(data: &mut [Complex32; 5], inverse: bool) {
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    {
-        const C1: f32 = 0.309_016_994_374_947_42_f32;
-        const C2: f32 = -0.809_016_994_374_947_42_f32;
-        const S1: f32 = 0.951_056_516_295_153_57_f32;
-        const S2: f32 = 0.587_785_252_292_473_13_f32;
-
-        let x0 = data[0];
-        let x1 = data[1];
-        let x2 = data[2];
-        let x3 = data[3];
-        let x4 = data[4];
-
-        let r1 = x1 + x4;
-        let r2 = x2 + x3;
-        let d1 = x1 - x4;
-        let d2 = x2 - x3;
-
-        data[0] = x0 + r1 + r2;
-
-        let ar_re = x0.re + C1 * r1.re + C2 * r2.re;
-        let ar_im = x0.im + C1 * r1.im + C2 * r2.im;
-        let br_re = x0.re + C2 * r1.re + C1 * r2.re;
-        let br_im = x0.im + C2 * r1.im + C1 * r2.im;
-        let id1_re = S1 * d1.re + S2 * d2.re;
-        let id1_im = S1 * d1.im + S2 * d2.im;
-        let id2_re = S2 * d1.re - S1 * d2.re;
-        let id2_im = S2 * d1.im - S1 * d2.im;
-
-        if inverse {
-            data[1] = Complex32::new(ar_re - id1_im, ar_im + id1_re);
-            data[2] = Complex32::new(br_re - id2_im, br_im + id2_re);
-            data[3] = Complex32::new(br_re + id2_im, br_im - id2_re);
-            data[4] = Complex32::new(ar_re + id1_im, ar_im - id1_re);
-        } else {
-            data[1] = Complex32::new(ar_re + id1_im, ar_im - id1_re);
-            data[2] = Complex32::new(br_re + id2_im, br_im - id2_re);
-            data[3] = Complex32::new(br_re - id2_im, br_im + id2_re);
-            data[4] = Complex32::new(ar_re - id1_im, ar_im + id1_re);
-        }
-    }
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-    {
-        dft5_32(data, inverse);
-    }
-}
-
 // ── DFT-16 butterfly ─────────────────────────────────────────────────────────
 
 /// Precomputed forward twiddle factors for the 16-point DFT stage.
@@ -977,7 +691,7 @@ fn twiddle16_inv_32(k: usize) -> Complex32 {
 /// excluding k=0 trivial, k=4 = ×(-i) free, effectively 10 irrational mults).
 ///
 /// Correctness: Van Loan (1992), §3.3.
-#[inline(always)]
+#[inline]
 pub fn dft16_64(data: &mut [Complex64; 16], inverse: bool) {
     // Step 1: two DFT-8 sub-transforms on even and odd sub-arrays.
     let mut even = [
@@ -986,8 +700,8 @@ pub fn dft16_64(data: &mut [Complex64; 16], inverse: bool) {
     let mut odd = [
         data[1], data[3], data[5], data[7], data[9], data[11], data[13], data[15],
     ];
-    dft8_64(&mut even, inverse);
-    dft8_64(&mut odd, inverse);
+    dft8_impl(&mut even, inverse);
+    dft8_impl(&mut odd, inverse);
 
     // Step 2: apply W_16^k twiddles to odd outputs and butterfly.
     for k in 0..8 {
@@ -1006,7 +720,7 @@ pub fn dft16_64(data: &mut [Complex64; 16], inverse: bool) {
 }
 
 /// In-place Winograd DFT-16 (f32 variant).
-#[inline(always)]
+#[inline]
 pub fn dft16_32(data: &mut [Complex32; 16], inverse: bool) {
     let mut even = [
         data[0], data[2], data[4], data[6], data[8], data[10], data[12], data[14],
@@ -1014,8 +728,8 @@ pub fn dft16_32(data: &mut [Complex32; 16], inverse: bool) {
     let mut odd = [
         data[1], data[3], data[5], data[7], data[9], data[11], data[13], data[15],
     ];
-    dft8_32(&mut even, inverse);
-    dft8_32(&mut odd, inverse);
+    dft8_impl(&mut even, inverse);
+    dft8_impl(&mut odd, inverse);
 
     for k in 0..8 {
         let tw = if inverse {
@@ -1039,7 +753,10 @@ const TWIDDLE32_FWD_64: [Complex64; 16] = [
     Complex64::new(0.9807852804032304, -0.19509032201612825),
     Complex64::new(0.9238795325112867, -0.3826834323650898),
     Complex64::new(0.8314696123025452, -0.5555702330196022),
-    Complex64::new(0.7071067811865476, -0.7071067811865475),
+    Complex64::new(
+        std::f64::consts::FRAC_1_SQRT_2,
+        -std::f64::consts::FRAC_1_SQRT_2,
+    ),
     Complex64::new(0.5555702330196023, -0.8314696123025452),
     Complex64::new(0.38268343236508984, -0.9238795325112867),
     Complex64::new(0.19509032201612833, -0.9807852804032304),
@@ -1047,13 +764,16 @@ const TWIDDLE32_FWD_64: [Complex64; 16] = [
     Complex64::new(-0.1950903220161282, -0.9807852804032304),
     Complex64::new(-0.3826834323650897, -0.9238795325112867),
     Complex64::new(-0.555570233019602, -0.8314696123025455),
-    Complex64::new(-0.7071067811865475, -0.7071067811865476),
+    Complex64::new(
+        -std::f64::consts::FRAC_1_SQRT_2,
+        -std::f64::consts::FRAC_1_SQRT_2,
+    ),
     Complex64::new(-0.8314696123025453, -0.5555702330196022),
     Complex64::new(-0.9238795325112867, -0.3826834323650899),
     Complex64::new(-0.9807852804032304, -0.1950903220161286),
 ];
 
-#[inline(always)]
+#[inline]
 fn twiddle32_64(k: usize, inverse: bool) -> Complex64 {
     let w = TWIDDLE32_FWD_64[k];
     if inverse {
@@ -1063,7 +783,7 @@ fn twiddle32_64(k: usize, inverse: bool) -> Complex64 {
     }
 }
 
-#[inline(always)]
+#[inline]
 fn twiddle32_32(k: usize, inverse: bool) -> Complex32 {
     let w = twiddle32_64(k, inverse);
     Complex32::new(w.re as f32, w.im as f32)
@@ -1078,7 +798,7 @@ fn twiddle32_32(k: usize, inverse: bool) -> Complex32 {
 /// the trivial/free roots).
 ///
 /// Correctness: Van Loan (1992), §3.3 recursive formulation.
-#[inline(always)]
+#[inline]
 pub fn dft32_64(data: &mut [Complex64; 32], inverse: bool) {
     let mut even = [
         data[0], data[2], data[4], data[6], data[8], data[10], data[12], data[14], data[16],
@@ -1102,7 +822,7 @@ pub fn dft32_64(data: &mut [Complex64; 32], inverse: bool) {
 }
 
 /// In-place Winograd DFT-32 (f32 variant).
-#[inline(always)]
+#[inline]
 pub fn dft32_32(data: &mut [Complex32; 32], inverse: bool) {
     let mut even = [
         data[0], data[2], data[4], data[6], data[8], data[10], data[12], data[14], data[16],
@@ -1127,7 +847,7 @@ pub fn dft32_32(data: &mut [Complex32; 32], inverse: bool) {
 
 // ── DFT-64 butterfly ─────────────────────────────────────────────────────────
 
-#[inline(always)]
+#[inline]
 fn twiddle64_64(k: usize, inverse: bool) -> Complex64 {
     // W_64^(2m) = W_32^m and W_64^(2m+1) = W_32^m * W_64^1.
     // This avoids per-call trig evaluation and avoids lock checks in hot loops.
@@ -1145,7 +865,7 @@ fn twiddle64_64(k: usize, inverse: bool) -> Complex64 {
     }
 }
 
-#[inline(always)]
+#[inline]
 fn twiddle64_32(k: usize, inverse: bool) -> Complex32 {
     let w = twiddle64_64(k, inverse);
     Complex32::new(w.re as f32, w.im as f32)
@@ -1160,7 +880,7 @@ fn twiddle64_32(k: usize, inverse: bool) -> Complex32 {
 /// the trivial/free roots).
 ///
 /// Correctness: Van Loan (1992), §3.3 recursive formulation.
-#[inline(always)]
+#[inline]
 pub fn dft64_64(data: &mut [Complex64; 64], inverse: bool) {
     let mut even = core::array::from_fn(|i| data[2 * i]);
     let mut odd = core::array::from_fn(|i| data[2 * i + 1]);
@@ -1178,7 +898,7 @@ pub fn dft64_64(data: &mut [Complex64; 64], inverse: bool) {
 }
 
 /// In-place Winograd DFT-64 (f32 variant).
-#[inline(always)]
+#[inline]
 pub fn dft64_32(data: &mut [Complex32; 64], inverse: bool) {
     let mut even: [Complex32; 32] = core::array::from_fn(|i| data[2 * i]);
     let mut odd: [Complex32; 32] = core::array::from_fn(|i| data[2 * i + 1]);
@@ -1199,17 +919,90 @@ pub fn dft64_32(data: &mut [Complex32; 64], inverse: bool) {
 
 /// Apply `W_N^{k·j}` twiddle multiplication in-place.
 /// Used by the radix outer loop to apply inter-group twiddles.
-#[inline(always)]
-pub fn apply_twiddle_64(v: Complex64, tw: Complex64) -> Complex64 {
-    Complex64::new(v.re * tw.re - v.im * tw.im, v.re * tw.im + v.im * tw.re)
+#[inline]
+pub(crate) fn apply_twiddle_impl<F: WinogradScalar>(
+    v: num_complex::Complex<F>,
+    tw: num_complex::Complex<F>,
+) -> num_complex::Complex<F> {
+    num_complex::Complex::new(v.re * tw.re - v.im * tw.im, v.re * tw.im + v.im * tw.re)
 }
 
-#[inline(always)]
-/// Apply inter-group twiddle factor to a single element (f32).
-///
-/// Computes `v * tw` using the standard complex multiplication identity.
+/// Apply an f64 twiddle factor.
+#[inline]
+pub fn apply_twiddle_64(v: Complex64, tw: Complex64) -> Complex64 {
+    apply_twiddle_impl(v, tw)
+}
+
+/// Apply an f32 twiddle factor.
+#[inline]
 pub fn apply_twiddle_32(v: Complex32, tw: Complex32) -> Complex32 {
-    Complex32::new(v.re * tw.re - v.im * tw.im, v.re * tw.im + v.im * tw.re)
+    apply_twiddle_impl(v, tw)
+}
+
+/// In-place DFT-3 (f64 variant).
+#[inline]
+pub fn dft3_64(data: &mut [Complex64; 3], inverse: bool) {
+    dft3_impl(data, inverse);
+}
+
+/// In-place DFT-5 (f64 variant).
+#[inline]
+pub fn dft5_64(data: &mut [Complex64; 5], inverse: bool) {
+    dft5_impl(data, inverse);
+}
+
+/// In-place DFT-7 (f64 variant).
+#[inline]
+pub fn dft7_64(data: &mut [Complex64], inverse: bool) {
+    dft7_impl(data, inverse);
+}
+
+/// In-place DFT-2 (f64 variant).
+#[inline]
+pub fn dft2_64(a: &mut Complex64, b: &mut Complex64) {
+    dft2_impl(a, b);
+}
+
+/// In-place DFT-2 (f32 variant).
+#[inline]
+pub fn dft2_32(a: &mut Complex32, b: &mut Complex32) {
+    dft2_impl(a, b);
+}
+
+/// In-place DFT-4 (f64 variant).
+#[inline]
+pub fn dft4_64(data: &mut [Complex64; 4], inverse: bool) {
+    dft4_impl(data, inverse);
+}
+
+/// In-place DFT-4 (f32 variant).
+#[inline]
+pub fn dft4_32(data: &mut [Complex32; 4], inverse: bool) {
+    dft4_impl(data, inverse);
+}
+
+/// In-place DFT-5 (f32 variant).
+#[inline]
+pub fn dft5_32(data: &mut [Complex32; 5], inverse: bool) {
+    dft5_impl(data, inverse);
+}
+
+/// In-place DFT-7 (f32 variant).
+#[inline]
+pub fn dft7_32(data: &mut [Complex32], inverse: bool) {
+    dft7_impl(data, inverse);
+}
+
+/// In-place DFT-8 (f64 variant).
+#[inline]
+pub fn dft8_64(data: &mut [Complex64; 8], inverse: bool) {
+    dft8_impl(data, inverse);
+}
+
+/// In-place DFT-8 (f32 variant).
+#[inline]
+pub fn dft8_32(data: &mut [Complex32; 8], inverse: bool) {
+    dft8_impl(data, inverse);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1237,7 +1030,7 @@ mod tests {
             .collect();
         let expected = dft_forward_64(&input);
         let mut buf: [Complex64; 3] = input.as_slice().try_into().unwrap();
-        dft3_64(&mut buf, false);
+        dft3_impl(&mut buf, false);
         let err = max_err(&buf, &expected);
         assert!(err < 1e-13, "DFT-3 forward max_err={err:.2e}");
     }
@@ -1248,8 +1041,8 @@ mod tests {
             .map(|k| Complex64::new((k as f64 * 0.55).cos(), (k as f64 * 0.19).sin()))
             .collect();
         let mut buf: [Complex64; 3] = input.as_slice().try_into().unwrap();
-        dft3_64(&mut buf, false);
-        dft3_64(&mut buf, true);
+        dft3_impl(&mut buf, false);
+        dft3_impl(&mut buf, true);
         let recovered: Vec<Complex64> = buf.iter().map(|x| x / 3.0).collect();
         let err = max_err(&recovered, &input);
         assert!(err < 1e-13, "DFT-3 roundtrip max_err={err:.2e}");
@@ -1265,7 +1058,7 @@ mod tests {
             .map(|x| x * 3.0)
             .collect();
         let mut buf: [Complex64; 3] = input.as_slice().try_into().unwrap();
-        dft3_64(&mut buf, true);
+        dft3_impl(&mut buf, true);
         let err = max_err(&buf, &expected_unnorm);
         assert!(err < 1e-13, "DFT-3 inverse max_err={err:.2e}");
     }
@@ -1273,7 +1066,7 @@ mod tests {
     #[test]
     fn dft3_dc_produces_energy_in_bin0() {
         let mut buf = [Complex64::new(1.0, 0.0); 3];
-        dft3_64(&mut buf, false);
+        dft3_impl(&mut buf, false);
         assert!((buf[0] - Complex64::new(3.0, 0.0)).norm() < 1e-14);
         for x in &buf[1..] {
             assert!(x.norm() < 1e-14, "non-zero bin: {:?}", x);
@@ -1289,7 +1082,7 @@ mod tests {
             .collect();
         let expected = dft_forward_64(&input);
         let mut buf: [Complex64; 5] = input.as_slice().try_into().unwrap();
-        dft5_64(&mut buf, false);
+        dft5_impl(&mut buf, false);
         let err = max_err(&buf, &expected);
         assert!(err < 1e-12, "DFT-5 forward max_err={err:.2e}");
     }
@@ -1300,8 +1093,8 @@ mod tests {
             .map(|k| Complex64::new((k as f64 * 0.47).cos(), (k as f64 * 0.28).sin()))
             .collect();
         let mut buf: [Complex64; 5] = input.as_slice().try_into().unwrap();
-        dft5_64(&mut buf, false);
-        dft5_64(&mut buf, true);
+        dft5_impl(&mut buf, false);
+        dft5_impl(&mut buf, true);
         let recovered: Vec<Complex64> = buf.iter().map(|x| x / 5.0).collect();
         let err = max_err(&recovered, &input);
         assert!(err < 1e-12, "DFT-5 roundtrip max_err={err:.2e}");
@@ -1317,7 +1110,7 @@ mod tests {
             .map(|x| x * 5.0)
             .collect();
         let mut buf: [Complex64; 5] = input.as_slice().try_into().unwrap();
-        dft5_64(&mut buf, true);
+        dft5_impl(&mut buf, true);
         let err = max_err(&buf, &expected_unnorm);
         assert!(err < 1e-12, "DFT-5 inverse max_err={err:.2e}");
     }
@@ -1325,7 +1118,7 @@ mod tests {
     #[test]
     fn dft5_dc_produces_energy_in_bin0() {
         let mut buf = [Complex64::new(1.0, 0.0); 5];
-        dft5_64(&mut buf, false);
+        dft5_impl(&mut buf, false);
         assert!((buf[0] - Complex64::new(5.0, 0.0)).norm() < 1e-14);
         for x in &buf[1..] {
             assert!(x.norm() < 1e-14, "non-zero bin: {:?}", x);
@@ -1340,7 +1133,7 @@ mod tests {
         let expected = dft_forward_64(&input);
         let mut buf: [Complex32; 5] =
             core::array::from_fn(|i| Complex32::new(input[i].re as f32, input[i].im as f32));
-        dft5_32(&mut buf, false);
+        dft5_impl(&mut buf, false);
         let got: Vec<Complex64> = buf
             .iter()
             .map(|x| Complex64::new(x.re as f64, x.im as f64))
@@ -1358,7 +1151,7 @@ mod tests {
             .collect();
         let expected = dft_forward_64(&input);
         let mut buf: [Complex64; 7] = input.as_slice().try_into().unwrap();
-        dft7_64(&mut buf, false);
+        dft7_impl(&mut buf, false);
         let err = max_err(&buf, &expected);
         assert!(err < 1e-12, "DFT-7 forward max_err={err:.2e}");
     }
@@ -1369,8 +1162,8 @@ mod tests {
             .map(|k| Complex64::new((k as f64 * 0.37).cos(), (k as f64 * 0.19).sin()))
             .collect();
         let mut buf: [Complex64; 7] = input.as_slice().try_into().unwrap();
-        dft7_64(&mut buf, false);
-        dft7_64(&mut buf, true);
+        dft7_impl(&mut buf, false);
+        dft7_impl(&mut buf, true);
         let recovered: Vec<Complex64> = buf.iter().map(|x| x / 7.0).collect();
         let err = max_err(&recovered, &input);
         assert!(err < 1e-12, "DFT-7 roundtrip max_err={err:.2e}");
@@ -1386,7 +1179,7 @@ mod tests {
             .map(|x| x * 7.0)
             .collect();
         let mut buf: [Complex64; 7] = input.as_slice().try_into().unwrap();
-        dft7_64(&mut buf, true);
+        dft7_impl(&mut buf, true);
         let err = max_err(&buf, &expected_unnorm);
         assert!(err < 1e-12, "DFT-7 inverse max_err={err:.2e}");
     }
@@ -1394,7 +1187,7 @@ mod tests {
     #[test]
     fn dft7_dc_produces_energy_in_bin0() {
         let mut buf = [Complex64::new(1.0, 0.0); 7];
-        dft7_64(&mut buf, false);
+        dft7_impl(&mut buf, false);
         assert!((buf[0] - Complex64::new(7.0, 0.0)).norm() < 1e-14);
         for x in &buf[1..] {
             assert!(x.norm() < 1e-14, "non-zero bin: {:?}", x);
@@ -1409,7 +1202,7 @@ mod tests {
         let expected = dft_forward_64(&input);
         let mut buf: [Complex32; 7] =
             core::array::from_fn(|i| Complex32::new(input[i].re as f32, input[i].im as f32));
-        dft7_32(&mut buf, false);
+        dft7_impl(&mut buf, false);
         let got: Vec<Complex64> = buf
             .iter()
             .map(|x| Complex64::new(x.re as f64, x.im as f64))
@@ -1426,7 +1219,7 @@ mod tests {
         let expected = dft_forward_64(&input);
         let mut a = input[0];
         let mut b = input[1];
-        dft2_64(&mut a, &mut b);
+        dft2_impl(&mut a, &mut b);
         assert!(
             max_err(&[a, b], &expected) < 1e-14,
             "DFT-2 forward mismatch"
@@ -1440,8 +1233,8 @@ mod tests {
         let orig_a = a;
         let orig_b = b;
         // forward then unnorm-inverse should give 2× the original.
-        dft2_64(&mut a, &mut b);
-        dft2_64(&mut a, &mut b);
+        dft2_impl(&mut a, &mut b);
+        dft2_impl(&mut a, &mut b);
         assert!((a - 2.0 * orig_a).norm() < 1e-14);
         assert!((b - 2.0 * orig_b).norm() < 1e-14);
     }
@@ -1455,7 +1248,7 @@ mod tests {
             .collect();
         let expected = dft_forward_64(&input);
         let mut buf: [Complex64; 4] = input.as_slice().try_into().unwrap();
-        dft4_64(&mut buf, false);
+        dft4_impl(&mut buf, false);
         assert!(max_err(&buf, &expected) < 1e-13, "DFT-4 forward mismatch");
     }
 
@@ -1465,8 +1258,8 @@ mod tests {
             .map(|k| Complex64::new((k as f64 * 0.5).cos(), (k as f64 * 0.2).sin()))
             .collect();
         let mut buf: [Complex64; 4] = input.as_slice().try_into().unwrap();
-        dft4_64(&mut buf, false);
-        dft4_64(&mut buf, true);
+        dft4_impl(&mut buf, false);
+        dft4_impl(&mut buf, true);
         let recovered: Vec<Complex64> = buf.iter().map(|x| x / 4.0).collect();
         assert!(
             max_err(&recovered, &input) < 1e-13,
@@ -1484,7 +1277,7 @@ mod tests {
             .map(|x| x * 4.0)
             .collect();
         let mut buf: [Complex64; 4] = input.as_slice().try_into().unwrap();
-        dft4_64(&mut buf, true);
+        dft4_impl(&mut buf, true);
         assert!(
             max_err(&buf, &expected_unnorm) < 1e-13,
             "DFT-4 inverse mismatch"
@@ -1500,7 +1293,7 @@ mod tests {
             .collect();
         let expected = dft_forward_64(&input);
         let mut buf: [Complex64; 8] = input.as_slice().try_into().unwrap();
-        dft8_64(&mut buf, false);
+        dft8_impl(&mut buf, false);
         let err = max_err(&buf, &expected);
         assert!(err < 1e-12, "DFT-8 forward max_err={err:.2e}");
     }
@@ -1511,8 +1304,8 @@ mod tests {
             .map(|k| Complex64::new((k as f64 * 0.23).cos(), -(k as f64 * 0.11).sin()))
             .collect();
         let mut buf: [Complex64; 8] = input.as_slice().try_into().unwrap();
-        dft8_64(&mut buf, false);
-        dft8_64(&mut buf, true);
+        dft8_impl(&mut buf, false);
+        dft8_impl(&mut buf, true);
         let recovered: Vec<Complex64> = buf.iter().map(|x| x / 8.0).collect();
         let err = max_err(&recovered, &input);
         assert!(err < 1e-12, "DFT-8 roundtrip max_err={err:.2e}");
@@ -1528,7 +1321,7 @@ mod tests {
             .map(|x| x * 8.0)
             .collect();
         let mut buf: [Complex64; 8] = input.as_slice().try_into().unwrap();
-        dft8_64(&mut buf, true);
+        dft8_impl(&mut buf, true);
         let err = max_err(&buf, &expected_unnorm);
         assert!(err < 1e-12, "DFT-8 inverse max_err={err:.2e}");
     }
@@ -1541,7 +1334,7 @@ mod tests {
         let expected = dft_forward_64(&input);
         let mut buf: [Complex32; 8] =
             core::array::from_fn(|i| Complex32::new(input[i].re as f32, input[i].im as f32));
-        dft8_32(&mut buf, false);
+        dft8_impl(&mut buf, false);
         let got: Vec<Complex64> = buf
             .iter()
             .map(|x| Complex64::new(x.re as f64, x.im as f64))
@@ -1687,7 +1480,7 @@ mod tests {
             Complex64::new(0.0, 0.0),
             Complex64::new(0.0, 0.0),
         ];
-        dft4_64(&mut buf, false);
+        dft4_impl(&mut buf, false);
         for x in &buf {
             assert!((x - Complex64::new(1.0, 0.0)).norm() < 1e-14);
         }
@@ -1697,7 +1490,7 @@ mod tests {
     fn dft8_dc_produces_energy_in_bin0() {
         // DFT([1,1,1,1,1,1,1,1]) = [8,0,0,0,0,0,0,0]
         let mut buf = [Complex64::new(1.0, 0.0); 8];
-        dft8_64(&mut buf, false);
+        dft8_impl(&mut buf, false);
         assert!((buf[0] - Complex64::new(8.0, 0.0)).norm() < 1e-12);
         for x in &buf[1..] {
             assert!(x.norm() < 1e-12);

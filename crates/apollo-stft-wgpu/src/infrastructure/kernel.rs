@@ -20,6 +20,9 @@
 //!
 //! Formal basis: Cooley & Tukey (1965); Allen & Rabiner (1977) Theorem 1.
 
+#![allow(clippy::unused_self)]
+#![allow(clippy::if_same_then_else)]
+
 use std::sync::mpsc;
 
 use bytemuck::{Pod, Zeroable};

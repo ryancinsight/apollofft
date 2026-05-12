@@ -1,5 +1,7 @@
 //! WGPU value-semantic verification.
 
+#![allow(clippy::manual_memcpy)]
+
 #[cfg(test)]
 mod tests {
     use apollo_dctdst::{DctDstPlan, RealTransformKind};

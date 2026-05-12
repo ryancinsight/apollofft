@@ -11,6 +11,12 @@ use apollo_fft::{f16, PrecisionProfile};
 use nalgebra::DMatrix;
 use ndarray::Array1;
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+
+thread_local! {
+    static TYPED_INPUT64_SCRATCH: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+    static TYPED_OUTPUT64_SCRATCH: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+}
 
 /// Reusable graph Fourier plan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +76,20 @@ impl GftPlan {
 
     /// Forward graph Fourier transform `U^T x` into caller-owned storage.
     pub fn forward_into(&self, signal: &Array1<f64>, output: &mut Array1<f64>) -> GftResult<()> {
+        self.forward_f64_slice_into(
+            signal.as_slice().expect("GFT signal must be contiguous"),
+            output
+                .as_slice_mut()
+                .expect("GFT output must be contiguous"),
+        )
+    }
+
+    /// Forward graph Fourier transform `U^T x` over contiguous f64 slices.
+    pub(crate) fn forward_f64_slice_into(
+        &self,
+        signal: &[f64],
+        output: &mut [f64],
+    ) -> GftResult<()> {
         if signal.len() != self.n || output.len() != self.n {
             return Err(GftError::LengthMismatch);
         }
@@ -114,6 +134,22 @@ impl GftPlan {
 
     /// Inverse graph Fourier transform `U X` into caller-owned storage.
     pub fn inverse_into(&self, spectrum: &Array1<f64>, output: &mut Array1<f64>) -> GftResult<()> {
+        self.inverse_f64_slice_into(
+            spectrum
+                .as_slice()
+                .expect("GFT spectrum must be contiguous"),
+            output
+                .as_slice_mut()
+                .expect("GFT output must be contiguous"),
+        )
+    }
+
+    /// Inverse graph Fourier transform `U X` over contiguous f64 slices.
+    pub(crate) fn inverse_f64_slice_into(
+        &self,
+        spectrum: &[f64],
+        output: &mut [f64],
+    ) -> GftResult<()> {
         if spectrum.len() != self.n || output.len() != self.n {
             return Err(GftError::LengthMismatch);
         }
@@ -148,13 +184,16 @@ pub trait GftStorage: Copy + Send + Sync + 'static {
         if signal.len() != plan.n || output.len() != plan.n {
             return Err(GftError::LengthMismatch);
         }
-        let input64 = Array1::from_iter(signal.iter().copied().map(Self::to_f64));
-        let mut output64 = Array1::zeros(plan.n);
-        plan.forward_into(&input64, &mut output64)?;
-        for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
-            *slot = Self::from_f64(value);
-        }
-        Ok(())
+        with_f64_workspaces(plan.n, |input64, output64| {
+            for (slot, value) in input64.iter_mut().zip(signal.iter().copied()) {
+                *slot = Self::to_f64(value);
+            }
+            plan.forward_f64_slice_into(input64, output64)?;
+            for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+                *slot = Self::from_f64(value);
+            }
+            Ok(())
+        })
     }
 
     /// Execute inverse transform into caller-owned storage.
@@ -168,13 +207,16 @@ pub trait GftStorage: Copy + Send + Sync + 'static {
         if spectrum.len() != plan.n || output.len() != plan.n {
             return Err(GftError::LengthMismatch);
         }
-        let input64 = Array1::from_iter(spectrum.iter().copied().map(Self::to_f64));
-        let mut output64 = Array1::zeros(plan.n);
-        plan.inverse_into(&input64, &mut output64)?;
-        for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
-            *slot = Self::from_f64(value);
-        }
-        Ok(())
+        with_f64_workspaces(plan.n, |input64, output64| {
+            for (slot, value) in input64.iter_mut().zip(spectrum.iter().copied()) {
+                *slot = Self::to_f64(value);
+            }
+            plan.inverse_f64_slice_into(input64, output64)?;
+            for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+                *slot = Self::from_f64(value);
+            }
+            Ok(())
+        })
     }
 }
 
@@ -240,6 +282,36 @@ fn validate_profile(actual: PrecisionProfile, expected: PrecisionProfile) -> Gft
     } else {
         Err(GftError::PrecisionMismatch)
     }
+}
+
+fn with_f64_workspaces<R>(n: usize, f: impl FnOnce(&mut [f64], &mut [f64]) -> R) -> R {
+    TYPED_INPUT64_SCRATCH.with(|input_scratch| {
+        TYPED_OUTPUT64_SCRATCH.with(|output_scratch| {
+            let mut input_scratch = input_scratch.borrow_mut();
+            if input_scratch.len() < n {
+                input_scratch.resize(n, 0.0);
+            }
+
+            let mut output_scratch = output_scratch.borrow_mut();
+            if output_scratch.len() < n {
+                output_scratch.resize(n, 0.0);
+            }
+
+            f(&mut input_scratch[..n], &mut output_scratch[..n])
+        })
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn typed_scratch_capacities() -> (usize, usize) {
+    TYPED_INPUT64_SCRATCH.with(|input_scratch| {
+        TYPED_OUTPUT64_SCRATCH.with(|output_scratch| {
+            (
+                input_scratch.borrow().capacity(),
+                output_scratch.borrow().capacity(),
+            )
+        })
+    })
 }
 
 #[cfg(test)]
@@ -327,6 +399,63 @@ mod tests {
         .expect("typed f32 inverse");
         for (actual, expected) in recovered32.iter().zip(signal32.iter()) {
             assert!((*actual - *expected).abs() < 1.0e-5);
+        }
+    }
+
+    #[test]
+    fn typed_f32_paths_reuse_f64_workspaces() {
+        let plan = path_three_plan();
+        let signal = Array1::from_vec(vec![1.25_f32, -0.5, 2.0]);
+        let mut first_spectrum = Array1::<f32>::zeros(plan.len());
+        let mut second_spectrum = Array1::<f32>::zeros(plan.len());
+        let mut first_recovered = Array1::<f32>::zeros(plan.len());
+        let mut second_recovered = Array1::<f32>::zeros(plan.len());
+
+        plan.forward_typed_into(
+            &signal,
+            &mut first_spectrum,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("first typed f32 forward");
+        let forward_caps = typed_scratch_capacities();
+        plan.forward_typed_into(
+            &signal,
+            &mut second_spectrum,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("second typed f32 forward");
+
+        assert_eq!(typed_scratch_capacities(), forward_caps);
+        assert!(forward_caps.0 >= plan.len());
+        assert!(forward_caps.1 >= plan.len());
+        for (actual, expected) in second_spectrum.iter().zip(first_spectrum.iter()) {
+            assert_abs_diff_eq!(actual, expected, epsilon = 0.0);
+        }
+
+        plan.inverse_typed_into(
+            &first_spectrum,
+            &mut first_recovered,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("first typed f32 inverse");
+        let inverse_caps = typed_scratch_capacities();
+        plan.inverse_typed_into(
+            &first_spectrum,
+            &mut second_recovered,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("second typed f32 inverse");
+
+        assert_eq!(typed_scratch_capacities(), inverse_caps);
+        assert!(inverse_caps.0 >= plan.len());
+        assert!(inverse_caps.1 >= plan.len());
+        for ((actual, expected), original) in second_recovered
+            .iter()
+            .zip(first_recovered.iter())
+            .zip(signal.iter())
+        {
+            assert_abs_diff_eq!(actual, expected, epsilon = 0.0);
+            assert!((*actual - *original).abs() < 1.0e-5);
         }
     }
 

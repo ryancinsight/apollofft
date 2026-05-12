@@ -207,9 +207,6 @@ pub static FFT_CACHE_3D: std::sync::LazyLock<Fft3dCache> =
         cache: RwLock::new(HashMap::new()),
     });
 
-/// Legacy compatibility alias for the 3D cache.
-pub use FFT_CACHE_3D as FFT_CACHE;
-
 /// Return a cached 3D plan for a given grid.
 pub fn get_fft_for_grid(nx: usize, ny: usize, nz: usize) -> Arc<FftPlan3D> {
     FFT_CACHE_3D.get_or_create(

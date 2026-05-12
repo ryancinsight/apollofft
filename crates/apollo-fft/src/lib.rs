@@ -34,56 +34,30 @@ pub mod domain;
 /// Infrastructure adapters.
 pub mod infrastructure;
 
-/// Compatibility module for backend contracts.
-pub mod backend {
-    pub use crate::domain::contracts::backend::*;
-}
-
-/// Compatibility module for error contracts.
-pub mod error {
-    pub use crate::domain::contracts::error::*;
-}
-
-/// Compatibility module for FFT plan types.
-pub mod plan {
-    pub use crate::application::execution::plan::fft::{
-        dimension_1d::FftPlan1D, dimension_2d::FftPlan2D, dimension_3d::FftPlan3D,
-        real_storage::RealFftData,
-    };
-}
-
-/// Compatibility module for shared metadata types.
-pub mod types {
-    pub use crate::domain::metadata::precision::{
-        BackendKind, ComputePrecision, Normalization, PrecisionMode, PrecisionProfile,
-        StoragePrecision,
-    };
-    pub use crate::domain::metadata::shape::{HalfSpectrum3D, Shape1D, Shape2D, Shape3D};
-}
+pub use application::execution::plan::fft::{
+    dimension_1d::FftPlan1D, dimension_2d::FftPlan2D, dimension_3d::FftPlan3D,
+    real_storage::RealFftData,
+};
 pub use application::orchestration::cache::plans::{
     get_fft_for_grid, Fft1dCache, Fft1dCacheKey, Fft2dCache, Fft2dCacheKey, Fft3dCache,
-    Fft3dCacheKey, FFT_CACHE, FFT_CACHE_1D, FFT_CACHE_2D, FFT_CACHE_3D,
+    Fft3dCacheKey, FFT_CACHE_1D, FFT_CACHE_2D, FFT_CACHE_3D,
 };
-pub use backend::FftBackend;
-pub use error::{ApolloError, ApolloResult};
+pub use domain::contracts::backend::FftBackend;
+pub use domain::contracts::error::{ApolloError, ApolloResult};
+pub use domain::metadata::precision::{
+    BackendKind, ComputePrecision, Normalization, PrecisionMode, PrecisionProfile, StoragePrecision,
+};
+pub use domain::metadata::shape::{HalfSpectrum3D, Shape1D, Shape2D, Shape3D};
 pub use half::f16;
 pub use infrastructure::transport::cpu::CpuBackend;
 
 pub use num_complex::Complex32;
 pub use num_complex::Complex64;
-pub use plan::{FftPlan1D, FftPlan2D, FftPlan3D, RealFftData};
 
 pub use application::utilities::freq::{fftfreq, rfftfreq};
 pub use application::utilities::shift::{fftshift, ifftshift};
-pub use types::{
-    BackendKind, ComputePrecision, HalfSpectrum3D, Normalization, PrecisionMode, PrecisionProfile,
-    Shape1D, Shape2D, Shape3D, StoragePrecision,
-};
 
 use ndarray::{Array1, Array2, Array3, Zip};
-
-/// Compatibility alias for legacy `kwavers` code paths.
-pub type ProcessorFft3d = FftPlan3D;
 
 /// Forward 1D FFT of a real signal.
 #[must_use]

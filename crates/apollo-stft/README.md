@@ -33,11 +33,13 @@ This gives exact reconstruction in exact arithmetic for covered samples.
 ## Execution Surfaces
 
 - `forward` and `inverse` allocate returned arrays.
-- `forward_into` and `inverse_into` use caller-owned output buffers.
+- `forward_into` and `inverse_into` use caller-owned output buffers. Inverse
+  overlap-add execution reuses per-thread frame, complex, overlap, and weight
+  workspaces.
 - `forward_typed_into` and `inverse_typed_into` support Apollo precision
-  profiles without duplicating frame or FFT kernels.
-- `forward_inplace` and `inverse_inplace` are compatibility aliases for the
-  allocating paths.
+  profiles without duplicating frame or FFT kernels. Typed execution reuses
+  per-thread f64/Complex64 bridge workspaces instead of allocating bridge
+  arrays per call.
 
 Typed execution uses Apollo's shared precision profile contract:
 
@@ -55,6 +57,7 @@ Profile/storage mismatches return `StftError::PrecisionMismatch`.
 The crate verifies Hann symmetry, forward/inverse reconstruction,
 caller-owned forward and inverse parity, invalid configuration rejection,
 short-input rejection, and property-based reconstruction over deterministic
-signals. Typed tests cover `f64`, `f32`, mixed `f16`, represented-input
-spectrum parity, `f32` inverse roundtrip, and precision/profile mismatch
-rejection.
+signals, inverse workspace reuse, and caller-owned forward parity. Typed tests
+cover `f64`, `f32`, mixed `f16`, represented-input spectrum parity, `f32`
+inverse roundtrip, repeated typed workspace reuse, and precision/profile
+mismatch rejection.

@@ -5,6 +5,12 @@ use crate::domain::contracts::error::FrftError;
 use apollo_fft::{f16, PrecisionProfile};
 use ndarray::Array1;
 use num_complex::{Complex32, Complex64};
+use std::cell::RefCell;
+
+thread_local! {
+    static TYPED_INPUT64_SCRATCH: RefCell<Vec<Complex64>> = const { RefCell::new(Vec::new()) };
+    static TYPED_OUTPUT64_SCRATCH: RefCell<Vec<Complex64>> = const { RefCell::new(Vec::new()) };
+}
 
 /// Complex storage accepted by typed FrFT paths.
 pub trait FrftStorage: Copy + Send + Sync + 'static {
@@ -31,13 +37,16 @@ pub trait FrftStorage: Copy + Send + Sync + 'static {
                 plan: plan.len(),
             });
         }
-        let input64 = Array1::from_iter(input.iter().copied().map(Self::to_complex64));
-        let mut output64 = Array1::<Complex64>::zeros(plan.len());
-        plan.forward_into(&input64, &mut output64)?;
-        for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
-            *slot = Self::from_complex64(value);
-        }
-        Ok(())
+        with_complex64_workspaces(plan.len(), |input64, output64| {
+            for (slot, value) in input64.iter_mut().zip(input.iter().copied()) {
+                *slot = Self::to_complex64(value);
+            }
+            plan.forward_complex64_slice_into(input64, output64)?;
+            for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+                *slot = Self::from_complex64(value);
+            }
+            Ok(())
+        })
     }
 
     /// Execute inverse transform into caller-owned storage.
@@ -54,13 +63,16 @@ pub trait FrftStorage: Copy + Send + Sync + 'static {
                 plan: plan.len(),
             });
         }
-        let input64 = Array1::from_iter(input.iter().copied().map(Self::to_complex64));
-        let mut output64 = Array1::<Complex64>::zeros(plan.len());
-        plan.inverse_into(&input64, &mut output64)?;
-        for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
-            *slot = Self::from_complex64(value);
-        }
-        Ok(())
+        with_complex64_workspaces(plan.len(), |input64, output64| {
+            for (slot, value) in input64.iter_mut().zip(input.iter().copied()) {
+                *slot = Self::to_complex64(value);
+            }
+            plan.inverse_complex64_slice_into(input64, output64)?;
+            for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+                *slot = Self::from_complex64(value);
+            }
+            Ok(())
+        })
     }
 }
 
@@ -129,4 +141,37 @@ fn validate_profile(actual: PrecisionProfile, expected: PrecisionProfile) -> Res
     } else {
         Err(FrftError::PrecisionMismatch)
     }
+}
+
+fn with_complex64_workspaces<R>(
+    n: usize,
+    f: impl FnOnce(&mut [Complex64], &mut [Complex64]) -> R,
+) -> R {
+    TYPED_INPUT64_SCRATCH.with(|input_scratch| {
+        TYPED_OUTPUT64_SCRATCH.with(|output_scratch| {
+            let mut input_scratch = input_scratch.borrow_mut();
+            if input_scratch.len() < n {
+                input_scratch.resize(n, Complex64::new(0.0, 0.0));
+            }
+
+            let mut output_scratch = output_scratch.borrow_mut();
+            if output_scratch.len() < n {
+                output_scratch.resize(n, Complex64::new(0.0, 0.0));
+            }
+
+            f(&mut input_scratch[..n], &mut output_scratch[..n])
+        })
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn typed_scratch_capacities() -> (usize, usize) {
+    TYPED_INPUT64_SCRATCH.with(|input_scratch| {
+        TYPED_OUTPUT64_SCRATCH.with(|output_scratch| {
+            (
+                input_scratch.borrow().capacity(),
+                output_scratch.borrow().capacity(),
+            )
+        })
+    })
 }

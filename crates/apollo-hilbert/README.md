@@ -14,16 +14,29 @@ src/
 ```
 
 `HilbertPlan` validates length and exposes Hilbert quadrature, analytic signal,
-envelope, and phase surfaces.
+envelope, and phase surfaces. The analytic-signal owner kernel applies the
+frequency-domain mask in the forward FFT spectrum through Apollo FFT's
+slice-level real forward plan, then runs the complex inverse in place on the
+same buffer. `analytic_signal_into` lets callers supply that complex output
+buffer directly.
+Caller-owned quadrature execution writes the imaginary analytic component
+directly into the supplied output slice through a reused per-thread complex
+analytic scratch buffer instead of constructing an intermediate analytic vector
+or quadrature vector.
+Caller-owned envelope and phase execution use the same analytic scratch
+discipline, and `AnalyticSignal` exposes caller-owned real, quadrature,
+envelope, phase, and instantaneous-frequency projections.
 
 Typed execution uses Apollo's shared precision profile contract:
 
 - `HIGH_ACCURACY_F64`: `f64` input and quadrature storage with owner `f64`
   analytic masking.
 - `LOW_PRECISION_F32`: `f32` input and quadrature storage converted through the
-  owner path and quantized once into the caller-owned output.
+  owner path using per-thread bridge workspaces and quantized once into the
+  caller-owned output.
 - `MIXED_PRECISION_F16_F32`: `f16` input and quadrature storage converted
-  through the owner path and quantized once into the caller-owned output.
+  through the owner path using per-thread bridge workspaces and quantized once
+  into the caller-owned output.
 
 Profile/storage mismatches return `HilbertError::PrecisionMismatch`.
 
@@ -59,4 +72,9 @@ Nyquist behavior, analytic real-part preservation, unit-cosine envelope,
 instantaneous-frequency constant-tone, double-Hilbert negation, and
 random real-signal preservation. Typed tests cover `f64`, `f32`, mixed `f16`,
 caller-owned quadrature parity, analytic-signal real-part preservation, and
-precision/profile mismatch rejection.
+precision/profile mismatch rejection. Workspace tests assert stable typed
+bridge capacities across repeated calls and bitwise equal repeated output.
+Direct kernel tests cover caller-owned analytic parity, caller-owned quadrature
+parity, quadrature scratch capacity reuse, and output-length rejection.
+Analytic-signal tests cover caller-owned observable projection parity and length
+rejection.

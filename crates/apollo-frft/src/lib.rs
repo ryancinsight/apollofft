@@ -19,7 +19,7 @@ pub mod domain;
 /// High-performance computing kernels and backend hardware integrations.
 pub mod infrastructure;
 
-// Facade API for backward compatibility and end-user simplicity
+// Canonical crate-root API for transform plans and error contracts.
 
 pub use crate::application::execution::plan::frft::dimension_1d::{frft, FrftPlan};
 pub use crate::application::execution::plan::frft::storage::FrftStorage;

@@ -1,12 +1,29 @@
 //! 1D Short-Time Fourier Transform plan.
 
+#![allow(clippy::manual_memcpy)]
+
+use super::storage::{
+    validate_profile, StftRealOutputStorage, StftRealStorage, StftSpectrumInput,
+    StftSpectrumStorage,
+};
 use crate::application::execution::kernel::hann::hann_window;
 use crate::domain::contracts::error::{StftError, StftResult};
-use apollo_fft::application::plan::FftPlan1D;
-use apollo_fft::{f16, PrecisionProfile};
+use apollo_fft::{FftPlan1D, PrecisionProfile, Shape1D};
 use ndarray::Array1;
-use num_complex::{Complex32, Complex64};
+use num_complex::Complex64;
 use rayon::prelude::*;
+use std::cell::RefCell;
+
+thread_local! {
+    static TYPED_SIGNAL64_SCRATCH: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+    static TYPED_SPECTRUM64_SCRATCH: RefCell<Vec<Complex64>> = const { RefCell::new(Vec::new()) };
+    static TYPED_FORWARD_OUTPUT64_SCRATCH: RefCell<Vec<Complex64>> = const { RefCell::new(Vec::new()) };
+    static TYPED_INVERSE_OUTPUT64_SCRATCH: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+    static INVERSE_FRAME_SCRATCH: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+    static INVERSE_COMPLEX_SCRATCH: RefCell<Vec<Complex64>> = const { RefCell::new(Vec::new()) };
+    static INVERSE_OVERLAP_SCRATCH: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+    static INVERSE_WEIGHT_SCRATCH: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+}
 
 /// Return `true` when `n > 0`.
 #[must_use]
@@ -41,9 +58,8 @@ impl StftPlan {
             return Err(StftError::HopExceedsFrame);
         }
         let window = hann_window(frame_len);
-        let fft_plan = FftPlan1D::new(
-            apollo_fft::types::Shape1D::new(frame_len).expect("STFT frame length must be valid"),
-        );
+        let fft_plan =
+            FftPlan1D::new(Shape1D::new(frame_len).expect("STFT frame length must be valid"));
         Ok(Self {
             frame_len,
             hop_len,
@@ -125,7 +141,11 @@ impl StftPlan {
         }
         let frames = self.frame_count(signal.len());
         let mut output = Array1::<Complex64>::zeros(frames * self.spectrum_len());
-        self.forward_with_window_inner(signal, window, &mut output)?;
+        let signal_slice = signal.as_slice().expect("signal buffer must be contiguous");
+        let output_slice = output
+            .as_slice_mut()
+            .expect("output buffer must be contiguous");
+        self.forward_with_window_slice_inner(signal_slice, window, output_slice)?;
         Ok(output)
     }
 
@@ -142,8 +162,11 @@ impl StftPlan {
         if signal.len() < self.frame_len {
             return Err(StftError::InputTooShort);
         }
-        let window_slice = self.window.as_slice().expect("window must be contiguous");
-        self.forward_with_window_inner(signal, window_slice, output)
+        let signal_slice = signal.as_slice().expect("signal buffer must be contiguous");
+        let output_slice = output
+            .as_slice_mut()
+            .expect("output buffer must be contiguous");
+        self.forward_f64_slice_into(signal_slice, output_slice)
     }
 
     /// Forward STFT for typed real input and typed complex output storage.
@@ -162,28 +185,43 @@ impl StftPlan {
         if output.len() != frames * self.spectrum_len() {
             return Err(StftError::LengthMismatch);
         }
-        let signal64 = Array1::from_iter(signal.iter().copied().map(T::to_f64));
-        let mut output64 = Array1::<Complex64>::zeros(output.len());
-        self.forward_into(&signal64, &mut output64)?;
-        for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
-            *slot = O::from_complex64(value);
-        }
-        Ok(())
+        with_forward_typed_workspaces(signal.len(), output.len(), |signal64, output64| {
+            for (slot, value) in signal64.iter_mut().zip(signal.iter().copied()) {
+                *slot = T::to_f64(value);
+            }
+            self.forward_f64_slice_into(signal64, output64)?;
+            for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+                *slot = O::from_complex64(value);
+            }
+            Ok(())
+        })
     }
 
-    fn forward_with_window_inner(
+    fn forward_f64_slice_into(&self, signal: &[f64], output: &mut [Complex64]) -> StftResult<()> {
+        if signal.len() < self.frame_len {
+            return Err(StftError::InputTooShort);
+        }
+        let window = self.window.as_slice().expect("window must be contiguous");
+        self.forward_with_window_slice_inner(signal, window, output)
+    }
+
+    fn forward_with_window_slice_inner(
         &self,
-        signal: &Array1<f64>,
+        signal: &[f64],
         window: &[f64],
-        output: &mut Array1<Complex64>,
+        output: &mut [Complex64],
     ) -> StftResult<()> {
+        if window.len() != self.frame_len {
+            return Err(StftError::WindowLengthMismatch);
+        }
+        if signal.len() < self.frame_len {
+            return Err(StftError::InputTooShort);
+        }
         let frames = self.frame_count(signal.len());
         if output.len() != frames * self.spectrum_len() {
             return Err(StftError::LengthMismatch);
         }
         output
-            .as_slice_mut()
-            .expect("output buffer must be contiguous")
             .par_chunks_mut(self.spectrum_len())
             .enumerate()
             .for_each(|(m, out_chunk)| {
@@ -236,6 +274,21 @@ impl StftPlan {
         signal_len: usize,
         output: &mut Array1<f64>,
     ) -> StftResult<()> {
+        let spectrum_slice = spectrum
+            .as_slice()
+            .expect("spectrum buffer must be contiguous");
+        let output_slice = output
+            .as_slice_mut()
+            .expect("output buffer must be contiguous");
+        self.inverse_complex64_slice_into(spectrum_slice, signal_len, output_slice)
+    }
+
+    fn inverse_complex64_slice_into(
+        &self,
+        spectrum: &[Complex64],
+        signal_len: usize,
+        output: &mut [f64],
+    ) -> StftResult<()> {
         let frames = self.frame_count(signal_len);
         if spectrum.len() != frames * self.spectrum_len() {
             return Err(StftError::LengthMismatch);
@@ -246,45 +299,49 @@ impl StftPlan {
         if signal_len < self.frame_len {
             return Err(StftError::InputTooShort);
         }
-        let mut flat_frames = vec![0.0f64; frames * self.frame_len];
-        let mut flat_complex = vec![Complex64::new(0.0, 0.0); frames * self.frame_len];
-        flat_complex
-            .par_chunks_mut(self.frame_len)
-            .zip(flat_frames.par_chunks_mut(self.frame_len))
-            .enumerate()
-            .for_each(|(m, (frame_complex, frame_out))| {
-                let offset = m * self.spectrum_len();
-                for k in 0..self.spectrum_len() {
-                    frame_complex[k] = spectrum[offset + k];
-                }
-                self.fft_plan.inverse_complex_slice_inplace(frame_complex);
-                for n in 0..self.frame_len {
-                    frame_out[n] = frame_complex[n].re * self.window[n];
-                }
-            });
+        let window = self.window.as_slice().expect("window must be contiguous");
+        with_inverse_wola_workspaces(
+            frames,
+            self.frame_len,
+            signal_len,
+            |flat_frames, flat_complex, overlap, weight| {
+                flat_complex
+                    .par_chunks_mut(self.frame_len)
+                    .zip(flat_frames.par_chunks_mut(self.frame_len))
+                    .enumerate()
+                    .for_each(|(m, (frame_complex, frame_out))| {
+                        let offset = m * self.spectrum_len();
+                        for k in 0..self.spectrum_len() {
+                            frame_complex[k] = spectrum[offset + k];
+                        }
+                        self.fft_plan.inverse_complex_slice_inplace(frame_complex);
+                        for n in 0..self.frame_len {
+                            frame_out[n] = frame_complex[n].re * window[n];
+                        }
+                    });
 
-        // Sequential overlap-add: avoids data races on shared output positions.
-        let mut overlap = vec![0.0f64; signal_len];
-        let mut weight = vec![0.0f64; signal_len];
-        for (m, frame_vals) in flat_frames.chunks(self.frame_len).enumerate() {
-            let start = m as isize * self.hop_len as isize - (self.frame_len / 2) as isize;
-            for n in 0..self.frame_len {
-                let signal_index = start + n as isize;
-                if signal_index >= 0 && (signal_index as usize) < signal_len {
-                    let idx = signal_index as usize;
-                    overlap[idx] += frame_vals[n];
-                    weight[idx] += self.window[n] * self.window[n];
+                // Sequential overlap-add: avoids data races on shared output positions.
+                for (m, frame_vals) in flat_frames.chunks(self.frame_len).enumerate() {
+                    let start = m as isize * self.hop_len as isize - (self.frame_len / 2) as isize;
+                    for n in 0..self.frame_len {
+                        let signal_index = start + n as isize;
+                        if signal_index >= 0 && (signal_index as usize) < signal_len {
+                            let idx = signal_index as usize;
+                            overlap[idx] += frame_vals[n];
+                            weight[idx] += window[n] * window[n];
+                        }
+                    }
                 }
-            }
-        }
-        for i in 0..signal_len {
-            output[i] = if weight[i] > 0.0 {
-                overlap[i] / weight[i]
-            } else {
-                0.0
-            };
-        }
-        Ok(())
+                for i in 0..signal_len {
+                    output[i] = if weight[i] > 0.0 {
+                        overlap[i] / weight[i]
+                    } else {
+                        0.0
+                    };
+                }
+                Ok(())
+            },
+        )
     }
 
     /// Inverse STFT for typed complex spectrum and typed real output storage.
@@ -304,359 +361,103 @@ impl StftPlan {
         if signal_len < self.frame_len {
             return Err(StftError::InputTooShort);
         }
-        let spectrum64 = Array1::from_iter(spectrum.iter().copied().map(T::to_complex64));
-        let mut output64 = Array1::<f64>::zeros(signal_len);
-        self.inverse_into(&spectrum64, signal_len, &mut output64)?;
-        for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
-            *slot = O::from_f64(value);
-        }
-        Ok(())
-    }
-
-    /// Forward STFT (alias for `forward`).
-    pub fn forward_inplace(&self, signal: &Array1<f64>) -> StftResult<Array1<Complex64>> {
-        self.forward(signal)
-    }
-
-    /// Inverse STFT (alias for `inverse`).
-    pub fn inverse_inplace(
-        &self,
-        spectrum: &Array1<Complex64>,
-        signal_len: usize,
-    ) -> StftResult<Array1<f64>> {
-        self.inverse(spectrum, signal_len)
+        with_inverse_typed_workspaces(spectrum.len(), signal_len, |spectrum64, output64| {
+            for (slot, value) in spectrum64.iter_mut().zip(spectrum.iter().copied()) {
+                *slot = T::to_complex64(value);
+            }
+            self.inverse_complex64_slice_into(spectrum64, signal_len, output64)?;
+            for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+                *slot = O::from_f64(value);
+            }
+            Ok(())
+        })
     }
 }
 
-/// Real input storage accepted by typed STFT forward paths.
-pub trait StftRealStorage: Copy + Send + Sync + 'static {
-    /// Required precision profile.
-    const PROFILE: PrecisionProfile;
-
-    /// Convert storage into owner `f64` arithmetic.
-    fn to_f64(self) -> f64;
+fn with_forward_typed_workspaces<R>(
+    signal_len: usize,
+    spectrum_len: usize,
+    f: impl FnOnce(&mut [f64], &mut [Complex64]) -> StftResult<R>,
+) -> StftResult<R> {
+    TYPED_SIGNAL64_SCRATCH.with(|signal_cell| {
+        TYPED_FORWARD_OUTPUT64_SCRATCH.with(|spectrum_cell| {
+            let mut signal = signal_cell.borrow_mut();
+            let mut spectrum = spectrum_cell.borrow_mut();
+            signal.resize(signal_len, 0.0);
+            spectrum.resize(spectrum_len, Complex64::new(0.0, 0.0));
+            f(signal.as_mut_slice(), spectrum.as_mut_slice())
+        })
+    })
 }
 
-impl StftRealStorage for f64 {
-    const PROFILE: PrecisionProfile = PrecisionProfile::HIGH_ACCURACY_F64;
-
-    fn to_f64(self) -> f64 {
-        self
-    }
+fn with_inverse_typed_workspaces<R>(
+    spectrum_len: usize,
+    signal_len: usize,
+    f: impl FnOnce(&mut [Complex64], &mut [f64]) -> StftResult<R>,
+) -> StftResult<R> {
+    TYPED_SPECTRUM64_SCRATCH.with(|spectrum_cell| {
+        TYPED_INVERSE_OUTPUT64_SCRATCH.with(|signal_cell| {
+            let mut spectrum = spectrum_cell.borrow_mut();
+            let mut signal = signal_cell.borrow_mut();
+            spectrum.resize(spectrum_len, Complex64::new(0.0, 0.0));
+            signal.resize(signal_len, 0.0);
+            f(spectrum.as_mut_slice(), signal.as_mut_slice())
+        })
+    })
 }
 
-impl StftRealStorage for f32 {
-    const PROFILE: PrecisionProfile = PrecisionProfile::LOW_PRECISION_F32;
+fn with_inverse_wola_workspaces<R>(
+    frames: usize,
+    frame_len: usize,
+    signal_len: usize,
+    f: impl FnOnce(&mut [f64], &mut [Complex64], &mut [f64], &mut [f64]) -> StftResult<R>,
+) -> StftResult<R> {
+    INVERSE_FRAME_SCRATCH.with(|frame_cell| {
+        INVERSE_COMPLEX_SCRATCH.with(|complex_cell| {
+            INVERSE_OVERLAP_SCRATCH.with(|overlap_cell| {
+                INVERSE_WEIGHT_SCRATCH.with(|weight_cell| {
+                    let frame_work_len = frames * frame_len;
+                    let mut flat_frames = frame_cell.borrow_mut();
+                    let mut flat_complex = complex_cell.borrow_mut();
+                    let mut overlap = overlap_cell.borrow_mut();
+                    let mut weight = weight_cell.borrow_mut();
 
-    fn to_f64(self) -> f64 {
-        f64::from(self)
-    }
-}
+                    flat_frames.resize(frame_work_len, 0.0);
+                    flat_complex.resize(frame_work_len, Complex64::new(0.0, 0.0));
+                    overlap.resize(signal_len, 0.0);
+                    weight.resize(signal_len, 0.0);
+                    overlap.fill(0.0);
+                    weight.fill(0.0);
 
-impl StftRealStorage for f16 {
-    const PROFILE: PrecisionProfile = PrecisionProfile::MIXED_PRECISION_F16_F32;
-
-    fn to_f64(self) -> f64 {
-        f64::from(self.to_f32())
-    }
-}
-
-/// Real output storage accepted by typed STFT inverse paths.
-pub trait StftRealOutputStorage: Copy + Send + Sync + 'static {
-    /// Required precision profile.
-    const PROFILE: PrecisionProfile;
-
-    /// Convert owner arithmetic output into storage.
-    fn from_f64(value: f64) -> Self;
-}
-
-impl StftRealOutputStorage for f64 {
-    const PROFILE: PrecisionProfile = PrecisionProfile::HIGH_ACCURACY_F64;
-
-    fn from_f64(value: f64) -> Self {
-        value
-    }
-}
-
-impl StftRealOutputStorage for f32 {
-    const PROFILE: PrecisionProfile = PrecisionProfile::LOW_PRECISION_F32;
-
-    fn from_f64(value: f64) -> Self {
-        value as f32
-    }
-}
-
-impl StftRealOutputStorage for f16 {
-    const PROFILE: PrecisionProfile = PrecisionProfile::MIXED_PRECISION_F16_F32;
-
-    fn from_f64(value: f64) -> Self {
-        f16::from_f32(value as f32)
-    }
-}
-
-/// Complex output storage accepted by typed STFT forward paths.
-pub trait StftSpectrumStorage: Copy + Send + Sync + 'static {
-    /// Required precision profile.
-    const PROFILE: PrecisionProfile;
-
-    /// Convert owner complex result into storage.
-    fn from_complex64(value: Complex64) -> Self;
-}
-
-impl StftSpectrumStorage for Complex64 {
-    const PROFILE: PrecisionProfile = PrecisionProfile::HIGH_ACCURACY_F64;
-
-    fn from_complex64(value: Complex64) -> Self {
-        value
-    }
-}
-
-impl StftSpectrumStorage for Complex32 {
-    const PROFILE: PrecisionProfile = PrecisionProfile::LOW_PRECISION_F32;
-
-    fn from_complex64(value: Complex64) -> Self {
-        Complex32::new(value.re as f32, value.im as f32)
-    }
-}
-
-impl StftSpectrumStorage for [f16; 2] {
-    const PROFILE: PrecisionProfile = PrecisionProfile::MIXED_PRECISION_F16_F32;
-
-    fn from_complex64(value: Complex64) -> Self {
-        [
-            f16::from_f32(value.re as f32),
-            f16::from_f32(value.im as f32),
-        ]
-    }
-}
-
-/// Complex input storage accepted by typed STFT inverse paths.
-pub trait StftSpectrumInput: Copy + Send + Sync + 'static {
-    /// Required precision profile.
-    const PROFILE: PrecisionProfile;
-
-    /// Convert storage into owner `Complex64` arithmetic.
-    fn to_complex64(self) -> Complex64;
-}
-
-impl StftSpectrumInput for Complex64 {
-    const PROFILE: PrecisionProfile = PrecisionProfile::HIGH_ACCURACY_F64;
-
-    fn to_complex64(self) -> Complex64 {
-        self
-    }
-}
-
-impl StftSpectrumInput for Complex32 {
-    const PROFILE: PrecisionProfile = PrecisionProfile::LOW_PRECISION_F32;
-
-    fn to_complex64(self) -> Complex64 {
-        Complex64::new(f64::from(self.re), f64::from(self.im))
-    }
-}
-
-impl StftSpectrumInput for [f16; 2] {
-    const PROFILE: PrecisionProfile = PrecisionProfile::MIXED_PRECISION_F16_F32;
-
-    fn to_complex64(self) -> Complex64 {
-        Complex64::new(f64::from(self[0].to_f32()), f64::from(self[1].to_f32()))
-    }
-}
-
-fn validate_profile(actual: PrecisionProfile, expected: PrecisionProfile) -> StftResult<()> {
-    if actual.storage == expected.storage && actual.compute == expected.compute {
-        Ok(())
-    } else {
-        Err(StftError::PrecisionMismatch)
-    }
+                    f(
+                        flat_frames.as_mut_slice(),
+                        flat_complex.as_mut_slice(),
+                        overlap.as_mut_slice(),
+                        weight.as_mut_slice(),
+                    )
+                })
+            })
+        })
+    })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use approx::assert_relative_eq;
-    use proptest::prelude::*;
-
-    #[test]
-    fn hann_window_is_symmetric() {
-        let window = hann_window(8);
-        for i in 0..8 {
-            assert_relative_eq!(window[i], window[7 - i], epsilon = 1.0e-12);
-        }
-    }
-
-    #[test]
-    fn forward_and_inverse_roundtrip_for_cola_case() {
-        let plan = StftPlan::new(8, 4).expect("valid plan");
-        let signal = Array1::from_vec(vec![
-            1.0, -1.0, 0.5, 2.0, -0.75, 0.25, 1.5, -0.5, 0.125, 0.875, -1.25, 0.75,
-        ]);
-        let spectrum = plan.forward(&signal).expect("forward");
-        let recovered = plan.inverse(&spectrum, signal.len()).expect("inverse");
-        for (actual, expected) in recovered.iter().zip(signal.iter()) {
-            assert_relative_eq!(actual, expected, epsilon = 1.0e-8);
-        }
-    }
-
-    #[test]
-    fn forward_into_matches_allocating_path() {
-        let plan = StftPlan::new(8, 4).expect("valid plan");
-        let signal = Array1::from_vec((0..16).map(|i| (i as f64 * 0.2).sin()).collect());
-        let expected = plan.forward(&signal).expect("forward");
-        let mut actual = Array1::<Complex64>::zeros(expected.len());
-        plan.forward_into(&signal, &mut actual)
-            .expect("forward_into");
-        for (lhs, rhs) in actual.iter().zip(expected.iter()) {
-            assert_relative_eq!(lhs.re, rhs.re, epsilon = 1.0e-12);
-            assert_relative_eq!(lhs.im, rhs.im, epsilon = 1.0e-12);
-        }
-    }
-
-    #[test]
-    fn typed_paths_support_f64_f32_and_mixed_f16_storage() {
-        let plan = StftPlan::new(8, 4).expect("valid plan");
-        let signal64 = Array1::from_vec((0..16).map(|i| (i as f64 * 0.2).sin()).collect());
-        let expected = plan.forward(&signal64).expect("forward");
-
-        let mut out64 = Array1::<Complex64>::zeros(expected.len());
-        plan.forward_typed_into(&signal64, &mut out64, PrecisionProfile::HIGH_ACCURACY_F64)
-            .expect("typed f64 forward");
-        for (actual, expected) in out64.iter().zip(expected.iter()) {
-            assert_relative_eq!(actual.re, expected.re, epsilon = 1.0e-12);
-            assert_relative_eq!(actual.im, expected.im, epsilon = 1.0e-12);
-        }
-
-        let signal32 = signal64.mapv(|value| value as f32);
-        let represented32 = signal32.mapv(f64::from);
-        let expected32 = plan
-            .forward(&represented32)
-            .expect("represented f32 forward");
-        let mut out32 = Array1::<Complex32>::zeros(expected32.len());
-        plan.forward_typed_into(&signal32, &mut out32, PrecisionProfile::LOW_PRECISION_F32)
-            .expect("typed f32 forward");
-        for (actual, expected) in out32.iter().zip(expected32.iter()) {
-            assert!((f64::from(actual.re) - expected.re).abs() < 1.0e-5);
-            assert!((f64::from(actual.im) - expected.im).abs() < 1.0e-5);
-        }
-
-        let mut recovered32 = Array1::<f32>::zeros(signal32.len());
-        plan.inverse_typed_into(
-            &out32,
-            signal32.len(),
-            &mut recovered32,
-            PrecisionProfile::LOW_PRECISION_F32,
-        )
-        .expect("typed f32 inverse");
-        for (actual, expected) in recovered32.iter().zip(signal32.iter()) {
-            assert!((*actual - *expected).abs() < 1.0e-4);
-        }
-
-        let signal16 = signal64.mapv(|value| f16::from_f32(value as f32));
-        let represented16 = signal16.mapv(|value| f64::from(value.to_f32()));
-        let expected16 = plan
-            .forward(&represented16)
-            .expect("represented f16 forward");
-        let mut out16 = Array1::from_elem(expected16.len(), [f16::from_f32(0.0); 2]);
-        plan.forward_typed_into(
-            &signal16,
-            &mut out16,
-            PrecisionProfile::MIXED_PRECISION_F16_F32,
-        )
-        .expect("typed f16 forward");
-        for (actual, expected) in out16.iter().zip(expected16.iter()) {
-            let re_bound = expected.re.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
-            let im_bound = expected.im.abs() * 2.0_f64.powi(-10) + 2.0_f64.powi(-14);
-            assert!((f64::from(actual[0].to_f32()) - expected.re).abs() <= re_bound);
-            assert!((f64::from(actual[1].to_f32()) - expected.im).abs() <= im_bound);
-        }
-    }
-
-    #[test]
-    fn typed_path_rejects_profile_storage_mismatch() {
-        let plan = StftPlan::new(8, 4).expect("valid plan");
-        let signal = Array1::from_vec(vec![1.0_f32; 16]);
-        let mut output =
-            Array1::<Complex32>::zeros(plan.frame_count(signal.len()) * plan.spectrum_len());
-        assert!(matches!(
-            plan.forward_typed_into(&signal, &mut output, PrecisionProfile::HIGH_ACCURACY_F64),
-            Err(StftError::PrecisionMismatch)
-        ));
-    }
-
-    #[test]
-    fn rejects_invalid_parameters() {
-        assert!(matches!(
-            StftPlan::new(0, 4),
-            Err(StftError::EmptyFrameLength)
-        ));
-        assert!(matches!(StftPlan::new(8, 0), Err(StftError::EmptyHopSize)));
-        assert!(matches!(
-            StftPlan::new(4, 8),
-            Err(StftError::HopExceedsFrame)
-        ));
-    }
-
-    #[test]
-    fn input_too_short_is_rejected() {
-        let plan = StftPlan::new(8, 4).expect("valid plan");
-        let signal = Array1::from_vec(vec![0.0; 4]);
-        assert!(matches!(
-            plan.forward(&signal),
-            Err(StftError::InputTooShort)
-        ));
-    }
-
-    #[test]
-    fn forward_with_window_rejects_wrong_length() {
-        let plan = StftPlan::new(8, 4).expect("valid plan");
-        let signal = Array1::from_vec(vec![1.0f64; 12]);
-        let bad_window = vec![1.0f64; 6];
-        assert!(matches!(
-            plan.forward_with_window(&signal, &bad_window),
-            Err(StftError::WindowLengthMismatch)
-        ));
-    }
-
-    #[test]
-    fn forward_with_custom_window_matches_internal_hann() {
-        let plan = StftPlan::new(8, 4).expect("valid plan");
-        let signal = Array1::from_vec((0..12).map(|i| (i as f64 * 0.3).sin()).collect());
-        let expected = plan.forward(&signal).expect("forward");
-        let window: Vec<f64> = hann_window(8).to_vec();
-        let actual = plan
-            .forward_with_window(&signal, &window)
-            .expect("forward_with_window");
-        for (lhs, rhs) in actual.iter().zip(expected.iter()) {
-            assert_relative_eq!(lhs.re, rhs.re, epsilon = 1.0e-12);
-            assert_relative_eq!(lhs.im, rhs.im, epsilon = 1.0e-12);
-        }
-    }
-
-    proptest::proptest! {
-        #[test]
-        fn roundtrip_holds_for_random_signals(
-            signal_len in 8usize..128,
-            frame_len in 2usize..17,
-            hop_len in 1usize..9,
-        ) {
-            // COLA coverage: hop_len <= frame_len - 2 ensures every signal position
-            // is covered by at least one non-zero Hann window value.
-            // (Hann window is zero at both endpoints; dead zones appear when hop > frame_len-2.)
-            prop_assume!(frame_len <= signal_len);
-            prop_assume!(hop_len <= frame_len);
-            prop_assume!(hop_len + 2 <= frame_len);
-            let plan = StftPlan::new(frame_len, hop_len).expect("valid plan");
-            let signal = Array1::from_vec(
-                (0..signal_len).map(|i| (i as f64 * 0.37).sin()).collect(),
-            );
-            let spectrum = plan.forward(&signal).expect("forward");
-            let recovered = plan.inverse(&spectrum, signal_len).expect("inverse");
-            let err = signal
-                .iter()
-                .zip(recovered.iter())
-                .map(|(a, b)| (a - b).abs())
-                .fold(0.0f64, f64::max);
-            prop_assert!(err < 0.5, "roundtrip error too large: {}", err);
-        }
-    }
+fn typed_workspace_capacities() -> (usize, usize, usize, usize) {
+    let signal = TYPED_SIGNAL64_SCRATCH.with(|cell| cell.borrow().capacity());
+    let spectrum = TYPED_SPECTRUM64_SCRATCH.with(|cell| cell.borrow().capacity());
+    let forward_output = TYPED_FORWARD_OUTPUT64_SCRATCH.with(|cell| cell.borrow().capacity());
+    let inverse_output = TYPED_INVERSE_OUTPUT64_SCRATCH.with(|cell| cell.borrow().capacity());
+    (signal, spectrum, forward_output, inverse_output)
 }
+
+#[cfg(test)]
+fn inverse_wola_workspace_capacities() -> (usize, usize, usize, usize) {
+    let frames = INVERSE_FRAME_SCRATCH.with(|cell| cell.borrow().capacity());
+    let complex = INVERSE_COMPLEX_SCRATCH.with(|cell| cell.borrow().capacity());
+    let overlap = INVERSE_OVERLAP_SCRATCH.with(|cell| cell.borrow().capacity());
+    let weight = INVERSE_WEIGHT_SCRATCH.with(|cell| cell.borrow().capacity());
+    (frames, complex, overlap, weight)
+}
+
+#[cfg(test)]
+mod tests;

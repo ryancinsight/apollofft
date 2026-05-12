@@ -5,6 +5,13 @@ use crate::application::execution::plan::fwht::dimension_1d::FwhtPlan;
 use crate::domain::contracts::error::FwhtError;
 use apollo_fft::{f16, PrecisionProfile};
 use ndarray::Array1;
+use std::cell::RefCell;
+
+thread_local! {
+    static TYPED_INPUT64_SCRATCH: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+    static TYPED_OUTPUT64_SCRATCH: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+    static TYPED_F32_SCRATCH: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
+}
 
 /// Real storage accepted by typed FWHT paths.
 pub trait FwhtStorage: Copy + Send + Sync + 'static {
@@ -28,13 +35,16 @@ pub trait FwhtStorage: Copy + Send + Sync + 'static {
         if input.len() != plan.len() || output.len() != plan.len() {
             return Err(FwhtError::LengthMismatch);
         }
-        let input64 = Array1::from_iter(input.iter().copied().map(Self::to_f64));
-        let mut output64 = Array1::zeros(plan.len());
-        plan.forward_into(&input64, &mut output64)?;
-        for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
-            *slot = Self::from_f64(value);
-        }
-        Ok(())
+        with_f64_workspaces(plan.len(), |input64, output64| {
+            for (slot, value) in input64.iter_mut().zip(input.iter().copied()) {
+                *slot = Self::to_f64(value);
+            }
+            plan.forward_f64_slice_into(input64, output64)?;
+            for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+                *slot = Self::from_f64(value);
+            }
+            Ok(())
+        })
     }
 
     /// Execute inverse transform into caller-owned storage.
@@ -48,13 +58,16 @@ pub trait FwhtStorage: Copy + Send + Sync + 'static {
         if input.len() != plan.len() || output.len() != plan.len() {
             return Err(FwhtError::LengthMismatch);
         }
-        let input64 = Array1::from_iter(input.iter().copied().map(Self::to_f64));
-        let mut output64 = Array1::zeros(plan.len());
-        plan.inverse_into(&input64, &mut output64)?;
-        for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
-            *slot = Self::from_f64(value);
-        }
-        Ok(())
+        with_f64_workspaces(plan.len(), |input64, output64| {
+            for (slot, value) in input64.iter_mut().zip(input.iter().copied()) {
+                *slot = Self::to_f64(value);
+            }
+            plan.inverse_f64_slice_into(input64, output64)?;
+            for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+                *slot = Self::from_f64(value);
+            }
+            Ok(())
+        })
     }
 }
 
@@ -150,12 +163,16 @@ impl FwhtStorage for f16 {
         if input.len() != plan.len() || output.len() != plan.len() {
             return Err(FwhtError::LengthMismatch);
         }
-        let mut compute: Vec<f32> = input.iter().map(|value| value.to_f32()).collect();
-        wht_inplace(&mut compute);
-        for (slot, value) in output.iter_mut().zip(compute.into_iter()) {
-            *slot = f16::from_f32(value);
-        }
-        Ok(())
+        with_f32_workspace(plan.len(), |compute| {
+            for (slot, value) in compute.iter_mut().zip(input.iter()) {
+                *slot = value.to_f32();
+            }
+            wht_inplace(compute);
+            for (slot, value) in output.iter_mut().zip(compute.iter().copied()) {
+                *slot = f16::from_f32(value);
+            }
+            Ok(())
+        })
     }
 
     fn inverse_into(
@@ -168,13 +185,17 @@ impl FwhtStorage for f16 {
         if input.len() != plan.len() || output.len() != plan.len() {
             return Err(FwhtError::LengthMismatch);
         }
-        let mut compute: Vec<f32> = input.iter().map(|value| value.to_f32()).collect();
-        wht_inplace(&mut compute);
-        let scale = 1.0_f32 / plan.len() as f32;
-        for (slot, value) in output.iter_mut().zip(compute.into_iter()) {
-            *slot = f16::from_f32(value * scale);
-        }
-        Ok(())
+        with_f32_workspace(plan.len(), |compute| {
+            for (slot, value) in compute.iter_mut().zip(input.iter()) {
+                *slot = value.to_f32();
+            }
+            wht_inplace(compute);
+            let scale = 1.0_f32 / plan.len() as f32;
+            for (slot, value) in output.iter_mut().zip(compute.iter().copied()) {
+                *slot = f16::from_f32(value * scale);
+            }
+            Ok(())
+        })
     }
 }
 
@@ -184,4 +205,47 @@ fn validate_profile(actual: PrecisionProfile, expected: PrecisionProfile) -> Res
     } else {
         Err(FwhtError::PrecisionMismatch)
     }
+}
+
+fn with_f64_workspaces<R>(n: usize, f: impl FnOnce(&mut [f64], &mut [f64]) -> R) -> R {
+    TYPED_INPUT64_SCRATCH.with(|input_scratch| {
+        TYPED_OUTPUT64_SCRATCH.with(|output_scratch| {
+            let mut input_scratch = input_scratch.borrow_mut();
+            if input_scratch.len() < n {
+                input_scratch.resize(n, 0.0);
+            }
+
+            let mut output_scratch = output_scratch.borrow_mut();
+            if output_scratch.len() < n {
+                output_scratch.resize(n, 0.0);
+            }
+
+            f(&mut input_scratch[..n], &mut output_scratch[..n])
+        })
+    })
+}
+
+fn with_f32_workspace<R>(n: usize, f: impl FnOnce(&mut [f32]) -> R) -> R {
+    TYPED_F32_SCRATCH.with(|scratch| {
+        let mut scratch = scratch.borrow_mut();
+        if scratch.len() < n {
+            scratch.resize(n, 0.0);
+        }
+        f(&mut scratch[..n])
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn typed_scratch_capacities() -> (usize, usize, usize) {
+    TYPED_INPUT64_SCRATCH.with(|input_scratch| {
+        TYPED_OUTPUT64_SCRATCH.with(|output_scratch| {
+            TYPED_F32_SCRATCH.with(|f32_scratch| {
+                (
+                    input_scratch.borrow().capacity(),
+                    output_scratch.borrow().capacity(),
+                    f32_scratch.borrow().capacity(),
+                )
+            })
+        })
+    })
 }

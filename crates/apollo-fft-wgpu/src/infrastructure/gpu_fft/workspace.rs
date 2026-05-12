@@ -614,8 +614,7 @@ impl GpuFft3d {
 #[cfg(test)]
 mod tests {
     use crate::WgpuBackend;
-    use apollo_fft::backend::FftBackend;
-    use apollo_fft::{f16, PrecisionProfile, Shape3D};
+    use apollo_fft::{f16, FftBackend, PrecisionProfile, Shape3D};
 
     use super::GpuFft3dBuffers;
 

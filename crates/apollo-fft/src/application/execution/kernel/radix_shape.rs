@@ -1,24 +1,50 @@
-/// Factorize `n` into a sequence of small radices suitable for the
-/// mixed-radix Cooley-Tukey DIT algorithm, or return `None` if `n` has
-/// a prime factor outside the supported set {2, 3, 5, 7}.
+//! Mixed-radix factorization and dispatch heuristics for the Cooley-Tukey pipeline.
+//!
+//! ## Mathematical foundation
+//!
+//! The Cooley-Tukey DIT algorithm requires N = ∏ rₖ where each rₖ is in the
+//! supported radix set {2, 3, 4, 5, 7, 8}. Since 4 = 2² and 8 = 2³, the
+//! underlying prime support is {2, 3, 5, 7}.
+//!
+//! A size N is **composite-smooth** if N = 2^a·3^b·5^c·7^d with not all
+//! of b, c, d equal to zero. Pure powers of two are routed to the more
+//! optimised Stockham kernels before composite factorization.
+//!
+//! ### Radix ordering (innermost first)
+//!
+//! Odd prime radices {7, 5, 3} are placed at the innermost stages, with
+//! powers of two {8, 4, 2} at the outermost, to minimise the working-set
+//! footprint during early stride-N/r passes (Van Loan 1992, §3.4).
+//!
+//! ## References
+//!
+//! - Cooley, J.W. & Tukey, J.W. (1965). *Math. Comp.* 19, 297-301.
+//! - Van Loan, C. (1992). *Computational Frameworks for the FFT*. SIAM, §3.4.
+
+#![allow(clippy::same_item_push)]
+
+/// Factorize `n` into a radix sequence for the mixed-radix Cooley-Tukey DIT
+/// algorithm, or return `None` if `n` has a prime factor outside {2, 3, 5, 7}.
 ///
-/// ## Radix selection
+/// ## Mathematical contract
 ///
-/// - Powers of 2 are packed greedily into radix-8 (3 factors), then radix-4
-///   (2 factors), then radix-2 (1 factor).
-/// - Primes 3, 5, and 7 appear individually in the sequence.
+/// **Theorem (factorization)**: Every positive integer has a unique prime
+/// factorization. For n with all primes in {2, 3, 5, 7} this function returns
+/// a factorization into Apollo's radix set {2, 3, 4, 5, 7, 8}.
 ///
-/// The sequence is ordered **innermost first** (smallest sub-transform first):
-/// prime radices precede power-of-two radices so that the smallest butterfly
-/// groups are processed in the initial stages, improving cache locality.
+/// **Proof sketch**: Divide out all factors of 2, 3, 5, 7. If `remaining > 1`
+/// after exhaustion, n has an unsupported prime → return `None`. Pack count2
+/// greedily into groups of 3 → radix-8, remainder pair → radix-4, singleton
+/// → radix-2. Product of returned radices equals n by construction. □
 ///
-/// ## Contract
+/// ## Complexity
 ///
-/// For the returned `radices`, `radices.iter().product::<usize>() == n` and
-/// every element ∈ {2, 3, 4, 5, 7, 8}.
+/// O(log n) time; O(log n) space for the returned `Vec`.
 ///
-/// Returns `None` (caller should fall back to Bluestein) when `n` has any
-/// prime factor other than 2, 3, 5, or 7.
+/// ## Failure modes
+///
+/// Returns `None` when n has an unsupported prime factor or is a pure power
+/// of two (handled by the Stockham power-of-two path).
 #[inline]
 pub(crate) fn factorize_composite(n: usize) -> Option<Vec<usize>> {
     if n <= 1 {
@@ -29,115 +55,166 @@ pub(crate) fn factorize_composite(n: usize) -> Option<Vec<usize>> {
     let mut count3 = 0u32;
     let mut count5 = 0u32;
     let mut count7 = 0u32;
-    while remaining % 2 == 0 { count2 += 1; remaining /= 2; }
-    while remaining % 3 == 0 { count3 += 1; remaining /= 3; }
-    while remaining % 5 == 0 { count5 += 1; remaining /= 5; }
-    while remaining % 7 == 0 { count7 += 1; remaining /= 7; }
+    while remaining % 2 == 0 {
+        count2 += 1;
+        remaining /= 2;
+    }
+    while remaining % 3 == 0 {
+        count3 += 1;
+        remaining /= 3;
+    }
+    while remaining % 5 == 0 {
+        count5 += 1;
+        remaining /= 5;
+    }
+    while remaining % 7 == 0 {
+        count7 += 1;
+        remaining /= 7;
+    }
     if remaining > 1 {
         return None; // has unsupported prime factor
     }
-    // Pure power-of-two sizes are handled by the existing pow2_dispatch! routing;
-    // return None so those sizes continue using the optimised PoT kernels.
+    // Pure power-of-two sizes are handled before composite dispatch.
     if count3 == 0 && count5 == 0 && count7 == 0 {
         return None;
     }
     let mut radices = Vec::new();
     // Innermost stages: odd prime factors first (7 > 5 > 3 ordering for cache
     // locality and mixed-radix stage shape).
-    for _ in 0..count7 { radices.push(7usize); }
-    for _ in 0..count5 { radices.push(5usize); }
-    for _ in 0..count3 { radices.push(3usize); }
+    for _ in 0..count7 {
+        radices.push(7usize);
+    }
+    for _ in 0..count5 {
+        radices.push(5usize);
+    }
+    for _ in 0..count3 {
+        radices.push(3usize);
+    }
     // Outermost stages: powers of 2 packed greedily into 8 > 4 > 2.
     let mut p2 = count2;
-    while p2 >= 3 { radices.push(8); p2 -= 3; }
-    if p2 >= 2 { radices.push(4); p2 -= 2; }
-    if p2 == 1 { radices.push(2); }
+    while p2 >= 3 {
+        radices.push(8);
+        p2 -= 3;
+    }
+    if p2 >= 2 {
+        radices.push(4);
+        p2 -= 2;
+    }
+    if p2 == 1 {
+        radices.push(2);
+    }
     Some(radices)
 }
 
-/// Heuristic: detect composite sizes that would perform worse with mixed-radix
-/// compared to Bluestein due to poor cache behavior with many small radices.
+/// Empirical Bluestein fallback heuristic for composite sizes with poor cache behaviour.
 ///
-/// Returns `true` if the composite path should be skipped (fall back to Bluestein).
+/// ## Heuristic criterion
 ///
-/// Known bad patterns:
-/// - Multiple (3+) small radices (3, 5, 7) before large power-of-2: causes
-///   poor cache behavior due to small prev_len in early stages.
-/// - Sizes 500, 1000, 2000 range have 3+ DFT-5 stages with low parallelism.
+/// For n ∈ [500, 2000], count leading (innermost) DFT-5 stages produced by
+/// `factorize_composite`. If ≥ 3 consecutive DFT-5 stages are present, the
+/// working set of the first stage is only `prev_len = 1` element — each
+/// butterfly processes 5 scalars in isolation, producing poor cache utilization.
+/// Bluestein pads to the nearest power of two and uses the vectorized
+/// radix-8/Stockham kernel, which is substantially faster for these sizes.
+///
+/// ## Correctness boundary
+///
+/// - N=500 = 2²·5³: three DFT-5 innermost stages; triggers heuristic.
+/// - N=1000 = 2³·5³: three DFT-5 innermost stages; triggers heuristic.
+/// - N=2000 = 2⁴·5³: three DFT-5 innermost stages; triggers heuristic.
+/// - N=4000 = 2⁵·5³: outside range [500,2000]; Rayon parallelism recovers perf.
+///
+/// ## Failure modes
+///
+/// A false positive routes a composite size through Bluestein (correct, slower
+/// worst-case). A false negative uses composite (correct, potentially slower
+/// than Bluestein for the affected sizes). Both failure modes produce correct output.
 #[inline]
 pub(crate) fn should_use_bluestein_instead_of_composite(n: usize) -> bool {
-    // Empirically observed bad cases:
-    // N=500 (2²×5³): 3 DFT-5 stages too deep for cache
-    // N=1000 (2³×5³): 3 DFT-5 stages, composite is 0.6× Bluestein
-    // N=2000 (2⁴×5³): 3 DFT-5 stages, break-even, worth avoiding
     if n >= 500 && n <= 2000 {
-        let radices = match factorize_composite(n) {
-            Some(r) => r,
-            None => return false, // Not composite; Bluestein will handle it
+        let Some(radices) = factorize_composite(n) else {
+            return false; // Not composite; Bluestein will handle it
         };
-        // Count consecutive 5-radix factors at the start (innermost stages).
-        // DFT-7 and DFT-3 heuristics are kept neutral for now to avoid overfitting
-        // the current benchmark corpus.
         let count_leading_fives = radices.iter().take_while(|&&r| r == 5).count();
         if count_leading_fives >= 3 {
-            return true; // Too many DFT-5 stages, fall back to Bluestein
+            return true;
         }
     }
     false
 }
 
-#[inline]
-pub(crate) fn is_power_of_pow2_radix(n: usize, radix_log2: u32) -> bool {
-    n.is_power_of_two() && (n.trailing_zeros() % radix_log2 == 0)
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[inline]
-pub(crate) fn is_power_of_four(n: usize) -> bool {
-    is_power_of_pow2_radix(n, 2)
-}
+    #[test]
+    fn factorize_product_invariant_holds_for_smooth_sizes() {
+        for &n in &[
+            3usize, 5, 6, 7, 9, 10, 12, 14, 15, 18, 21, 24, 25, 28, 35, 42, 48, 49, 50, 56, 63, 70,
+            75, 98, 100, 120, 125, 147, 150, 192, 200, 210, 240, 245, 250, 294, 300, 343, 375, 384,
+            392, 450, 588, 600, 686, 700, 750, 784, 864, 900, 980, 1000, 1200, 1400, 1470, 1500,
+            1960, 2000, 2400, 2500, 2940, 3000, 4000, 4500, 5000, 6000, 7000, 7500, 10000,
+        ] {
+            let radices = factorize_composite(n)
+                .unwrap_or_else(|| panic!("factorize_composite({n}) returned None"));
+            assert_eq!(
+                radices.iter().product::<usize>(),
+                n,
+                "product invariant failed for n={n}"
+            );
+            for &r in &radices {
+                assert!(
+                    [2, 3, 4, 5, 7, 8].contains(&r),
+                    "unsupported radix {r} for n={n}"
+                );
+            }
+        }
+    }
 
-#[inline]
-pub(crate) fn is_power_of_eight(n: usize) -> bool {
-    is_power_of_pow2_radix(n, 3)
-}
+    #[test]
+    fn factorize_pure_pot_returns_none() {
+        for exp in 1..=20u32 {
+            let n = 1usize << exp;
+            assert!(
+                factorize_composite(n).is_none(),
+                "factorize_composite({n}) must be None for pure-PoT"
+            );
+        }
+    }
 
-#[inline]
-pub(crate) fn stage_twiddle_slice<T>(twiddles: Option<&[T]>, half: usize) -> Option<&[T]> {
-    twiddles.map(|t| &t[(half - 1)..(half - 1 + half)])
-}
+    #[test]
+    fn factorize_unsupported_prime_returns_none() {
+        for &n in &[
+            11usize, 13, 17, 19, 22, 23, 26, 29, 31, 33, 34, 38, 46, 58, 121, 143,
+        ] {
+            assert!(
+                factorize_composite(n).is_none(),
+                "factorize_composite({n}) must be None (has prime > 7)"
+            );
+        }
+    }
 
-/// Look up the radix-4 stage twiddle at position `exponent` within a stage slice
-/// of nominal length `half`.
-///
-/// ## Mathematical contract
-///
-/// In a radix-4 stage with group length `len = 4·half`, the DIT butterfly uses
-/// twiddles `W^{j}`, `W^{2j}`, `W^{3j}` for j = 0..half. The exponent may reach
-/// `3·half - 1`. For exponents beyond `half - 1` the symmetry
-/// `W^{half} = W^{half mod half}·(-1) = -W^{exponent mod half}` holds because
-/// `W^{half} = exp(2πi·half/len) = exp(πi) = -1`. Hence:
-///
-/// ```text
-/// stage_twiddle(stage, half, exponent) =
-///     if exponent < half:  stage[exponent]
-///     else:               -stage[exponent - half]
-/// ```
-///
-/// This avoids storing more than `half` entries per stage while supporting all
-/// three twiddle exponents.
-///
-/// ## Generic bound
-///
-/// `T` requires `Copy` (to read without consuming) and `Neg<Output = T>`
-/// (to negate without allocation). Both `Complex64` and `Complex32` satisfy this.
-#[inline]
-pub(crate) fn stage_twiddle<T>(stage: &[T], half: usize, exponent: usize) -> T
-where
-    T: Copy + std::ops::Neg<Output = T>,
-{
-    if exponent < half {
-        stage[exponent]
-    } else {
-        -stage[exponent - half]
+    #[test]
+    fn factorize_ordering_is_innermost_first() {
+        // n=24 = 3×8: 3 should be innermost (index 0).
+        let r = factorize_composite(24).unwrap();
+        assert_eq!(r[0], 3, "3-factor must be innermost for n=24");
+        // n=28 = 7×4: 7 should be innermost.
+        let r = factorize_composite(28).unwrap();
+        assert_eq!(r[0], 7, "7-factor must be innermost for n=28");
+    }
+
+    #[test]
+    fn bluestein_heuristic_triggers_for_5cubed_sizes() {
+        assert!(should_use_bluestein_instead_of_composite(500));
+        assert!(should_use_bluestein_instead_of_composite(1000));
+        assert!(should_use_bluestein_instead_of_composite(2000));
+    }
+
+    #[test]
+    fn bluestein_heuristic_passes_outside_range_or_non_five() {
+        assert!(!should_use_bluestein_instead_of_composite(100));
+        assert!(!should_use_bluestein_instead_of_composite(3000));
+        assert!(!should_use_bluestein_instead_of_composite(512));
     }
 }

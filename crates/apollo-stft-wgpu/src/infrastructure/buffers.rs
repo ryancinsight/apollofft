@@ -35,13 +35,13 @@ use super::kernel::{ComplexPod, FftStageParams, FwdFftStageParams, StftGpuKernel
 ///
 /// ## Forward path buffers
 /// - `signal_buf` (STORAGE | COPY_DST): input signal, written per call.
-/// - `re_scratch_buf`, `im_scratch_buf` (STORAGE): shared FFT scratch (forward + inverse).
+/// - `_re_scratch_buf`, `_im_scratch_buf` (STORAGE): shared FFT scratch (forward + inverse).
 /// - `fwd_output_buf` (STORAGE | COPY_SRC): ComplexPod spectrum output.
 /// - `fwd_staging_buf` (MAP_READ | COPY_DST): CPU readback of forward output.
 ///
 /// ## Inverse path buffers
 /// - `spectrum_buf` (STORAGE | COPY_DST): input spectrum, written per call.
-/// - `frame_data_buf` (STORAGE): windowed frame data (scale_window → OLA).
+/// - `_frame_data_buf` (STORAGE): windowed frame data (scale_window → OLA).
 /// - `inv_signal_buf` (STORAGE | COPY_SRC): reconstructed signal output.
 /// - `inv_staging_buf` (MAP_READ | COPY_DST): CPU readback of inverse output.
 /// - `inv_ola_params_buf` (UNIFORM | COPY_DST): OLA StftParams, written per call.
@@ -55,18 +55,14 @@ pub struct StftGpuBuffers {
     // ── Data buffers ──────────────────────────────────────────────────────────
     pub(crate) signal_buf: wgpu::Buffer,
     pub(crate) spectrum_buf: wgpu::Buffer,
-    /// GPU-only re scratch: written by pack_window/deinterleave; consumed by subsequent GPU
-    /// butterfly passes. Never CPU-read; owned here to prevent premature buffer deallocation.
-    #[allow(dead_code)]
-    pub(crate) re_scratch_buf: wgpu::Buffer,
-    /// GPU-only im scratch: same ownership contract as `re_scratch_buf`.
-    #[allow(dead_code)]
-    pub(crate) im_scratch_buf: wgpu::Buffer,
+    /// GPU-only re scratch: retained for bind-group resource ownership.
+    pub(crate) _re_scratch_buf: wgpu::Buffer,
+    /// GPU-only im scratch: retained for bind-group resource ownership.
+    pub(crate) _im_scratch_buf: wgpu::Buffer,
     pub(crate) fwd_output_buf: wgpu::Buffer,
     pub(crate) fwd_staging_buf: wgpu::Buffer,
-    /// GPU-only frame data: written by scale_window pass; consumed by OLA pass. Never CPU-read.
-    #[allow(dead_code)]
-    pub(crate) frame_data_buf: wgpu::Buffer,
+    /// GPU-only frame data: retained for bind-group resource ownership.
+    pub(crate) _frame_data_buf: wgpu::Buffer,
     pub(crate) inv_signal_buf: wgpu::Buffer,
     pub(crate) inv_staging_buf: wgpu::Buffer,
     pub(crate) inv_ola_params_buf: wgpu::Buffer,
@@ -77,18 +73,14 @@ pub struct StftGpuBuffers {
     // ── Forward FFT stage params ──────────────────────────────────────────────
     // Buffers kept as fields to prevent drop before BG is valid (wgpu holds a Rc internally,
     // but explicit ownership avoids any refcount/drop-order ambiguity in the abstraction).
-    #[allow(dead_code)]
-    fwd_base_params_buf: wgpu::Buffer,
+    _fwd_base_params_buf: wgpu::Buffer,
     pub(crate) fwd_base_params_bg: wgpu::BindGroup,
-    #[allow(dead_code)]
-    fwd_butterfly_bufs: Vec<wgpu::Buffer>,
+    _fwd_butterfly_bufs: Vec<wgpu::Buffer>,
     pub(crate) fwd_butterfly_bgs: Vec<wgpu::BindGroup>,
     // ── Inverse FFT stage params ──────────────────────────────────────────────
-    #[allow(dead_code)]
-    inv_base_params_buf: wgpu::Buffer,
+    _inv_base_params_buf: wgpu::Buffer,
     pub(crate) inv_base_params_bg: wgpu::BindGroup,
-    #[allow(dead_code)]
-    inv_butterfly_bufs: Vec<wgpu::Buffer>,
+    _inv_butterfly_bufs: Vec<wgpu::Buffer>,
     pub(crate) inv_butterfly_bgs: Vec<wgpu::BindGroup>,
     // ── Host output vectors (reused across calls) ─────────────────────────────
     pub(crate) fwd_output_host: Vec<Complex32>,
@@ -368,24 +360,24 @@ impl StftGpuBuffers {
             log2_n,
             signal_buf,
             spectrum_buf,
-            re_scratch_buf,
-            im_scratch_buf,
+            _re_scratch_buf: re_scratch_buf,
+            _im_scratch_buf: im_scratch_buf,
             fwd_output_buf,
             fwd_staging_buf,
-            frame_data_buf,
+            _frame_data_buf: frame_data_buf,
             inv_signal_buf,
             inv_staging_buf,
             inv_ola_params_buf,
             fwd_data_bg,
             inv_data_bg,
             ola_bg,
-            fwd_base_params_buf,
+            _fwd_base_params_buf: fwd_base_params_buf,
             fwd_base_params_bg,
-            fwd_butterfly_bufs,
+            _fwd_butterfly_bufs: fwd_butterfly_bufs,
             fwd_butterfly_bgs,
-            inv_base_params_buf,
+            _inv_base_params_buf: inv_base_params_buf,
             inv_base_params_bg,
-            inv_butterfly_bufs,
+            _inv_butterfly_bufs: inv_butterfly_bufs,
             inv_butterfly_bgs,
             fwd_output_host: vec![Complex32::new(0.0, 0.0); frame_count * frame_len],
             inv_output_host: vec![0.0f32; signal_len],

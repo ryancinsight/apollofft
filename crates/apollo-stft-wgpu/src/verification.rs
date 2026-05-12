@@ -434,7 +434,6 @@ mod tests {
     #[test]
     fn inverse_accepts_non_power_of_two_frame_len_chirpz() {
         // Closure XVIII: execute_inverse now accepts non-PoT frame_len via Chirp-Z path.
-        // Prior to Closure XVIII this returned FrameLenNotPowerOfTwo.
         //
         // frame_count = 1 + 6.div_ceil(3) = 3; spectrum_len = 3 * 6 = 18.
         match StftWgpuBackend::try_default() {
@@ -443,10 +442,9 @@ mod tests {
                 let plan = StftWgpuPlan::new(6, 3);
                 let dummy_spectrum = vec![Complex32::new(0.0, 0.0); 18];
                 let result = backend.execute_inverse(&plan, &dummy_spectrum, 6);
-                // Must NOT return FrameLenNotPowerOfTwo; any other result is acceptable.
                 assert!(
-                    !matches!(result, Err(WgpuError::FrameLenNotPowerOfTwo { .. })),
-                    "expected Chirp-Z acceptance, not FrameLenNotPowerOfTwo; got {:?}",
+                    result.is_ok(),
+                    "expected Chirp-Z inverse acceptance; got {:?}",
                     result
                 );
             }
@@ -508,7 +506,7 @@ mod tests {
 
     /// Verifies that `execute_forward` accepts non-PoT `frame_len` via the Chirp-Z path.
     ///
-    /// Closure XVIII: non-PoT no longer returns `FrameLenNotPowerOfTwo`.
+    /// Closure XVIII: non-PoT dispatches through Chirp-Z.
     /// CPU-side structural check: does not require a GPU device.
     #[test]
     fn forward_accepts_non_power_of_two_frame_len_chirpz() {
@@ -519,11 +517,7 @@ mod tests {
         let signal = vec![0.0f32; 12];
         let plan = StftWgpuPlan::new(6, 3);
         let r = backend.execute_forward(&plan, &signal);
-        // Must NOT return FrameLenNotPowerOfTwo — Chirp-Z path must be taken.
-        assert!(
-            !matches!(r, Err(WgpuError::FrameLenNotPowerOfTwo { .. })),
-            "expected Chirp-Z path, not FrameLenNotPowerOfTwo; got {r:?}"
-        );
+        assert!(r.is_ok(), "expected Chirp-Z forward acceptance; got {r:?}");
     }
 
     /// GPU forward FFT (1024-frame, log₂(1024) = 10 butterfly stages) followed by GPU inverse
@@ -690,23 +684,20 @@ mod tests {
     // Non-power-of-two Chirp-Z path tests (Closure XVIII)
     // -----------------------------------------------------------------------
 
-    /// Verifies that a non-PoT `frame_len` no longer returns `FrameLenNotPowerOfTwo`.
+    /// Verifies that a non-PoT `frame_len` executes through the Chirp-Z path.
     /// The Bluestein/Chirp-Z path accepts arbitrary frame_len ≥ 1.
     /// CPU-side structural check: does not require a GPU device.
     #[test]
     fn forward_accepts_non_power_of_two_frame_len_structurally() {
-        // frame_len=6 previously returned FrameLenNotPowerOfTwo; now it should not return
-        // that variant (it may fail for other reasons — e.g. no GPU — but not that one).
         let Ok(backend) = StftWgpuBackend::try_default() else {
             return;
         };
         let signal = vec![0.0f32; 24];
         let plan = StftWgpuPlan::new(6, 3);
         let r = backend.execute_forward(&plan, &signal);
-        // Must NOT return FrameLenNotPowerOfTwo — any other result is acceptable here.
         assert!(
-            !matches!(r, Err(WgpuError::FrameLenNotPowerOfTwo { .. })),
-            "expected Chirp-Z path to be taken, not FrameLenNotPowerOfTwo; got {r:?}"
+            r.is_ok(),
+            "expected Chirp-Z structural forward acceptance; got {r:?}"
         );
     }
 
@@ -829,7 +820,7 @@ mod tests {
     // Non-PoT buffer-reuse path tests (Closure XIX)
     // -----------------------------------------------------------------------
 
-    /// Structural test: non-PoT frame_len no longer returns FrameLenNotPowerOfTwo from make_buffers.
+    /// Structural test: non-PoT frame_len is accepted by make_buffers.
     /// Closure XIX: buffer-reuse API now accepts arbitrary frame_len via chirp_padded_len scratch sizing.
     #[test]
     fn make_buffers_accepts_non_power_of_two_frame_len_structurally() {
@@ -839,11 +830,7 @@ mod tests {
         let plan = StftWgpuPlan::new(6, 3);
         let signal_len = 24usize;
         let r = backend.make_buffers(&plan, signal_len);
-        // Must NOT return FrameLenNotPowerOfTwo — buffer path must accept non-PoT via Chirp-Z.
-        assert!(
-            !matches!(r, Err(WgpuError::FrameLenNotPowerOfTwo { .. })),
-            "expected non-PoT acceptance, not FrameLenNotPowerOfTwo; got {r:?}"
-        );
+        assert!(r.is_ok(), "expected non-PoT buffer acceptance; got {r:?}");
     }
 
     /// GPU-gated buffer-reuse test: forward dispatch at non-PoT frame_len=400 produces valid output.

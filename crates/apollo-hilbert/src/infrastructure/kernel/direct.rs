@@ -2,21 +2,40 @@
 //!
 //! The Hilbert transform is computed via the analytic signal mask applied in the
 //! frequency domain. The forward and inverse DFT steps delegate to
-//! `apollo_fft::fft_1d_array` and `apollo_fft::ifft_1d_complex`, which use the
-//! O(N log N) radix-2/Bluestein strategy, replacing the former private O(N²)
+//! `apollo_fft::FftPlan1D` slice execution, which uses the O(N log N)
+//! radix-2/Bluestein strategy, replacing the former private O(N²)
 //! direct-summation kernels and eliminating the SSOT violation documented in
 //! `apollo-radon::infrastructure::kernel::filter`.
 
 use crate::domain::contracts::error::{HilbertError, HilbertResult};
-use ndarray::Array1;
+use apollo_fft::{Shape1D, FFT_CACHE_1D};
 use num_complex::Complex64;
+use std::cell::RefCell;
+
+thread_local! {
+    static QUADRATURE_ANALYTIC_SCRATCH: RefCell<Vec<Complex64>> = const { RefCell::new(Vec::new()) };
+}
 
 /// Compute the Hilbert quadrature component of a real signal.
 pub fn hilbert_transform(signal: &[f64]) -> HilbertResult<Vec<f64>> {
-    Ok(analytic_signal(signal)?
-        .into_iter()
-        .map(|value| value.im)
-        .collect())
+    let mut output = vec![0.0; signal.len()];
+    hilbert_transform_into(signal, &mut output)?;
+    Ok(output)
+}
+
+/// Compute the Hilbert quadrature component into caller-owned storage.
+pub fn hilbert_transform_into(signal: &[f64], output: &mut [f64]) -> HilbertResult<()> {
+    if output.len() != signal.len() {
+        return Err(HilbertError::LengthMismatch);
+    }
+
+    with_quadrature_analytic_workspace(signal.len(), |analytic| {
+        analytic_signal_into(signal, analytic)?;
+        for (slot, value) in output.iter_mut().zip(analytic.iter()) {
+            *slot = value.im;
+        }
+        Ok(())
+    })
 }
 
 /// Compute the analytic signal `x[n] + i H{x}[n]`.
@@ -57,17 +76,47 @@ pub fn analytic_signal(signal: &[f64]) -> HilbertResult<Vec<Complex64>> {
         return Err(HilbertError::EmptySignal);
     }
 
-    let arr = Array1::from_iter(signal.iter().copied());
-    let mut spectrum: Vec<Complex64> = apollo_fft::fft_1d_array(&arr).to_vec();
-    apply_analytic_mask(&mut spectrum);
-    let spectrum_arr = Array1::from_vec(spectrum);
-    let mut analytic: Vec<Complex64> = apollo_fft::ifft_1d_complex(&spectrum_arr).to_vec();
+    let mut analytic = vec![Complex64::new(0.0, 0.0); signal.len()];
+    analytic_signal_into(signal, &mut analytic)?;
+    Ok(analytic)
+}
+
+/// Compute the analytic signal `x[n] + i H{x}[n]` into caller-owned storage.
+pub fn analytic_signal_into(signal: &[f64], output: &mut [Complex64]) -> HilbertResult<()> {
+    if output.len() != signal.len() {
+        return Err(HilbertError::LengthMismatch);
+    }
+    if signal.is_empty() {
+        return Err(HilbertError::EmptySignal);
+    }
+
+    let shape = Shape1D::new(signal.len()).expect("non-empty Hilbert signal length");
+    let plan = FFT_CACHE_1D.get_or_create(shape);
+    plan.forward_real_to_complex_slice_into(signal, output);
+    apply_analytic_mask(output);
+    plan.inverse_complex_slice_inplace(output);
 
     // Force the real part to equal the original input to eliminate IFFT rounding.
-    for (sample, original) in analytic.iter_mut().zip(signal.iter()) {
+    for (sample, original) in output.iter_mut().zip(signal.iter()) {
         sample.re = *original;
     }
-    Ok(analytic)
+    Ok(())
+}
+
+fn with_quadrature_analytic_workspace<R>(
+    len: usize,
+    f: impl FnOnce(&mut [Complex64]) -> HilbertResult<R>,
+) -> HilbertResult<R> {
+    QUADRATURE_ANALYTIC_SCRATCH.with(|scratch| {
+        let mut scratch = scratch.borrow_mut();
+        scratch.resize(len, Complex64::new(0.0, 0.0));
+        f(&mut scratch[..len])
+    })
+}
+
+#[cfg(test)]
+fn quadrature_analytic_workspace_capacity() -> usize {
+    QUADRATURE_ANALYTIC_SCRATCH.with(|scratch| scratch.borrow().capacity())
 }
 
 fn apply_analytic_mask(spectrum: &mut [Complex64]) {
@@ -82,5 +131,87 @@ fn apply_analytic_mask(spectrum: &mut [Complex64]) {
             0.0
         };
         *value *= scale;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_abs_diff_eq;
+
+    #[test]
+    fn hilbert_transform_into_matches_owned_quadrature() {
+        let len = 16;
+        let signal: Vec<f64> = (0..len)
+            .map(|n| (std::f64::consts::TAU * n as f64 / len as f64).cos())
+            .collect();
+        let expected = hilbert_transform(&signal).expect("owned quadrature");
+        let mut output = vec![f64::NAN; len];
+
+        hilbert_transform_into(&signal, &mut output).expect("caller-owned quadrature");
+
+        for (actual, expected) in output.iter().zip(expected.iter()) {
+            assert_abs_diff_eq!(actual, expected, epsilon = 1.0e-12);
+        }
+    }
+
+    #[test]
+    fn analytic_signal_into_matches_owned_analytic_signal() {
+        let len = 16;
+        let signal: Vec<f64> = (0..len)
+            .map(|n| (std::f64::consts::TAU * n as f64 / len as f64).cos())
+            .collect();
+        let expected = analytic_signal(&signal).expect("owned analytic");
+        let mut output = vec![Complex64::new(f64::NAN, f64::NAN); len];
+
+        analytic_signal_into(&signal, &mut output).expect("caller-owned analytic");
+
+        for (actual, expected) in output.iter().zip(expected.iter()) {
+            assert_abs_diff_eq!(actual.re, expected.re, epsilon = 1.0e-12);
+            assert_abs_diff_eq!(actual.im, expected.im, epsilon = 1.0e-12);
+        }
+    }
+
+    #[test]
+    fn hilbert_transform_into_reuses_analytic_workspace_capacity() {
+        let len = 16;
+        let signal: Vec<f64> = (0..len)
+            .map(|n| (std::f64::consts::TAU * n as f64 / len as f64).cos())
+            .collect();
+        let mut first = vec![0.0; len];
+        let mut second = vec![0.0; len];
+
+        hilbert_transform_into(&signal, &mut first).expect("first caller-owned quadrature");
+        let after_first = quadrature_analytic_workspace_capacity();
+        assert!(after_first >= len);
+
+        hilbert_transform_into(&signal, &mut second).expect("second caller-owned quadrature");
+        assert_eq!(quadrature_analytic_workspace_capacity(), after_first);
+
+        for (actual, expected) in second.iter().zip(first.iter()) {
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        }
+    }
+
+    #[test]
+    fn analytic_signal_into_rejects_output_length_mismatch() {
+        let signal = [1.0, 0.0, -1.0, 0.0];
+        let mut output = [Complex64::new(0.0, 0.0); 3];
+
+        assert!(matches!(
+            analytic_signal_into(&signal, &mut output),
+            Err(HilbertError::LengthMismatch)
+        ));
+    }
+
+    #[test]
+    fn hilbert_transform_into_rejects_output_length_mismatch() {
+        let signal = [1.0, 0.0, -1.0, 0.0];
+        let mut output = [0.0; 3];
+
+        assert!(matches!(
+            hilbert_transform_into(&signal, &mut output),
+            Err(HilbertError::LengthMismatch)
+        ));
     }
 }

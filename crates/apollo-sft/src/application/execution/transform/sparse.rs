@@ -57,8 +57,7 @@
 
 use crate::domain::plan::config::SparseFftConfig;
 use crate::domain::spectrum::sparse::SparseSpectrum;
-use apollo_fft::error::{ApolloError, ApolloResult};
-use apollo_fft::{f16, PrecisionProfile};
+use apollo_fft::{f16, ApolloError, ApolloResult, PrecisionProfile};
 use ndarray::Array1;
 use num_complex::{Complex32, Complex64};
 use std::cmp::Reverse;

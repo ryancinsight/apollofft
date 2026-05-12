@@ -1,6 +1,6 @@
 [package]
 name = "apollo-fft"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
 authors = ["Ryan Clanton PhD <ryanclanton@outlook.com>"]
@@ -12,6 +12,7 @@ half = { version = "2.4", features = ["serde", "use-intrinsics"] }
 nalgebra = { workspace = true }
 ndarray = { version = "0.16", features = ["rayon"] }
 num-complex = "0.4"
+num-traits = "0.2.19"
 once_cell = "1.19"
 parking_lot = "0.12"
 rand = { workspace = true }
@@ -23,9 +24,14 @@ thiserror = "1.0"
 approx = "0.5"
 criterion = { workspace = true }
 proptest = "1.6"
+rustfft = "6.2"
 
 [[bench]]
 name = "kernel_strategy"
+harness = false
+
+[[bench]]
+name = "vs_rustfft"
 harness = false
 
 [lints]

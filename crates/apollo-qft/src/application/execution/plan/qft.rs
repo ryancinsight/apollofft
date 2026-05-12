@@ -9,11 +9,17 @@
 
 use crate::domain::contracts::error::{QftError, QftResult};
 use crate::domain::state::dimension::QuantumStateDimension;
-use crate::infrastructure::kernel::dense::{qft_forward_dense, qft_inverse_dense};
+use crate::infrastructure::kernel::dense::{qft_forward_dense_into, qft_inverse_dense_into};
 use apollo_fft::{f16, PrecisionProfile};
 use ndarray::Array1;
 use num_complex::{Complex32, Complex64};
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+
+thread_local! {
+    static TYPED_INPUT64_SCRATCH: RefCell<Vec<Complex64>> = const { RefCell::new(Vec::new()) };
+    static TYPED_OUTPUT64_SCRATCH: RefCell<Vec<Complex64>> = const { RefCell::new(Vec::new()) };
+}
 
 /// Reusable QFT plan with precomputed twiddle factors.
 ///
@@ -68,16 +74,24 @@ impl QftPlan {
         input: &Array1<Complex64>,
         output: &mut Array1<Complex64>,
     ) -> QftResult<()> {
+        self.forward_complex64_slice_into(
+            input.as_slice().expect("QFT input must be contiguous"),
+            output
+                .as_slice_mut()
+                .expect("QFT output must be contiguous"),
+        )
+    }
+
+    /// Forward QFT over contiguous Complex64 slices.
+    pub(crate) fn forward_complex64_slice_into(
+        &self,
+        input: &[Complex64],
+        output: &mut [Complex64],
+    ) -> QftResult<()> {
         if input.len() != self.len() || output.len() != self.len() {
             return Err(QftError::LengthMismatch);
         }
-        let transformed = qft_forward_dense(
-            input.as_slice().expect("QFT input must be contiguous"),
-            &self.twiddles,
-        );
-        for (slot, value) in output.iter_mut().zip(transformed.into_iter()) {
-            *slot = value;
-        }
+        qft_forward_dense_into(input, output, &self.twiddles);
         Ok(())
     }
 
@@ -104,16 +118,24 @@ impl QftPlan {
         input: &Array1<Complex64>,
         output: &mut Array1<Complex64>,
     ) -> QftResult<()> {
+        self.inverse_complex64_slice_into(
+            input.as_slice().expect("QFT input must be contiguous"),
+            output
+                .as_slice_mut()
+                .expect("QFT output must be contiguous"),
+        )
+    }
+
+    /// Inverse QFT over contiguous Complex64 slices.
+    pub(crate) fn inverse_complex64_slice_into(
+        &self,
+        input: &[Complex64],
+        output: &mut [Complex64],
+    ) -> QftResult<()> {
         if input.len() != self.len() || output.len() != self.len() {
             return Err(QftError::LengthMismatch);
         }
-        let transformed = qft_inverse_dense(
-            input.as_slice().expect("QFT input must be contiguous"),
-            &self.twiddles,
-        );
-        for (slot, value) in output.iter_mut().zip(transformed.into_iter()) {
-            *slot = value;
-        }
+        qft_inverse_dense_into(input, output, &self.twiddles);
         Ok(())
     }
 
@@ -164,13 +186,16 @@ pub trait QftStorage: Copy + Send + Sync + 'static {
         if input.len() != plan.len() || output.len() != plan.len() {
             return Err(QftError::LengthMismatch);
         }
-        let input64 = Array1::from_iter(input.iter().copied().map(Self::to_complex64));
-        let mut output64 = Array1::zeros(plan.len());
-        plan.forward_into(&input64, &mut output64)?;
-        for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
-            *slot = Self::from_complex64(value);
-        }
-        Ok(())
+        with_complex64_workspaces(plan.len(), |input64, output64| {
+            for (slot, value) in input64.iter_mut().zip(input.iter().copied()) {
+                *slot = Self::to_complex64(value);
+            }
+            plan.forward_complex64_slice_into(input64, output64)?;
+            for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+                *slot = Self::from_complex64(value);
+            }
+            Ok(())
+        })
     }
 
     /// Execute inverse transform into caller-owned storage.
@@ -184,13 +209,16 @@ pub trait QftStorage: Copy + Send + Sync + 'static {
         if input.len() != plan.len() || output.len() != plan.len() {
             return Err(QftError::LengthMismatch);
         }
-        let input64 = Array1::from_iter(input.iter().copied().map(Self::to_complex64));
-        let mut output64 = Array1::zeros(plan.len());
-        plan.inverse_into(&input64, &mut output64)?;
-        for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
-            *slot = Self::from_complex64(value);
-        }
-        Ok(())
+        with_complex64_workspaces(plan.len(), |input64, output64| {
+            for (slot, value) in input64.iter_mut().zip(input.iter().copied()) {
+                *slot = Self::to_complex64(value);
+            }
+            plan.inverse_complex64_slice_into(input64, output64)?;
+            for (slot, value) in output.iter_mut().zip(output64.iter().copied()) {
+                *slot = Self::from_complex64(value);
+            }
+            Ok(())
+        })
     }
 }
 
@@ -259,6 +287,39 @@ fn validate_profile(actual: PrecisionProfile, expected: PrecisionProfile) -> Qft
     } else {
         Err(QftError::PrecisionMismatch)
     }
+}
+
+fn with_complex64_workspaces<R>(
+    n: usize,
+    f: impl FnOnce(&mut [Complex64], &mut [Complex64]) -> R,
+) -> R {
+    TYPED_INPUT64_SCRATCH.with(|input_scratch| {
+        TYPED_OUTPUT64_SCRATCH.with(|output_scratch| {
+            let mut input_scratch = input_scratch.borrow_mut();
+            if input_scratch.len() < n {
+                input_scratch.resize(n, Complex64::new(0.0, 0.0));
+            }
+
+            let mut output_scratch = output_scratch.borrow_mut();
+            if output_scratch.len() < n {
+                output_scratch.resize(n, Complex64::new(0.0, 0.0));
+            }
+
+            f(&mut input_scratch[..n], &mut output_scratch[..n])
+        })
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn typed_scratch_capacities() -> (usize, usize) {
+    TYPED_INPUT64_SCRATCH.with(|input_scratch| {
+        TYPED_OUTPUT64_SCRATCH.with(|output_scratch| {
+            (
+                input_scratch.borrow().capacity(),
+                output_scratch.borrow().capacity(),
+            )
+        })
+    })
 }
 
 /// Convenience wrapper for forward QFT.
@@ -381,6 +442,66 @@ mod tests {
         for (actual, expected) in recovered32.iter().zip(input32.iter()) {
             assert!((actual.re - expected.re).abs() < 1.0e-5);
             assert!((actual.im - expected.im).abs() < 1.0e-5);
+        }
+    }
+
+    #[test]
+    fn typed_complex32_paths_reuse_complex64_workspaces() {
+        let plan = plan4();
+        let input = input64().mapv(|value| Complex32::new(value.re as f32, value.im as f32));
+        let mut first_spectrum = Array1::<Complex32>::zeros(plan.len());
+        let mut second_spectrum = Array1::<Complex32>::zeros(plan.len());
+        let mut first_recovered = Array1::<Complex32>::zeros(plan.len());
+        let mut second_recovered = Array1::<Complex32>::zeros(plan.len());
+
+        plan.forward_typed_into(
+            &input,
+            &mut first_spectrum,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("first typed complex32 forward");
+        let forward_caps = typed_scratch_capacities();
+        plan.forward_typed_into(
+            &input,
+            &mut second_spectrum,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("second typed complex32 forward");
+
+        assert_eq!(typed_scratch_capacities(), forward_caps);
+        assert!(forward_caps.0 >= plan.len());
+        assert!(forward_caps.1 >= plan.len());
+        for (actual, expected) in second_spectrum.iter().zip(first_spectrum.iter()) {
+            assert_relative_eq!(actual.re, expected.re, epsilon = 0.0);
+            assert_relative_eq!(actual.im, expected.im, epsilon = 0.0);
+        }
+
+        plan.inverse_typed_into(
+            &first_spectrum,
+            &mut first_recovered,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("first typed complex32 inverse");
+        let inverse_caps = typed_scratch_capacities();
+        plan.inverse_typed_into(
+            &first_spectrum,
+            &mut second_recovered,
+            PrecisionProfile::LOW_PRECISION_F32,
+        )
+        .expect("second typed complex32 inverse");
+
+        assert_eq!(typed_scratch_capacities(), inverse_caps);
+        assert!(inverse_caps.0 >= plan.len());
+        assert!(inverse_caps.1 >= plan.len());
+        for ((actual, expected), original) in second_recovered
+            .iter()
+            .zip(first_recovered.iter())
+            .zip(input.iter())
+        {
+            assert_relative_eq!(actual.re, expected.re, epsilon = 0.0);
+            assert_relative_eq!(actual.im, expected.im, epsilon = 0.0);
+            assert!((actual.re - original.re).abs() < 1.0e-5);
+            assert!((actual.im - original.im).abs() < 1.0e-5);
         }
     }
 

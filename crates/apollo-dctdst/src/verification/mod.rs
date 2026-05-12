@@ -2,7 +2,8 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::infrastructure::kernel::direct::{dct1, dct2, dct4, dst1, dst4};
+    use crate::infrastructure::kernel::direct::{dct1, dct2, dct4, dst1, dst2, dst4};
+    use crate::infrastructure::kernel::fast::{dct2_dst2_fast, dct2_fast, dst2_fast};
     use crate::{DctDstError, DctDstPlan, RealTransformKind};
     use approx::assert_abs_diff_eq;
     use ndarray::{Array2, Array3};
@@ -126,6 +127,46 @@ mod tests {
             error < 1.0e-12,
             "plan dispatch diverges from direct kernel: err={error}"
         );
+    }
+
+    #[test]
+    fn fast_single_projection_paths_match_dual_projection_kernel() {
+        let signal: Vec<f64> = (0..32)
+            .map(|index| {
+                let x = index as f64;
+                (0.021 * x).sin() - 0.5 * (0.047 * x).cos() + 0.125 * (0.13 * x).sin()
+            })
+            .collect();
+
+        let mut dct_single = vec![0.0_f64; signal.len()];
+        let mut dst_single = vec![0.0_f64; signal.len()];
+        let mut dct_dual = vec![0.0_f64; signal.len()];
+        let mut dst_dual = vec![0.0_f64; signal.len()];
+        let mut dct_reference = vec![0.0_f64; signal.len()];
+        let mut dst_reference = vec![0.0_f64; signal.len()];
+
+        dct2_fast(&signal, &mut dct_single);
+        dst2_fast(&signal, &mut dst_single);
+        dct2_dst2_fast(&signal, &mut dct_dual, &mut dst_dual);
+        dct2(&signal, &mut dct_reference);
+        dst2(&signal, &mut dst_reference);
+
+        for ((single, dual), reference) in dct_single
+            .iter()
+            .zip(dct_dual.iter())
+            .zip(dct_reference.iter())
+        {
+            assert_abs_diff_eq!(single, dual, epsilon = 1.0e-12);
+            assert_abs_diff_eq!(single, reference, epsilon = 1.0e-12);
+        }
+        for ((single, dual), reference) in dst_single
+            .iter()
+            .zip(dst_dual.iter())
+            .zip(dst_reference.iter())
+        {
+            assert_abs_diff_eq!(single, dual, epsilon = 1.0e-12);
+            assert_abs_diff_eq!(single, reference, epsilon = 1.0e-12);
+        }
     }
 
     /// DCT-II of a single element equals the element itself.

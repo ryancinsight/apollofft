@@ -33,15 +33,18 @@ operate directly on backing-slice chunks with Rayon, avoiding full-field
 lane-copy vectors and scatter copies. Non-contiguous axes still gather one lane
 buffer per lane before scattering because ndarray strides are not contiguous.
 
-The typed plan surface supports `f64` storage with `Complex64` compute,
-`f32` storage with `Complex32` compute, and mixed `f16` storage with `f32`
-compute. The 3D typed `*_into` paths accept caller-owned output and scratch
-buffers for all three precision profiles to avoid repeated spectrum allocation
-in memory-bound workloads.
+The 1D real-forward plan surface supports both ndarray and slice caller-owned
+output paths. Slice execution lets downstream crates reuse existing real input
+slices while still sharing the same real FFT owner kernel. The typed plan
+surface supports `f64` storage with `Complex64` compute, `f32` storage with
+`Complex32` compute, and mixed `f16` storage with `f32` compute. The 3D typed
+`*_into` paths accept caller-owned output and scratch buffers for all three
+precision profiles to avoid repeated spectrum allocation in memory-bound
+workloads.
 
 ## Verification
 
 Tests cover analytical small transforms, radix-2 and Bluestein parity against
 direct DFT, inverse roundtrips, Parseval-style energy checks, linearity,
-caller-owned output paths, shape rejection, precision profile behavior, and
-2D/3D separable axis execution.
+caller-owned output paths, slice-level real-forward parity and shape rejection,
+precision profile behavior, and 2D/3D separable axis execution.

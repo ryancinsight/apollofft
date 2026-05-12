@@ -25,6 +25,9 @@ Typed direct-bin execution uses Apollo's shared precision profile contract:
 
 Profile/storage mismatches return `SdftError::PrecisionMismatch`.
 
+Typed direct-bin execution reuses per-thread f64/Complex64 bridge workspaces
+and routes arithmetic through the same direct-bin owner kernel as f64 callers.
+
 ## Mathematical Contract
 
 For a window of length `N`, each update removes `x_old`, appends `x_new`, and
@@ -37,5 +40,6 @@ after every update.
 Tests cover initial direct-bin equivalence, update recurrence equivalence,
 zero-state behavior, update counting, invalid contracts, and direct DFT parity
 after a full window of pushes. Typed tests cover `f64`, `f32`, mixed `f16`,
-represented-input direct-bin parity, caller-owned output reuse, output length
-rejection, and precision/profile mismatch rejection.
+represented-input direct-bin parity, repeated workspace reuse, caller-owned
+output reuse, output length rejection, and precision/profile mismatch
+rejection.

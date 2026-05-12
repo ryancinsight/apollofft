@@ -141,6 +141,37 @@ use std::f64::consts::PI;
 /// N = 8  → 2N · log₂(2N) = 16 · 4  = 64  < N² = 64. (breakeven; use 16 to be conservative.)
 pub const FAST_THRESHOLD: usize = 16;
 
+fn forward_zero_padded(signal: &[f64]) -> (Array1<Complex64>, f64) {
+    let n = signal.len();
+    let two_n = 2 * n;
+    let half_cycle = PI / two_n as f64;
+
+    let mut buf: Array1<Complex64> = Array1::zeros(two_n);
+    for (i, &x) in signal.iter().enumerate() {
+        buf[i] = Complex64::new(x, 0.0);
+    }
+
+    (fft_1d_complex(&buf), half_cycle)
+}
+
+fn fill_dct2_from_fft(f: &Array1<Complex64>, half_cycle: f64, output: &mut [f64]) {
+    for k in 0..output.len() {
+        let angle = -(half_cycle * k as f64);
+        let (sin_a, cos_a) = angle.sin_cos();
+        let w = Complex64::new(cos_a, sin_a);
+        output[k] = (w * f[k]).re;
+    }
+}
+
+fn fill_dst2_from_fft(f: &Array1<Complex64>, half_cycle: f64, output: &mut [f64]) {
+    for k in 0..output.len() {
+        let angle = -(half_cycle * (k as f64 + 1.0));
+        let (sin_a, cos_a) = angle.sin_cos();
+        let w = Complex64::new(cos_a, sin_a);
+        output[k] = -(w * f[k + 1]).im;
+    }
+}
+
 /// Shared 2N-point forward DFT kernel for DCT-II and DST-II.
 ///
 /// Computes one unnormalized 2N-point forward FFT of the zero-padded real input `signal`
@@ -169,43 +200,15 @@ pub fn dct2_dst2_fast(signal: &[f64], dct_output: &mut [f64], dst_output: &mut [
         "dct2_dst2_fast: dst_output length mismatch"
     );
 
-    let two_n = 2 * n;
-    // π / (2N): the fundamental angular step for twiddle factor computation.
-    let half_cycle = PI / two_n as f64;
-
-    // Build zero-padded complex input of length 2N.
-    // x̃[i] = x[i] + 0i  for i < N
-    // x̃[i] = 0           for i ∈ [N, 2N)
-    let mut buf: Array1<Complex64> = Array1::zeros(two_n);
-    for (i, &x) in signal.iter().enumerate() {
-        buf[i] = Complex64::new(x, 0.0);
-    }
-
-    // F = DFT_{2N}(x̃): unnormalized forward FFT.
-    let f = fft_1d_complex(&buf);
-
-    // DCT-II[k] = Re(exp(-iπk/(2N)) · F[k])
-    // Twiddle: W_k = (cos(-πk/(2N)), sin(-πk/(2N))) = (cos(half_cycle·k), -sin(half_cycle·k))
-    for k in 0..n {
-        let angle = -(half_cycle * k as f64); // -πk/(2N)
-        let (sin_a, cos_a) = angle.sin_cos();
-        let w = Complex64::new(cos_a, sin_a);
-        dct_output[k] = (w * f[k]).re;
-    }
-
-    // DST-II[k] = -Im(exp(-iπ(k+1)/(2N)) · F[k+1])
-    // F has length 2N; k+1 ∈ {1,...,N}: all indices valid.
-    for k in 0..n {
-        let angle = -(half_cycle * (k as f64 + 1.0)); // -π(k+1)/(2N)
-        let (sin_a, cos_a) = angle.sin_cos();
-        let w = Complex64::new(cos_a, sin_a);
-        dst_output[k] = -(w * f[k + 1]).im;
-    }
+    let (f, half_cycle) = forward_zero_padded(signal);
+    fill_dct2_from_fft(&f, half_cycle, dct_output);
+    fill_dst2_from_fft(&f, half_cycle, dst_output);
 }
 
 /// Fast DCT-II via 2N-point forward FFT. Complexity: O(N log N).
 ///
-/// Delegates to [`dct2_dst2_fast`] with a single shared FFT call.
+/// Computes the DCT projection from one shared 2N-point FFT without allocating
+/// the DST output used by [`dct2_dst2_fast`].
 /// Suitable for N ≥ [`FAST_THRESHOLD`]; use the direct O(N²) kernel for smaller N.
 ///
 /// # Mathematical contract
@@ -214,14 +217,19 @@ pub fn dct2_dst2_fast(signal: &[f64], dct_output: &mut [f64], dst_output: &mut [
 ///
 /// Derived via Sub-theorem 1: `output[k] = Re(exp(-iπk/(2N)) · DFT_{2N}(x̃)[k])`.
 pub fn dct2_fast(signal: &[f64], output: &mut [f64]) {
-    let n = signal.len();
-    let mut unused = vec![0.0_f64; n];
-    dct2_dst2_fast(signal, output, &mut unused);
+    debug_assert_eq!(
+        output.len(),
+        signal.len(),
+        "dct2_fast: output length mismatch"
+    );
+    let (f, half_cycle) = forward_zero_padded(signal);
+    fill_dct2_from_fft(&f, half_cycle, output);
 }
 
 /// Fast DST-II via 2N-point forward FFT. Complexity: O(N log N).
 ///
-/// Delegates to [`dct2_dst2_fast`] with a single shared FFT call.
+/// Computes the DST projection from one shared 2N-point FFT without allocating
+/// the DCT output used by [`dct2_dst2_fast`].
 /// Suitable for N ≥ [`FAST_THRESHOLD`]; use the direct O(N²) kernel for smaller N.
 ///
 /// # Mathematical contract
@@ -230,9 +238,13 @@ pub fn dct2_fast(signal: &[f64], output: &mut [f64]) {
 ///
 /// Derived via Sub-theorem 2: `output[k] = -Im(exp(-iπ(k+1)/(2N)) · DFT_{2N}(x̃)[k+1])`.
 pub fn dst2_fast(signal: &[f64], output: &mut [f64]) {
-    let n = signal.len();
-    let mut unused = vec![0.0_f64; n];
-    dct2_dst2_fast(signal, &mut unused, output);
+    debug_assert_eq!(
+        output.len(),
+        signal.len(),
+        "dst2_fast: output length mismatch"
+    );
+    let (f, half_cycle) = forward_zero_padded(signal);
+    fill_dst2_from_fft(&f, half_cycle, output);
 }
 
 /// Fast DCT-III via 2N-point Hermitian IDFT. Complexity: O(N log N).

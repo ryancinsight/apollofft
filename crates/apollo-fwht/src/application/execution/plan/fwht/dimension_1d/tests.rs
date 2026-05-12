@@ -101,6 +101,73 @@ fn typed_paths_support_f64_f32_and_mixed_f16_storage() {
 }
 
 #[test]
+fn mixed_f16_typed_paths_reuse_f32_workspace() {
+    let plan = FwhtPlan::new(8).expect("valid plan");
+    let signal = Array1::from_vec(vec![
+        f16::from_f32(1.0),
+        f16::from_f32(-2.0),
+        f16::from_f32(0.5),
+        f16::from_f32(2.25),
+        f16::from_f32(-4.0),
+        f16::from_f32(1.5),
+        f16::from_f32(0.0),
+        f16::from_f32(-0.75),
+    ]);
+    let mut first = Array1::from_elem(8, f16::from_f32(0.0));
+    let mut second = Array1::from_elem(8, f16::from_f32(0.0));
+
+    plan.forward_typed_into(
+        &signal,
+        &mut first,
+        PrecisionProfile::MIXED_PRECISION_F16_F32,
+    )
+    .expect("first mixed f16 forward");
+    let forward_caps =
+        crate::application::execution::plan::fwht::storage::typed_scratch_capacities();
+    plan.forward_typed_into(
+        &signal,
+        &mut second,
+        PrecisionProfile::MIXED_PRECISION_F16_F32,
+    )
+    .expect("second mixed f16 forward");
+
+    assert_eq!(
+        crate::application::execution::plan::fwht::storage::typed_scratch_capacities(),
+        forward_caps
+    );
+    assert!(forward_caps.2 >= plan.len());
+    for (actual, expected) in second.iter().zip(first.iter()) {
+        assert_relative_eq!(actual.to_f32(), expected.to_f32(), epsilon = 0.0);
+    }
+
+    let mut recovered_first = Array1::from_elem(8, f16::from_f32(0.0));
+    let mut recovered_second = Array1::from_elem(8, f16::from_f32(0.0));
+    plan.inverse_typed_into(
+        &first,
+        &mut recovered_first,
+        PrecisionProfile::MIXED_PRECISION_F16_F32,
+    )
+    .expect("first mixed f16 inverse");
+    let inverse_caps =
+        crate::application::execution::plan::fwht::storage::typed_scratch_capacities();
+    plan.inverse_typed_into(
+        &first,
+        &mut recovered_second,
+        PrecisionProfile::MIXED_PRECISION_F16_F32,
+    )
+    .expect("second mixed f16 inverse");
+
+    assert_eq!(
+        crate::application::execution::plan::fwht::storage::typed_scratch_capacities(),
+        inverse_caps
+    );
+    assert!(inverse_caps.2 >= plan.len());
+    for (actual, expected) in recovered_second.iter().zip(recovered_first.iter()) {
+        assert_relative_eq!(actual.to_f32(), expected.to_f32(), epsilon = 0.0);
+    }
+}
+
+#[test]
 fn typed_path_rejects_profile_storage_mismatch() {
     let plan = FwhtPlan::new(4).expect("valid plan");
     let signal = Array1::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0]);
