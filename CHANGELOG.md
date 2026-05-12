@@ -34,6 +34,9 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
   coverage using the workspace-pinned `rustfft` dependency.
 
 ### Breaking
+- [major] `apollo-fft`: removed the `FftPlan3D::nz_complex` alias and renamed
+  `HalfSpectrum3D::nz_complex` to `HalfSpectrum3D::nz_c`. Callers must use the
+  canonical `nz_c` half-spectrum bookkeeping name.
 - [major] `apollo-fft`: removed the public `radix2_f16` module and the `Cf16`
   wrapper type. Compact f16 complex storage now uses
   `num_complex::Complex<half::f16>` through the generic monomorphized

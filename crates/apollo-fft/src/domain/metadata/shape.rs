@@ -81,7 +81,7 @@ pub struct HalfSpectrum3D {
     /// Full real-domain shape.
     pub full: Shape3D,
     /// Number of independent complex bins along Z.
-    pub nz_complex: usize,
+    pub nz_c: usize,
 }
 
 impl HalfSpectrum3D {
@@ -90,7 +90,7 @@ impl HalfSpectrum3D {
     pub fn from_shape(full: Shape3D) -> Self {
         Self {
             full,
-            nz_complex: full.nz / 2 + 1,
+            nz_c: full.nz / 2 + 1,
         }
     }
 }

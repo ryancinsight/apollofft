@@ -1,4 +1,18 @@
 # Apollo Checklist
+## Closure LVIII - FFT Compatibility Alias Removal [major]
+Sprint target version: apollo-fft 0.5.0
+
+- [x] Remove `FftPlan3D::nz_complex` and keep `FftPlan3D::nz_c` as the single
+  authoritative half-spectrum bookkeeping accessor.
+- [x] Rename `HalfSpectrum3D::nz_complex` to `HalfSpectrum3D::nz_c`.
+- [x] Remove stale compatibility/deprecation wording from FFT kernel and
+  backend contract documentation.
+- [x] Bump `apollo-fft` to 0.5.0 and update `CHANGELOG.md`, `backlog.md`, and
+  `gap_audit.md`.
+- [x] Verify with `cargo check -p apollo-fft --benches --examples`,
+  `cargo test -p apollo-fft --lib -- --test-threads=1`,
+  `cargo check --workspace`, source scans, and `git diff --check`.
+
 ## Closure LVII - Radix F16 Module Removal [major]
 Sprint target version: apollo-fft 0.4.0
 

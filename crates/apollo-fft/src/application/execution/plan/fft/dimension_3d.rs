@@ -199,25 +199,15 @@ impl FftPlan3D {
         self.precision
     }
 
-    /// Return the bookkeeping value `nz / 2 + 1`.
+    /// Return the half-spectrum bookkeeping value `nz / 2 + 1`.
     ///
-    /// This value is provided for API compatibility with callers that track
-    /// half-spectrum layout metadata. No R2C half-spectrum transform is
-    /// implemented: every forward and inverse transform always operates on the
-    /// full `(nx, ny, nz)` complex array internally. This accessor does not
-    /// describe an actual reduction in the Z dimension.
+    /// No R2C half-spectrum transform is implemented: every forward and inverse
+    /// transform always operates on the full `(nx, ny, nz)` complex array
+    /// internally. This accessor does not describe an actual reduction in the Z
+    /// dimension.
     #[must_use]
     pub fn nz_c(&self) -> usize {
         self.nz_c
-    }
-
-    /// Alias for `nz_c()`.
-    ///
-    /// Returns `nz / 2 + 1` for bookkeeping only. The full `nz`-length Z
-    /// spectrum is always computed; no half-spectrum reduction is applied.
-    #[must_use]
-    pub fn nz_complex(&self) -> usize {
-        self.nz_c()
     }
 
     /// Return the full real-domain shape owned by this plan.

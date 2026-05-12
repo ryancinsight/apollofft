@@ -44,6 +44,22 @@ by design and will not be implemented.
 | GPU FFT 1D/2D | ✗ | ✗ | ✗ | Open |
 
 ## Closed Gaps
+### Closure LVIII - FFT Compatibility Alias Removal [major]
+- **Gap**: `apollo-fft` retained the stale `FftPlan3D::nz_complex` alias,
+  `HalfSpectrum3D::nz_complex` field, and compatibility wording after the FFT
+  API surface had been consolidated around canonical owner modules and generic
+  precision dispatch.
+- **Closed by**: Deleted `FftPlan3D::nz_complex`, renamed
+  `HalfSpectrum3D::nz_complex` to `HalfSpectrum3D::nz_c`, kept `nz_c` as the
+  single half-spectrum bookkeeping name, removed stale compatibility wording
+  from FFT kernel/backend docs, and bumped `apollo-fft` to 0.5.0.
+- **Residual risk**: External pre-1.0 callers using `nz_complex` must migrate to
+  `nz_c`.
+- **Evidence**: `cargo check -p apollo-fft --benches --examples`; `cargo
+  test -p apollo-fft --lib -- --test-threads=1`; `cargo check --workspace`;
+  source scans for removed `nz_complex`, f16-specific wrapper names, and stale
+  compatibility/deprecation tokens; `git diff --check`.
+
 ### Closure LVII - Radix F16 Module Removal [major]
 - **Gap**: `apollo-fft` still exposed compact f16 complex storage through a
   radix-specific `radix2_f16` module and custom `Cf16` wrapper. The f16 bridge

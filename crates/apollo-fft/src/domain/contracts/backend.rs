@@ -21,7 +21,7 @@ pub struct BackendCapabilities {
     pub supports_real_to_complex: bool,
     /// Whether the backend implements at least one mixed-precision profile.
     pub supports_mixed_precision: bool,
-    /// Default precision profile used by compatibility constructors.
+    /// Default precision profile selected when a caller does not request one.
     pub default_precision_profile: PrecisionProfile,
     /// Precision profiles truthfully implemented by this backend.
     pub supported_precision_profiles: Vec<PrecisionProfile>,

@@ -76,10 +76,11 @@ pub fn fft_inverse_unnorm<C: FftPrecision>(data: &mut [C]) {
     C::fft_inverse_unnorm(data);
 }
 
-// ── Free-function entry points (backward-compatible) ─────────────────────────
+// ── Concrete precision entry points ──────────────────────────────────────────
 //
-// Each function is a thin shim over `mixed_radix`. The dispatch logic lives
-// in exactly one place.
+// These public functions remain the concrete f64/f32 API surface. The generic
+// `FftPrecision` API below delegates here so dispatch logic still lives in one
+// place.
 
 /// Auto-selecting forward FFT (unnormalized, f64).
 #[inline]

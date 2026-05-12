@@ -1,5 +1,13 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure LVIII phase)
+- [x] [major] Remove the stale `FftPlan3D::nz_complex` compatibility alias,
+  rename `HalfSpectrum3D::nz_complex` to `HalfSpectrum3D::nz_c`, and remove
+  stale compatibility wording from `apollo-fft`. The canonical half-spectrum
+  bookkeeping name is `nz_c`; concrete precision kernel entry points remain
+  documented as dispatch anchors for the generic `FftPrecision` API; and
+  `apollo-fft` was bumped to 0.5.0.
+
 ## Closed in this sprint (Closure LVII phase)
 - [x] [major] Remove the radix-specific f16 FFT module and custom `Cf16`
   wrapper from `apollo-fft`. Compact f16 complex storage now uses
