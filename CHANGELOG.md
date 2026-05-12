@@ -8,6 +8,9 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ## [Unreleased]
 ### Breaking
+- [major] `apollo-fft`: removed type-suffixed public short-Winograd wrappers
+  for DFT-2/3/4/5/7/8 and twiddle multiplication. Internal mixed-radix dispatch
+  now calls the canonical generic Winograd implementations directly.
 - [major] `apollo-fft`: removed type-suffixed direct DFT wrappers
   `dft_forward_64`, `dft_inverse_64`, `dft_forward_32`, `dft_inverse_32`,
   `forward_owned_64`, and `inverse_owned_64`. Callers must use the canonical

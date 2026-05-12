@@ -44,6 +44,19 @@ by design and will not be implemented.
 | GPU FFT 1D/2D | ✗ | ✗ | ✗ | Open |
 
 ## Closed Gaps
+### Closure LXIII - FFT Short-Winograd Wrapper Removal [major]
+- **Gap**: `apollo-fft` still exposed type-suffixed short-Winograd public
+  wrappers for small codelets and twiddle multiplication even though generic
+  implementations already existed.
+- **Closed by**: Deleted the public DFT-2/3/4/5/7/8 f64/f32 wrapper functions
+  and `apply_twiddle_64` / `apply_twiddle_32`, routed mixed-radix short
+  dispatch through the generic Winograd implementation functions, removed stale
+  wrapper documentation, and bumped `apollo-fft` to 0.7.0.
+- **Residual risk**: External pre-1.0 callers using the removed short-Winograd
+  wrappers must migrate to the generic internalized path or the public
+  auto-selecting FFT API.
+- **Evidence**: `cargo check -p apollo-fft --benches --examples`; `cargo test -p apollo-fft --lib -- --test-threads=1`; `cargo check --workspace`; source scans for removed short-Winograd wrapper names, direct DFT wrapper names, debug binary references, stale compatibility/deprecation tokens, and deleted f16 wrapper names; `git diff --check`.
+
 ### Closure LXII - FFT Direct DFT Wrapper Removal [major]
 - **Gap**: The direct DFT reference kernel still exposed type-suffixed
   wrapper functions and an unused debug-only f32 parity binary, duplicating the

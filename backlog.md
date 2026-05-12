@@ -1,5 +1,11 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure LXIII phase)
+- [x] [major] Remove type-suffixed public short-Winograd wrappers for
+  DFT-2/3/4/5/7/8 and twiddle multiplication. Mixed-radix dispatch now calls
+  the canonical generic Winograd implementations directly, stale wrapper docs
+  were removed, and `apollo-fft` was bumped to 0.7.0.
+
 ## Closed in this sprint (Closure LXII phase)
 - [x] [major] Remove type-suffixed direct DFT wrappers and the debug-only f32
   parity binary from `apollo-fft`. Direct DFT tests, benchmarks, and kernel

@@ -90,7 +90,7 @@ unsafe fn cmul2_64(a: __m256d, b: __m256d) -> __m256d {
 /// of `dif`.  **Stage 2** uses four 128-bit add/sub ops and two `insertf128_pd`
 /// to pack the four output values into two `__m256d` for a 2×`storeu_pd` store.
 ///
-/// Operation count (vs scalar `dft4_64`):
+/// Operation count (vs scalar `dft4_impl`):
 /// - 2 load (vs 4 scalar loads of 4 Complex64)
 /// - 2 add/sub (stage 1)
 /// - 5 128-bit ops (extract ×4 + permute ×1 + xor ×1 + add/sub ×4 + insert ×2)
@@ -861,7 +861,7 @@ fn twiddle64_64(k: usize, inverse: bool) -> Complex64 {
         } else {
             Complex64::new(0.9951847266721969, -0.0980171403295606)
         };
-        apply_twiddle_64(base, w1)
+        apply_twiddle_impl(base, w1)
     }
 }
 
@@ -925,84 +925,6 @@ pub(crate) fn apply_twiddle_impl<F: WinogradScalar>(
     tw: num_complex::Complex<F>,
 ) -> num_complex::Complex<F> {
     num_complex::Complex::new(v.re * tw.re - v.im * tw.im, v.re * tw.im + v.im * tw.re)
-}
-
-/// Apply an f64 twiddle factor.
-#[inline]
-pub fn apply_twiddle_64(v: Complex64, tw: Complex64) -> Complex64 {
-    apply_twiddle_impl(v, tw)
-}
-
-/// Apply an f32 twiddle factor.
-#[inline]
-pub fn apply_twiddle_32(v: Complex32, tw: Complex32) -> Complex32 {
-    apply_twiddle_impl(v, tw)
-}
-
-/// In-place DFT-3 (f64 variant).
-#[inline]
-pub fn dft3_64(data: &mut [Complex64; 3], inverse: bool) {
-    dft3_impl(data, inverse);
-}
-
-/// In-place DFT-5 (f64 variant).
-#[inline]
-pub fn dft5_64(data: &mut [Complex64; 5], inverse: bool) {
-    dft5_impl(data, inverse);
-}
-
-/// In-place DFT-7 (f64 variant).
-#[inline]
-pub fn dft7_64(data: &mut [Complex64], inverse: bool) {
-    dft7_impl(data, inverse);
-}
-
-/// In-place DFT-2 (f64 variant).
-#[inline]
-pub fn dft2_64(a: &mut Complex64, b: &mut Complex64) {
-    dft2_impl(a, b);
-}
-
-/// In-place DFT-2 (f32 variant).
-#[inline]
-pub fn dft2_32(a: &mut Complex32, b: &mut Complex32) {
-    dft2_impl(a, b);
-}
-
-/// In-place DFT-4 (f64 variant).
-#[inline]
-pub fn dft4_64(data: &mut [Complex64; 4], inverse: bool) {
-    dft4_impl(data, inverse);
-}
-
-/// In-place DFT-4 (f32 variant).
-#[inline]
-pub fn dft4_32(data: &mut [Complex32; 4], inverse: bool) {
-    dft4_impl(data, inverse);
-}
-
-/// In-place DFT-5 (f32 variant).
-#[inline]
-pub fn dft5_32(data: &mut [Complex32; 5], inverse: bool) {
-    dft5_impl(data, inverse);
-}
-
-/// In-place DFT-7 (f32 variant).
-#[inline]
-pub fn dft7_32(data: &mut [Complex32], inverse: bool) {
-    dft7_impl(data, inverse);
-}
-
-/// In-place DFT-8 (f64 variant).
-#[inline]
-pub fn dft8_64(data: &mut [Complex64; 8], inverse: bool) {
-    dft8_impl(data, inverse);
-}
-
-/// In-place DFT-8 (f32 variant).
-#[inline]
-pub fn dft8_32(data: &mut [Complex32; 8], inverse: bool) {
-    dft8_impl(data, inverse);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

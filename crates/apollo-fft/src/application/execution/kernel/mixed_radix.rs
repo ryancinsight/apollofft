@@ -197,17 +197,17 @@ trait ShortWinogradScalar: winograd::WinogradScalar {
 impl ShortWinogradScalar for f64 {
     #[inline]
     fn dft2(a: &mut Complex64, b: &mut Complex64) {
-        winograd::dft2_64(a, b);
+        winograd::dft2_impl(a, b);
     }
 
     #[inline]
     fn dft4(data: &mut [Complex64; 4], inverse: bool) {
-        winograd::dft4_64(data, inverse);
+        winograd::dft4_impl(data, inverse);
     }
 
     #[inline]
     fn dft8(data: &mut [Complex64; 8], inverse: bool) {
-        winograd::dft8_64(data, inverse);
+        winograd::dft8_impl(data, inverse);
     }
 
     #[inline]
@@ -229,17 +229,17 @@ impl ShortWinogradScalar for f64 {
 impl ShortWinogradScalar for f32 {
     #[inline]
     fn dft2(a: &mut Complex32, b: &mut Complex32) {
-        winograd::dft2_32(a, b);
+        winograd::dft2_impl(a, b);
     }
 
     #[inline]
     fn dft4(data: &mut [Complex32; 4], inverse: bool) {
-        winograd::dft4_32(data, inverse);
+        winograd::dft4_impl(data, inverse);
     }
 
     #[inline]
     fn dft8(data: &mut [Complex32; 8], inverse: bool) {
-        winograd::dft8_32(data, inverse);
+        winograd::dft8_impl(data, inverse);
     }
 
     #[inline]

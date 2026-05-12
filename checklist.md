@@ -1,4 +1,15 @@
 # Apollo Checklist
+## Closure LXIII - FFT Short-Winograd Wrapper Removal [major]
+Sprint target version: apollo-fft 0.7.0
+
+- [x] Remove type-suffixed public DFT-2/3/4/5/7/8 Winograd wrappers.
+- [x] Remove type-suffixed public Winograd twiddle wrappers.
+- [x] Route mixed-radix short dispatch through generic `dft*_impl` functions.
+- [x] Bump `apollo-fft` to 0.7.0 and update sprint artifacts.
+- [x] Verify with `cargo check -p apollo-fft --benches --examples`,
+  `cargo test -p apollo-fft --lib -- --test-threads=1`,
+  `cargo check --workspace`, source scans, and `git diff --check`.
+
 ## Closure LXII - FFT Direct DFT Wrapper Removal [major]
 Sprint target version: apollo-fft 0.6.0
 
