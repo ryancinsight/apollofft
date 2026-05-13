@@ -249,7 +249,13 @@ impl FftPlan1D {
             );
             output
         } else {
-            let mut output = input.mapv(|value| Complex64::new(value, 0.0));
+            let mut output = Array1::<Complex64>::from_shape_vec(self.n, uninit_copy_vec(self.n))
+                .expect("uninit Complex64 1D buffer length must match plan n");
+            ndarray::Zip::from(&mut output)
+                .and(input)
+                .for_each(|out, &value| {
+                    *out = Complex64::new(value, 0.0);
+                });
             self.forward_complex_inplace(&mut output);
             output
         }

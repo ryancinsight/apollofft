@@ -1,4 +1,4 @@
-﻿//! Precision-specific 1D FFT plan methods.
+//! Precision-specific 1D FFT plan methods.
 
 use super::FftPlan1D;
 use crate::application::execution::kernel::mixed_radix::{
@@ -11,7 +11,9 @@ use half::f16;
 use ndarray::Array1;
 use num_complex::{Complex, Complex32, Complex64};
 
-trait Plan1dReal32: Copy {
+trait Plan1dReal32:
+    Copy + crate::application::execution::plan::fft::workspace::UninitWorkspaceElement
+{
     fn to_f32(self) -> f32;
     fn from_f32(value: f32) -> Self;
 }
@@ -111,7 +113,14 @@ impl FftPlan1D {
     }
 
     fn forward_real32_native<T: Plan1dReal32>(&self, input: &Array1<T>) -> Array1<Complex32> {
-        let mut output = input.mapv(|value| Complex32::new(value.to_f32(), 0.0));
+        let mut output =
+            Array1::<Complex32>::from_shape_vec(input.len(), uninit_copy_vec(input.len()))
+                .expect("uninit Complex32 1D buffer length must match input len");
+        ndarray::Zip::from(&mut output)
+            .and(input)
+            .for_each(|out, value| {
+                *out = Complex32::new(value.to_f32(), 0.0);
+            });
         let slice = output.as_slice_mut().expect("Array must be contiguous");
         if let Some(twiddles) = &self.twiddle_fwd_32 {
             forward_inplace_32_with_twiddles(slice, Some(twiddles.as_ref()));
@@ -129,7 +138,14 @@ impl FftPlan1D {
         } else {
             fft_inverse(slice);
         }
-        output.mapv(|value| T::from_f32(value.re))
+        let mut result = Array1::<T>::from_shape_vec(output.len(), uninit_copy_vec(output.len()))
+            .expect("uninit real32 1D buffer length must match output len");
+        ndarray::Zip::from(&mut result)
+            .and(&output)
+            .for_each(|out, value| {
+                *out = T::from_f32(value.re);
+            });
+        result
     }
 
     fn forward_f16_compact_power_of_two(input: &Array1<f16>) -> Array1<Complex32> {

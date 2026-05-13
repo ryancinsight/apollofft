@@ -477,9 +477,28 @@ impl FftPlan3D {
             self.inverse_complex_inplace_f32(&mut data);
             self.project_real32(data)
         } else {
-            let promoted =
-                input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
-            self.inverse_complex_to_real(&promoted).mapv(T::from_f64)
+            let mut promoted = Array3::<Complex64>::from_shape_vec(
+                (self.nx, self.ny, self.nz),
+                uninit_copy_vec(input.len()),
+            )
+            .expect("uninit Complex64 3D buffer length must match input len");
+            ndarray::Zip::from(&mut promoted)
+                .and(input)
+                .for_each(|out, value| {
+                    *out = Complex64::new(f64::from(value.re), f64::from(value.im));
+                });
+            let inv = self.inverse_complex_to_real(&promoted);
+            let mut result = Array3::<T>::from_shape_vec(
+                (self.nx, self.ny, self.nz),
+                uninit_copy_vec(inv.len()),
+            )
+            .expect("uninit real32 3D buffer length must match input len");
+            ndarray::Zip::from(&mut result)
+                .and(&inv)
+                .for_each(|out, value| {
+                    *out = T::from_f64(*value);
+                });
+            result
         }
     }
 

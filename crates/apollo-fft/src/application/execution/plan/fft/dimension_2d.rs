@@ -420,9 +420,24 @@ impl FftPlan2D {
             self.forward_complex_inplace_f32(&mut data);
             data
         } else {
-            let promoted = input.mapv(T::to_f64);
-            self.forward_real_to_complex(&promoted)
-                .mapv(|value| Complex32::new(value.re as f32, value.im as f32))
+            let mut promoted =
+                Array2::<f64>::from_shape_vec((self.nx, self.ny), uninit_copy_vec(input.len()))
+                    .expect("uninit f64 2D buffer length must match input len");
+            ndarray::Zip::from(&mut promoted)
+                .and(input)
+                .for_each(|out, value| {
+                    *out = value.to_f64();
+                });
+            let fwd = self.forward_real_to_complex(&promoted);
+            let mut result =
+                Array2::<Complex32>::from_shape_vec((self.nx, self.ny), uninit_copy_vec(fwd.len()))
+                    .expect("uninit Complex32 2D buffer length must match input len");
+            ndarray::Zip::from(&mut result)
+                .and(&fwd)
+                .for_each(|out, value| {
+                    *out = Complex32::new(value.re as f32, value.im as f32);
+                });
+            result
         }
     }
 
@@ -437,9 +452,26 @@ impl FftPlan2D {
             self.inverse_complex_inplace_f32(&mut data);
             self.project_real32(data)
         } else {
-            let promoted =
-                input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
-            self.inverse_complex_to_real(&promoted).mapv(T::from_f64)
+            let mut promoted = Array2::<Complex64>::from_shape_vec(
+                (self.nx, self.ny),
+                uninit_copy_vec(input.len()),
+            )
+            .expect("uninit Complex64 2D buffer length must match input len");
+            ndarray::Zip::from(&mut promoted)
+                .and(input)
+                .for_each(|out, value| {
+                    *out = Complex64::new(f64::from(value.re), f64::from(value.im));
+                });
+            let inv = self.inverse_complex_to_real(&promoted);
+            let mut result =
+                Array2::<T>::from_shape_vec((self.nx, self.ny), uninit_copy_vec(inv.len()))
+                    .expect("uninit real32 2D buffer length must match input len");
+            ndarray::Zip::from(&mut result)
+                .and(&inv)
+                .for_each(|out, value| {
+                    *out = T::from_f64(*value);
+                });
+            result
         }
     }
 
