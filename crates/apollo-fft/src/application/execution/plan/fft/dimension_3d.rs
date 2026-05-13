@@ -1,3 +1,4 @@
+#![allow(clippy::uninit_vec)]
 //! 3D FFT plan.
 //!
 //! Apollo-owned 3D FFT implementation based on separable FFT passes.
@@ -215,12 +216,16 @@ impl FftPlan3D {
         let nz_c_val = m + 1; // = nz/2+1
         let r2c_vol = nx * ny * nz_c_val;
         // Extraction twiddles W_k = exp(-2pii*k/nz) for k = 0..nz_c_val-1.
-        let r2c_twiddles_64: Vec<Complex64> = (0..nz_c_val)
-            .map(|k| {
+        let r2c_twiddles_64: Vec<Complex64> = {
+            let mut v = Vec::with_capacity(nz_c_val);
+            // SAFETY: every slot is overwritten in the loop before  is read.
+            unsafe { v.set_len(nz_c_val) };
+            for k in 0..nz_c_val {
                 let a = -std::f64::consts::TAU * k as f64 / nz as f64;
-                Complex64::new(a.cos(), a.sin())
-            })
-            .collect();
+                unsafe { *v.get_unchecked_mut(k) = Complex64::new(a.cos(), a.sin()) };
+            }
+            v
+        };
         Self {
             nx,
             ny,

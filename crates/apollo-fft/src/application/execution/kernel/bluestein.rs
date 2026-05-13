@@ -1121,12 +1121,16 @@ impl BluesteinPlan64 {
     /// `radix2::build_forward_twiddle_table_64`.
     pub fn new(n: usize) -> Self {
         let m = (2 * n.saturating_sub(1).max(1)).next_power_of_two();
-        let chirp: Vec<Complex64> = (0..n)
-            .map(|k| {
+        let chirp: Vec<Complex64> = {
+            let mut v = Vec::with_capacity(n);
+            // SAFETY: every slot is written in the loop below before  is read.
+            unsafe { v.set_len(n) };
+            for k in 0..n {
                 let angle = -std::f64::consts::PI * (k * k) as f64 / n as f64;
-                Complex64::new(angle.cos(), angle.sin())
-            })
-            .collect();
+                unsafe { *v.get_unchecked_mut(k) = Complex64::new(angle.cos(), angle.sin()) };
+            }
+            v
+        };
 
         let mut b_m = Vec::with_capacity(m);
         // SAFETY: every value read by the subsequent FFT is initialized below:
@@ -1219,12 +1223,16 @@ impl BluesteinPlan32 {
     /// Twiddle tables are not stored; `mixed_radix` caches them per-radix.
     pub fn new(n: usize) -> Self {
         let m = (2 * n.saturating_sub(1).max(1)).next_power_of_two();
-        let chirp: Vec<Complex32> = (0..n)
-            .map(|k| {
+        let chirp: Vec<Complex32> = {
+            let mut v = Vec::with_capacity(n);
+            // SAFETY: every slot is written in the loop below before  is read.
+            unsafe { v.set_len(n) };
+            for k in 0..n {
                 let angle = -(std::f64::consts::PI * (k as f64 * k as f64) / n as f64) as f32;
-                Complex32::new(angle.cos(), angle.sin())
-            })
-            .collect();
+                unsafe { *v.get_unchecked_mut(k) = Complex32::new(angle.cos(), angle.sin()) };
+            }
+            v
+        };
 
         let mut b_m = Vec::with_capacity(m);
         // SAFETY: every value read by the subsequent FFT is initialized below:
