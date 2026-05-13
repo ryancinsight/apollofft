@@ -25,6 +25,9 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
   generic `dft_forward` and `dft_inverse` functions.
 
 ### Fixed
+- [patch] `apollo-fft`: consolidate 1D native `Complex32` precision dispatch
+  for f32 and mixed f16 non-power-of-two paths behind shared monomorphized
+  helpers, reducing duplicated conversion/kernel-selection logic.
 - [patch] `apollo-fft`: reduce Bluestein plan-construction memory writes by
   initializing the padded convolution filter through overwrite-first mirrored
   chirp placement and zero-filling only the unused convolution gap.

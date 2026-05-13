@@ -1,5 +1,11 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure LXIX phase)
+- [x] [patch] Reduce `apollo-fft` 1D precision dispatch duplication. Native
+  f32 paths and mixed f16 non-power-of-two paths now share monomorphized
+  `Complex32` forward/inverse helpers for conversion, twiddle-aware kernel
+  dispatch, and real-output projection. `apollo-fft` was bumped to 0.9.4.
+
 ## Closed in this sprint (Closure LXVIII phase)
 - [x] [patch] Reduce `apollo-fft` Bluestein plan-construction memory writes.
   The padded convolution filter now initializes overwritten mirrored chirp

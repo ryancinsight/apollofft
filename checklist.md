@@ -1,4 +1,17 @@
 # Apollo Checklist
+## Closure LXIX - 1D Native Complex32 Precision Deduplication [patch]
+Sprint target version: apollo-fft 0.9.4
+
+- [x] Add private `Plan1dReal32` static-dispatch helper trait for 1D native
+  `Complex32` precision paths.
+- [x] Route f32 forward/inverse through shared monomorphized native helpers.
+- [x] Route mixed f16 non-power-of-two forward/inverse through the same helpers.
+- [x] Bump `apollo-fft` to 0.9.4 and update sprint artifacts.
+- [x] Verify with `cargo fmt`, `cargo check -p apollo-fft --benches --examples`,
+  `cargo test -p apollo-fft --lib -- --test-threads=1`,
+  `cargo check --workspace`, source cleanup scans, encoding scans, and
+  `git diff --check`.
+
 ## Closure LXVIII - Bluestein Filter Initialization Cleanup [patch]
 Sprint target version: apollo-fft 0.9.3
 

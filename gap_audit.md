@@ -44,6 +44,22 @@ by design and will not be implemented.
 | GPU FFT 1D/2D | ✗ | ✗ | ✗ | Open |
 
 ## Closed Gaps
+### Closure LXIX - 1D Native Complex32 Precision Deduplication [patch]
+- **Gap**: 1D f32 native execution and mixed f16 non-power-of-two execution
+  duplicated `Complex32` packing, twiddle-aware kernel selection, inverse
+  dispatch, and real-output projection logic.
+- **Closed by**: Added private `Plan1dReal32` static-dispatch helpers,
+  routed f32 native paths and mixed f16 non-power-of-two paths through one
+  monomorphized forward/inverse implementation, and bumped `apollo-fft` to
+  0.9.4.
+- **Residual risk**: Binary-size impact should be confirmed with release-size
+  tooling; functional/static verification passed locally.
+- **Evidence**: `cargo fmt`; `cargo check -p apollo-fft --benches --examples`;
+  `cargo test -p apollo-fft --lib -- --test-threads=1`;
+  `cargo check --workspace`; source cleanup scan for deprecated placeholders
+  and removed wrapper names; encoding scan for mojibake/BOM markers;
+  `git diff --check`.
+
 ### Closure LXVIII - Bluestein Filter Initialization Cleanup [patch]
 - **Gap**: Bluestein plan construction still zero-filled the full padded
   convolution filter even though the DC and mirrored chirp regions are written

@@ -10,19 +10,41 @@ use half::f16;
 use ndarray::Array1;
 use num_complex::{Complex, Complex32, Complex64};
 
+trait Plan1dReal32: Copy {
+    fn to_f32(self) -> f32;
+    fn from_f32(value: f32) -> Self;
+}
+
+impl Plan1dReal32 for f32 {
+    #[inline]
+    fn to_f32(self) -> f32 {
+        self
+    }
+
+    #[inline]
+    fn from_f32(value: f32) -> Self {
+        value
+    }
+}
+
+impl Plan1dReal32 for f16 {
+    #[inline]
+    fn to_f32(self) -> f32 {
+        self.to_f32()
+    }
+
+    #[inline]
+    fn from_f32(value: f32) -> Self {
+        Self::from_f32(value)
+    }
+}
+
 impl FftPlan1D {
     /// Forward transform of a real signal stored as `f32`.
     #[must_use]
     pub(crate) fn forward_f32(&self, input: &Array1<f32>) -> Array1<Complex32> {
         if self.precision == PrecisionProfile::LOW_PRECISION_F32 {
-            let mut output = input.mapv(|value| Complex32::new(value, 0.0));
-            let slice = output.as_slice_mut().expect("Array must be contiguous");
-            if let Some(twiddles) = &self.twiddle_fwd_32 {
-                forward_inplace_32_with_twiddles(slice, Some(twiddles.as_ref()));
-            } else {
-                fft_forward(slice);
-            }
-            output
+            self.forward_real32_native(input)
         } else {
             let promoted = input.mapv(f64::from);
             self.forward_real_to_complex(&promoted)
@@ -34,14 +56,7 @@ impl FftPlan1D {
     #[must_use]
     pub(crate) fn inverse_f32(&self, input: &Array1<Complex32>) -> Array1<f32> {
         if self.precision == PrecisionProfile::LOW_PRECISION_F32 {
-            let mut output = input.clone();
-            let slice = output.as_slice_mut().expect("Array must be contiguous");
-            if let Some(twiddles) = &self.twiddle_inv_32 {
-                inverse_inplace_32_with_twiddles(slice, Some(twiddles.as_ref()));
-            } else {
-                fft_inverse(slice);
-            }
-            output.mapv(|value| value.re)
+            self.inverse_real32_native(input)
         } else {
             let promoted =
                 input.mapv(|value| Complex64::new(f64::from(value.re), f64::from(value.im)));
@@ -72,9 +87,7 @@ impl FftPlan1D {
                         .collect(),
                 )
             } else {
-                let mut data = input.mapv(|value| Complex32::new(value.to_f32(), 0.0));
-                fft_forward(data.as_slice_mut().expect("Array must be contiguous"));
-                data
+                self.forward_real32_native(input)
             }
         } else {
             let promoted = input.mapv(|value| f64::from(value.to_f32()));
@@ -102,9 +115,7 @@ impl FftPlan1D {
                 // Extract real parts as f16 (imaginary parts are ~0 by Hermitian symmetry).
                 Array1::from_vec(buf.into_iter().map(|cf| cf.re).collect())
             } else {
-                let mut data = input.clone();
-                fft_inverse(data.as_slice_mut().expect("Array must be contiguous"));
-                data.mapv(|value| f16::from_f32(value.re))
+                self.inverse_real32_native(input)
             }
         } else {
             let promoted =
@@ -112,5 +123,27 @@ impl FftPlan1D {
             self.inverse_complex_to_real(&promoted)
                 .mapv(|value| f16::from_f32(value as f32))
         }
+    }
+
+    fn forward_real32_native<T: Plan1dReal32>(&self, input: &Array1<T>) -> Array1<Complex32> {
+        let mut output = input.mapv(|value| Complex32::new(value.to_f32(), 0.0));
+        let slice = output.as_slice_mut().expect("Array must be contiguous");
+        if let Some(twiddles) = &self.twiddle_fwd_32 {
+            forward_inplace_32_with_twiddles(slice, Some(twiddles.as_ref()));
+        } else {
+            fft_forward(slice);
+        }
+        output
+    }
+
+    fn inverse_real32_native<T: Plan1dReal32>(&self, input: &Array1<Complex32>) -> Array1<T> {
+        let mut output = input.clone();
+        let slice = output.as_slice_mut().expect("Array must be contiguous");
+        if let Some(twiddles) = &self.twiddle_inv_32 {
+            inverse_inplace_32_with_twiddles(slice, Some(twiddles.as_ref()));
+        } else {
+            fft_inverse(slice);
+        }
+        output.mapv(|value| T::from_f32(value.re))
     }
 }
