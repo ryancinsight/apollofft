@@ -22,13 +22,13 @@
 /// Implements numpy-compatible `fftshift` for any `Copy` element type.
 /// For `n = 0` or `n = 1` returns a clone of the input.
 #[must_use]
-pub fn fftshift<T: Copy + Default>(input: &[T]) -> Vec<T> {
+pub fn fftshift<T: Copy>(input: &[T]) -> Vec<T> {
     let n = input.len();
     if n <= 1 {
         return input.to_vec();
     }
     let shift = n / 2;
-    (0..n).map(|k| input[(k + n - shift) % n]).collect()
+    shift_left(input, shift)
 }
 
 /// Undo `fftshift`: moves the zero-frequency component back to bin 0.
@@ -38,13 +38,21 @@ pub fn fftshift<T: Copy + Default>(input: &[T]) -> Vec<T> {
 ///
 /// Property: `ifftshift(fftshift(x)) = x`.
 #[must_use]
-pub fn ifftshift<T: Copy + Default>(input: &[T]) -> Vec<T> {
+pub fn ifftshift<T: Copy>(input: &[T]) -> Vec<T> {
     let n = input.len();
     if n <= 1 {
         return input.to_vec();
     }
     let shift = (n + 1) / 2;
-    (0..n).map(|k| input[(k + n - shift) % n]).collect()
+    shift_left(input, shift)
+}
+
+fn shift_left<T: Copy>(input: &[T], shift: usize) -> Vec<T> {
+    let split = input.len() - shift;
+    let mut output = Vec::with_capacity(input.len());
+    output.extend_from_slice(&input[split..]);
+    output.extend_from_slice(&input[..split]);
+    output
 }
 
 #[cfg(test)]

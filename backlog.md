@@ -1,5 +1,11 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure LXXV phase)
+- [x] [patch] Reduce `apollo-fft` shift utility redundancy and per-element
+  modulo work. `fftshift` and `ifftshift` now share one split-slice copy helper,
+  and the unused `Default` generic bound was removed. `apollo-fft` was bumped
+  to 0.9.10.
+
 ## Closed in this sprint (Closure LXXII phase)
 - [x] [patch] Reduce `apollo-fft` native 3D f32/f16 real allocation
   pipelines. The allocating native real32 forward path now constructs its

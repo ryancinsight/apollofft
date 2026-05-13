@@ -25,6 +25,9 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
   generic `dft_forward` and `dft_inverse` functions.
 
 ### Fixed
+- [patch] `apollo-fft`: remove the unused `Default` bound from
+  `fftshift`/`ifftshift` and route both utilities through a shared split-slice
+  copy helper instead of duplicate modulo-index iterator pipelines.
 - [patch] `apollo-fft`: route native 3D f32/f16 allocating real32 buffers and
   inverse real-output projection through sealed exact-size overwrite-first
   buffers instead of zero-fill and `mapv` allocation pipelines.

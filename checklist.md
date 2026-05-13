@@ -1,4 +1,16 @@
 # Apollo Checklist
+## Closure LXXV - Shift Utility Split-Copy Cleanup [patch]
+Sprint target version: apollo-fft 0.9.10
+
+- [x] Remove the unused `Default` bound from `fftshift` and `ifftshift`.
+- [x] Replace duplicate modulo-index iterator collection with one shared
+  split-slice copy helper.
+- [x] Bump `apollo-fft` to 0.9.10 and update sprint artifacts.
+- [x] Verify with `cargo check -p apollo-fft`, `cargo check -p apollo-fft
+  --benches --examples`, `cargo test -p apollo-fft --lib -- --test-threads=1`,
+  `cargo check --workspace`, cleanup scans, `cargo fmt --check`, and
+  `git diff --check`.
+
 ## Closure LXXIV - Real/R2C Initialization Elimination [patch]
 Sprint target version: apollo-fft 0.9.9
 

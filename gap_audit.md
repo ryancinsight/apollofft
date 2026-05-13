@@ -44,6 +44,20 @@ by design and will not be implemented.
 | GPU FFT 1D/2D | ✗ | ✗ | ✗ | Open |
 
 ## Closed Gaps
+### Closure LXXV - Shift Utility Split-Copy Cleanup [patch]
+- **Gap**: `fftshift` and `ifftshift` carried an unused `Default` bound and
+  duplicated modulo-index iterator collection, creating unnecessary per-element
+  arithmetic and redundant generic code.
+- **Closed by**: Removed the dead generic bound and routed both utilities
+  through one split-slice copy helper with exact-capacity output allocation.
+- **Residual risk**: The shift utility is memory-bandwidth-bound for large
+  slices; benchmark evidence should quantify the copy-path gain on large real
+  and complex vectors. Functional/static verification passed locally.
+- **Evidence**: `cargo check -p apollo-fft`; `cargo check -p apollo-fft
+  --benches --examples`; `cargo test -p apollo-fft --lib -- --test-threads=1`;
+  `cargo check --workspace`; cleanup scans for deprecated/type-suffixed FFT
+  APIs and encoding artifacts; `cargo fmt --check`; `git diff --check`.
+
 ### Closure LXXIV - Real/R2C Initialization Elimination [patch]
 - **Gap**: Multiple hot paths for 1D, 2D, and 3D real forward/inverse transforms
   as well as 3D R2C/C2R packing still used `Array::zeros` or `.mapv` pipelines,
