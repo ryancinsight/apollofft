@@ -44,6 +44,26 @@ by design and will not be implemented.
 | GPU FFT 1D/2D | ✗ | ✗ | ✗ | Open |
 
 ## Closed Gaps
+### Closure LXVIII - Bluestein Filter Initialization Cleanup [patch]
+- **Gap**: Bluestein plan construction still zero-filled the full padded
+  convolution filter even though the DC and mirrored chirp regions are written
+  before the filter is transformed. Generated local scripts also left a
+  Stockham AVX broadcast experiment in the worktree that increased repeated
+  broadcast expressions and dead commented code.
+- **Closed by**: Replaced full-vector zero initialization for the Bluestein
+  f64/f32 filter with overwrite-first initialization plus zero-fill of only the
+  unused convolution gap, removed generated scratch scripts from the deliverable
+  worktree state, preserved hoisted Stockham broadcast variables, and bumped
+  `apollo-fft` to 0.9.3.
+- **Residual risk**: Criterion construction-time savings need representative
+  arbitrary-length FFT plan benchmarks; functional/static verification passed
+  locally.
+- **Evidence**: `cargo fmt --check`; `cargo check -p apollo-fft --benches --examples`;
+  `cargo test -p apollo-fft --lib -- --test-threads=1`;
+  `cargo check --workspace`; source cleanup scan for generated scripts,
+  deprecated placeholders, and removed wrapper names; encoding scan for
+  mojibake/BOM markers; `git diff --check`.
+
 ### Closure LXVII - FFT Plan Scratch Allocation Consolidation [patch]
 - **Gap**: Plan-owned FFT work buffers still used duplicated zero-fill or
   local uninitialized-allocation logic across 1D, 2D, 3D, R2C, and six-step

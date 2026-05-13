@@ -1128,12 +1128,20 @@ impl BluesteinPlan64 {
             })
             .collect();
 
-        let mut b_m = vec![Complex64::new(0.0, 0.0); m];
+        let mut b_m = Vec::with_capacity(m);
+        // SAFETY: every value read by the subsequent FFT is initialized below:
+        // DC is written, mirrored chirp entries are written, and the remaining
+        // convolution gap is zero-filled before `b_m` is read.
+        unsafe { b_m.set_len(m) };
         b_m[0] = Complex64::new(1.0, 0.0);
         for k in 1..n {
             let bk = chirp[k].conj();
             b_m[k] = bk;
             b_m[m - k] = bk;
+        }
+        let gap_end = m + 1 - n;
+        if n < gap_end {
+            zero_fill_complex64(&mut b_m[n..gap_end]);
         }
         // None: let mixed_radix use its own cached twiddle tables in the correct
         // format for the radix (8, 4, or 2) selected for size m.
@@ -1218,12 +1226,20 @@ impl BluesteinPlan32 {
             })
             .collect();
 
-        let mut b_m = vec![Complex32::new(0.0, 0.0); m];
+        let mut b_m = Vec::with_capacity(m);
+        // SAFETY: every value read by the subsequent FFT is initialized below:
+        // DC is written, mirrored chirp entries are written, and the remaining
+        // convolution gap is zero-filled before `b_m` is read.
+        unsafe { b_m.set_len(m) };
         b_m[0] = Complex32::new(1.0, 0.0);
         for k in 1..n {
             let bk = chirp[k].conj();
             b_m[k] = bk;
             b_m[m - k] = bk;
+        }
+        let gap_end = m + 1 - n;
+        if n < gap_end {
+            zero_fill_complex32(&mut b_m[n..gap_end]);
         }
         mixed_radix::forward_inplace_32_with_twiddles(&mut b_m, None);
 

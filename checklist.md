@@ -1,4 +1,19 @@
 # Apollo Checklist
+## Closure LXVIII - Bluestein Filter Initialization Cleanup [patch]
+Sprint target version: apollo-fft 0.9.3
+
+- [x] Keep only the verified Bluestein allocation optimization from generated
+  scratch work.
+- [x] Remove generated scratch scripts from the worktree deliverable.
+- [x] Preserve hoisted Stockham AVX broadcasts and reject repeated inline
+  broadcast expansion.
+- [x] Bump `apollo-fft` to 0.9.3 and update sprint artifacts.
+- [x] Verify with `cargo fmt --check`,
+  `cargo check -p apollo-fft --benches --examples`,
+  `cargo test -p apollo-fft --lib -- --test-threads=1`,
+  `cargo check --workspace`, source cleanup scans, encoding scans, and
+  `git diff --check`.
+
 ## Closure LXVII - FFT Plan Scratch Allocation Consolidation [patch]
 Sprint target version: apollo-fft 0.9.2
 

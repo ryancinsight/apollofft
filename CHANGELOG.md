@@ -25,6 +25,9 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
   generic `dft_forward` and `dft_inverse` functions.
 
 ### Fixed
+- [patch] `apollo-fft`: reduce Bluestein plan-construction memory writes by
+  initializing the padded convolution filter through overwrite-first mirrored
+  chirp placement and zero-filling only the unused convolution gap.
 - [patch] `apollo-fft`: consolidated plan-owned uninitialized workspace
   allocation behind a sealed scratch-element helper and routed 1D Bluestein,
   1D iRFFT, 2D/3D axis-pass, 3D R2C, and six-step f32 scratch buffers through

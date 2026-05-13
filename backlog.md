@@ -1,5 +1,12 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure LXVIII phase)
+- [x] [patch] Reduce `apollo-fft` Bluestein plan-construction memory writes.
+  The padded convolution filter now initializes overwritten mirrored chirp
+  entries directly and zero-fills only the unused gap before the pre-transform.
+  Generated scratch scripts and the generated Stockham broadcast experiment
+  were removed from the deliverable scope. `apollo-fft` was bumped to 0.9.3.
+
 ## Closed in this sprint (Closure LXVII phase)
 - [x] [patch] Consolidate `apollo-fft` plan-owned scratch allocation.
   1D Bluestein, 1D iRFFT, 2D/3D axis-pass, 3D R2C, and six-step f32 workspaces
