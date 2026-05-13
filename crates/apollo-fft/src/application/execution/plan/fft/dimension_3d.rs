@@ -44,6 +44,7 @@ use crate::application::execution::kernel::mixed_radix::{
 };
 use crate::application::execution::kernel::{fft_forward, fft_inverse};
 use crate::application::execution::plan::fft::real_storage::RealFftData;
+use crate::application::execution::plan::fft::workspace::uninit_copy_vec;
 use crate::domain::metadata::precision::PrecisionProfile;
 use crate::domain::metadata::shape::Shape3D;
 use half::f16;
@@ -236,15 +237,15 @@ impl FftPlan3D {
             twiddle_y_inv_32: make32(ny, false),
             twiddle_x_fwd_32: make32(nx, true),
             twiddle_x_inv_32: make32(nx, false),
-            scratch_y_64: std::sync::Mutex::new(vec![Complex64::default(); vol]),
-            scratch_x_64: std::sync::Mutex::new(vec![Complex64::default(); vol]),
-            scratch_y_32: std::sync::Mutex::new(vec![Complex32::default(); vol]),
-            scratch_x_32: std::sync::Mutex::new(vec![Complex32::default(); vol]),
+            scratch_y_64: std::sync::Mutex::new(uninit_copy_vec(vol)),
+            scratch_x_64: std::sync::Mutex::new(uninit_copy_vec(vol)),
+            scratch_y_32: std::sync::Mutex::new(uninit_copy_vec(vol)),
+            scratch_x_32: std::sync::Mutex::new(uninit_copy_vec(vol)),
             twiddle_zh_fwd_64: make64(m, true),
             twiddle_zh_inv_64: make64(m, false),
             r2c_twiddles_64,
-            scratch_r2c_y_64: std::sync::Mutex::new(vec![Complex64::default(); r2c_vol]),
-            scratch_r2c_x_64: std::sync::Mutex::new(vec![Complex64::default(); r2c_vol]),
+            scratch_r2c_y_64: std::sync::Mutex::new(uninit_copy_vec(r2c_vol)),
+            scratch_r2c_x_64: std::sync::Mutex::new(uninit_copy_vec(r2c_vol)),
         }
     }
 

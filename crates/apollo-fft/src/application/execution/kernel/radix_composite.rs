@@ -1,4 +1,4 @@
-﻿//! Mixed-radix Stockham autosort FFT for 2/3/5/7-smooth composite lengths.
+//! Mixed-radix Stockham autosort FFT for 2/3/5/7-smooth composite lengths.
 //!
 //! ## Algorithm — out-of-place Stockham ping-pong
 //!
@@ -46,7 +46,6 @@
 //!   calculation of complex Fourier series. *Math. Comp.* 19, 297–301.
 //! - Glassman, A.J. (1970). A generalization of the Fast Fourier Transform.
 //!   *IEEE Trans. Comput.* C-19(2), 105–116. (Stockham autosort, mixed-radix.)
-
 
 #![allow(clippy::uninit_vec)]
 use num_complex::Complex;
@@ -864,4 +863,3 @@ mod tests {
         assert!(err < 2e-3, "f32 forward N=1000 max_err={err:.2e}");
     }
 }
-

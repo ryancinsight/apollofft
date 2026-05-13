@@ -1,4 +1,4 @@
-﻿//! SSOT for Cooley-Tukey twiddle-factor table construction.
+//! SSOT for Cooley-Tukey twiddle-factor table construction.
 //!
 //! ## Mathematical foundation
 //!
@@ -42,7 +42,6 @@
 //!
 //! - Cooley, J.W. & Tukey, J.W. (1965). *Mathematics of Computation*, 19(90), 297-301.
 //! - Van Loan, C. (1992). *Computational Frameworks for the FFT*. SIAM, §2.2.
-
 
 #![allow(clippy::uninit_vec)]
 use half::f16;
@@ -261,4 +260,3 @@ mod tests {
         assert!(build_twiddle_table::<Complex64>(1, -1.0).is_empty());
     }
 }
-

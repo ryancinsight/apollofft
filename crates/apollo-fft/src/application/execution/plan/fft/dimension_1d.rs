@@ -8,6 +8,7 @@ use crate::application::execution::kernel::radix2::{
     build_real_fwd_post_twiddles_64, forward_real_inplace_64, inverse_real_inplace_64,
 };
 use crate::application::execution::plan::fft::real_storage::RealFftData;
+use crate::application::execution::plan::fft::workspace::uninit_copy_vec;
 use crate::domain::metadata::precision::PrecisionProfile;
 use crate::domain::metadata::shape::Shape1D;
 use ndarray::{Array1, Zip};
@@ -133,7 +134,7 @@ impl FftPlan1D {
         // calls reuse it instead of allocating a Vec on every invocation.
         let bluestein_scratch = bluestein_plan
             .as_ref()
-            .map(|bp| Mutex::new(vec![Complex64::new(0.0, 0.0); bp.m()]));
+            .map(|bp| Mutex::new(uninit_copy_vec(bp.m())));
         // Precompute contiguous per-stage twiddle tables for power-of-two sizes.
         // For non-power-of-two (Bluestein), these are None; Bluestein has its own tables.
         let is_pow2 = shape.n.is_power_of_two() && shape.n > 1;
@@ -172,7 +173,7 @@ impl FftPlan1D {
                 None
             },
             real_inv_scratch: if shape.n >= 4 && shape.n.is_power_of_two() {
-                Some(Mutex::new(vec![Complex64::new(0.0, 0.0); shape.n >> 1]))
+                Some(Mutex::new(uninit_copy_vec(shape.n >> 1)))
             } else {
                 None
             },

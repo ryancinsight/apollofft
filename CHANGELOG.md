@@ -25,6 +25,10 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
   generic `dft_forward` and `dft_inverse` functions.
 
 ### Fixed
+- [patch] `apollo-fft`: consolidated plan-owned uninitialized workspace
+  allocation behind a sealed scratch-element helper and routed 1D Bluestein,
+  1D iRFFT, 2D/3D axis-pass, 3D R2C, and six-step f32 scratch buffers through
+  it to avoid plan-construction zero-fill for buffers overwritten before read.
 - [patch] `apollo-fft`: reduce normalization and workspace memory overhead by
   routing inverse scale passes through shared AVX-capable normalization helpers,
   filling twiddle vectors by exact pre-sized cursors, and avoiding zero-fill for

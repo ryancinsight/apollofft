@@ -23,8 +23,7 @@
 //! For the current vertical slice `N1 = 5`, so the infrastructure radix-5
 //! batched kernel consumes one matrix column per SIMD lane.
 
-#![allow(clippy::uninit_vec)]
-
+use crate::application::execution::plan::fft::workspace::uninit_copy_vec;
 use num_complex::Complex32;
 
 use std::marker::PhantomData;
@@ -117,22 +116,6 @@ pub(crate) struct SixStepF32Workspace<K: SixStepF32Kernel> {
     kernel: PhantomData<K>,
 }
 
-fn uninit_f32_vec(len: usize) -> Vec<f32> {
-    let mut values = Vec::with_capacity(len);
-    // SAFETY: f32 has no drop glue. Callers only use this for work buffers
-    // whose full contents are overwritten before any read.
-    unsafe { values.set_len(len) };
-    values
-}
-
-fn uninit_complex32_vec(len: usize) -> Vec<Complex32> {
-    let mut values = Vec::with_capacity(len);
-    // SAFETY: Complex32 is two f32 values and has no drop glue. Callers only
-    // use this for work buffers whose full contents are overwritten first.
-    unsafe { values.set_len(len) };
-    values
-}
-
 impl<K: SixStepF32Kernel> SixStepF32Workspace<K> {
     /// Create workspace for lengths `N = R * N2` where `R ∈ {3,5,7,11}` and
     /// `N2` is power-of-two.
@@ -147,12 +130,12 @@ impl<K: SixStepF32Kernel> SixStepF32Workspace<K> {
         Some(Self {
             radix,
             n2,
-            re: uninit_f32_vec(n),
-            im: uninit_f32_vec(n),
+            re: uninit_copy_vec(n),
+            im: uninit_copy_vec(n),
             twiddle_re: build_twiddle_component(radix, n2, false, true),
             twiddle_im: build_twiddle_component(radix, n2, false, false),
-            row: uninit_complex32_vec(n2),
-            row_scratch: uninit_complex32_vec(n2),
+            row: uninit_copy_vec(n2),
+            row_scratch: uninit_copy_vec(n2),
             row_twiddles: K::build_forward_row_twiddles(n2),
             inverse_row_twiddles: K::build_inverse_row_twiddles(n2),
             kernel: PhantomData,
@@ -269,7 +252,7 @@ fn build_twiddle_component(radix: usize, n2: usize, inverse: bool, real: bool) -
     let len = radix * n2;
     let n = len as f32;
     let sign = if inverse { 1.0 } else { -1.0 };
-    let mut values = uninit_f32_vec(len);
+    let mut values = uninit_copy_vec(len);
     let mut idx = 0;
     for r in 0..radix {
         for c in 0..n2 {

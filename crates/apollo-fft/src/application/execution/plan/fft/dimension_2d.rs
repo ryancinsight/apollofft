@@ -35,6 +35,7 @@ use crate::application::execution::kernel::mixed_radix::{
 };
 use crate::application::execution::kernel::{fft_forward, fft_inverse};
 use crate::application::execution::plan::fft::real_storage::RealFftData;
+use crate::application::execution::plan::fft::workspace::uninit_copy_vec;
 
 /// Use rayon parallel iteration when total elements exceed this threshold.
 /// Below the threshold, sequential iteration avoids rayon task-spawn overhead
@@ -212,8 +213,8 @@ impl FftPlan2D {
             twiddle_row_inv_32: make32(ny, false),
             twiddle_col_fwd_32: make32(nx, true),
             twiddle_col_inv_32: make32(nx, false),
-            scratch_col_64: std::sync::Mutex::new(vec![Complex64::default(); nx * ny]),
-            scratch_col_32: std::sync::Mutex::new(vec![Complex32::default(); nx * ny]),
+            scratch_col_64: std::sync::Mutex::new(uninit_copy_vec(nx * ny)),
+            scratch_col_32: std::sync::Mutex::new(uninit_copy_vec(nx * ny)),
         }
     }
 

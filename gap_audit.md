@@ -44,6 +44,23 @@ by design and will not be implemented.
 | GPU FFT 1D/2D | ✗ | ✗ | ✗ | Open |
 
 ## Closed Gaps
+### Closure LXVII - FFT Plan Scratch Allocation Consolidation [patch]
+- **Gap**: Plan-owned FFT work buffers still used duplicated zero-fill or
+  local uninitialized-allocation logic across 1D, 2D, 3D, R2C, and six-step
+  paths.
+- **Closed by**: Added one sealed `UninitWorkspaceElement` helper for the FFT
+  scratch element set, routed 1D Bluestein/iRFFT scratch, 2D/3D axis-pass
+  scratch, 3D R2C scratch, and six-step f32 workspaces through it, removed the
+  duplicate six-step allocation helpers, and bumped `apollo-fft` to 0.9.2.
+- **Residual risk**: Runtime construction-time savings need Criterion
+  confirmation on representative matrix and volume sizes; functional/static
+  verification passed locally.
+- **Evidence**: `cargo fmt --check`; `cargo check -p apollo-fft --benches --examples`;
+  `cargo test -p apollo-fft --lib -- --test-threads=1`;
+  `cargo check --workspace`; source cleanup scan for removed local
+  helpers/deprecated placeholders; encoding scan for mojibake/BOM markers;
+  `git diff --check`.
+
 ### Closure LXVI - FFT Workspace and Normalization Memory Efficiency [patch]
 - **Gap**: Several FFT hot paths still paid avoidable zero-fill or repeated
   scalar normalization overhead in buffers that are fully overwritten before

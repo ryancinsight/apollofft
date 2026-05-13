@@ -1,4 +1,19 @@
 # Apollo Checklist
+## Closure LXVII - FFT Plan Scratch Allocation Consolidation [patch]
+Sprint target version: apollo-fft 0.9.2
+
+- [x] Add a sealed plan-workspace helper for uninitialized scratch allocation.
+- [x] Route 1D Bluestein and iRFFT scratch buffers through the shared helper.
+- [x] Route 2D/3D axis-pass and R2C scratch buffers through the shared helper.
+- [x] Route six-step f32 planar and row scratch buffers through the same helper
+  and remove duplicated local allocation helpers.
+- [x] Bump `apollo-fft` to 0.9.2 and update sprint artifacts.
+- [x] Verify with `cargo fmt --check`,
+  `cargo check -p apollo-fft --benches --examples`,
+  `cargo test -p apollo-fft --lib -- --test-threads=1`,
+  `cargo check --workspace`, source cleanup scans, encoding scans, and
+  `git diff --check`.
+
 ## Closure LXVI - FFT Workspace and Normalization Memory Efficiency [patch]
 Sprint target version: apollo-fft 0.9.1
 

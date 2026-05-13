@@ -1,5 +1,12 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure LXVII phase)
+- [x] [patch] Consolidate `apollo-fft` plan-owned scratch allocation.
+  1D Bluestein, 1D iRFFT, 2D/3D axis-pass, 3D R2C, and six-step f32 workspaces
+  now share one sealed uninitialized workspace helper for scratch element types
+  whose full contents are overwritten before read. `apollo-fft` was bumped to
+  0.9.2.
+
 ## Closed in this sprint (Closure LXVI phase)
 - [x] [patch] Reduce `apollo-fft` normalization and workspace memory overhead.
   Inverse scale passes now share AVX-capable normalization helpers, twiddle
