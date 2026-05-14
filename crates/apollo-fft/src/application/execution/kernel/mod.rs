@@ -14,8 +14,10 @@
 
 pub mod bluestein;
 pub mod direct;
+pub mod good_thomas;
 pub mod mixed_radix;
 pub(crate) mod precision_bridge;
+pub mod rader;
 pub mod radix2;
 pub(crate) mod radix_composite;
 pub(crate) mod radix_shape;

@@ -32,7 +32,8 @@
 #![allow(clippy::type_complexity)]
 #![allow(clippy::uninit_vec)]
 
-use super::{radix2, winograd};
+use super::tuning;
+use num_complex::Complex;
 
 pub(crate) mod caches;
 pub(crate) mod dispatch;
@@ -43,6 +44,7 @@ pub(crate) mod traits;
 mod tests;
 
 pub(crate) use caches::*;
+pub(crate) use dispatch::*;
 pub(crate) use scalar::MixedRadixScalar;
 pub use dispatch::*;
 pub(crate) use dispatch_f16::*;

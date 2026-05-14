@@ -35,8 +35,17 @@ mod private {
 /// Sealed: only `f64` and `f32` implement this trait. No downstream
 /// implementation is valid.
 pub(crate) trait MixedRadixScalar: private::Sealed + Sized + Copy + 'static {
-    /// The complex element type operated on by this scalar: `Complex<Self>`.
-    type Complex: Copy + Send + Sync + 'static;
+    /// The complex element type operated on by this scalar.
+    type Complex: Copy
+        + Send
+        + Sync
+        + 'static
+        + num_traits::Zero
+        + std::ops::Add<Output = Self::Complex>
+        + std::ops::Mul<Output = Self::Complex>;
+
+    /// Create a complex number from f64 real and imaginary parts.
+    fn complex(re: f64, im: f64) -> Self::Complex;
 
     // ── Twiddle cache ────────────────────────────────────────────────────────
 
@@ -85,6 +94,11 @@ pub(crate) trait MixedRadixScalar: private::Sealed + Sized + Copy + 'static {
 
 impl MixedRadixScalar for f64 {
     type Complex = Complex64;
+
+    #[inline]
+    fn complex(re: f64, im: f64) -> Complex64 {
+        Complex64::new(re, im)
+    }
 
     #[inline]
     fn cached_twiddle_fwd(n: usize) -> Arc<[Complex64]> {
@@ -148,6 +162,11 @@ impl MixedRadixScalar for f64 {
 
 impl MixedRadixScalar for f32 {
     type Complex = Complex32;
+
+    #[inline]
+    fn complex(re: f64, im: f64) -> Complex32 {
+        Complex32::new(re as f32, im as f32)
+    }
 
     #[inline]
     fn cached_twiddle_fwd(n: usize) -> Arc<[Complex32]> {

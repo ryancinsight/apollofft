@@ -143,6 +143,84 @@ pub(crate) fn should_use_bluestein_instead_of_composite(n: usize) -> bool {
     false
 }
 
+/// Find all prime factors of a number via trial division.
+/// The returned factors are sorted in ascending order.
+#[inline]
+pub(crate) fn prime_factors(mut n: usize) -> Vec<usize> {
+    let mut factors = Vec::new();
+    while n % 2 == 0 {
+        factors.push(2);
+        n /= 2;
+    }
+    let mut d = 3;
+    while d * d <= n {
+        while n % d == 0 {
+            factors.push(d);
+            n /= d;
+        }
+        d += 2;
+    }
+    if n > 1 {
+        factors.push(n);
+    }
+    factors
+}
+
+/// Test if a number is prime.
+#[inline]
+pub(crate) fn is_prime(n: usize) -> bool {
+    if n <= 1 {
+        return false;
+    }
+    if n <= 3 {
+        return true;
+    }
+    if n % 2 == 0 || n % 3 == 0 {
+        return false;
+    }
+    let mut i = 5;
+    while i * i <= n {
+        if n % i == 0 || n % (i + 2) == 0 {
+            return false;
+        }
+        i += 6;
+    }
+    true
+}
+
+/// Find a pair of coprime factors N1, N2 such that N1 * N2 = n.
+/// Returns None if n is a prime power (no coprime factorization exists).
+#[inline]
+pub(crate) fn coprime_factors(n: usize) -> Option<(usize, usize)> {
+    let factors = prime_factors(n);
+    if factors.is_empty() {
+        return None;
+    }
+    
+    let mut prime_powers = Vec::new();
+    let mut current_prime = factors[0];
+    let mut current_power = current_prime;
+    
+    for &f in &factors[1..] {
+        if f == current_prime {
+            current_power *= f;
+        } else {
+            prime_powers.push(current_power);
+            current_prime = f;
+            current_power = f;
+        }
+    }
+    prime_powers.push(current_power);
+    
+    if prime_powers.len() < 2 {
+        return None;
+    }
+    
+    let n1 = prime_powers.pop().unwrap();
+    let n2 = prime_powers.iter().product();
+    Some((n1, n2))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

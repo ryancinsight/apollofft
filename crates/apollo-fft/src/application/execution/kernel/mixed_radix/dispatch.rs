@@ -68,6 +68,22 @@ fn dispatch_inplace<F: MixedRadixScalar, const INVERSE: bool, const NORMALIZE: b
                 }
                 return;
             }
+
+            if let Some((n1, n2)) = crate::application::execution::kernel::radix_shape::coprime_factors(data.len()) {
+                crate::application::execution::kernel::good_thomas::pfa_fft::<F>(data, INVERSE, n1, n2);
+                if INVERSE && NORMALIZE {
+                    F::normalize(data, data.len());
+                }
+                return;
+            }
+
+            if crate::application::execution::kernel::radix_shape::is_prime(data.len()) {
+                crate::application::execution::kernel::rader::rader_fft::<F>(data, INVERSE);
+                if INVERSE && NORMALIZE {
+                    F::normalize(data, data.len());
+                }
+                return;
+            }
         }
         match (INVERSE, NORMALIZE) {
             (false, _) => F::bluestein_forward(data),
@@ -85,15 +101,6 @@ pub(crate) fn forward_inplace<F: MixedRadixScalar>(data: &mut [F::Complex]) {
     dispatch_inplace::<F, false, false>(data, None);
 }
 
-/// In-place forward FFT, unnormalized, with optional pre-computed twiddles.
-#[inline]
-pub(crate) fn forward_inplace_with_twiddles<F: MixedRadixScalar>(
-    data: &mut [F::Complex],
-    twiddles: Option<&[F::Complex]>,
-) {
-    dispatch_inplace::<F, false, false>(data, twiddles);
-}
-
 // ── Inverse (unnormalized) ────────────────────────────────────────────────────
 
 /// In-place inverse FFT, unnormalized (no 1/N division).
@@ -102,30 +109,12 @@ pub(crate) fn inverse_inplace_unnorm<F: MixedRadixScalar>(data: &mut [F::Complex
     dispatch_inplace::<F, true, false>(data, None);
 }
 
-/// In-place inverse FFT, unnormalized, with optional pre-computed twiddles.
-#[inline]
-pub(crate) fn inverse_inplace_unnorm_with_twiddles<F: MixedRadixScalar>(
-    data: &mut [F::Complex],
-    twiddles: Option<&[F::Complex]>,
-) {
-    dispatch_inplace::<F, true, false>(data, twiddles);
-}
-
 // ── Inverse (normalized 1/N) ──────────────────────────────────────────────────
 
 /// In-place inverse FFT, normalized by 1/N.
 #[inline]
 pub(crate) fn inverse_inplace<F: MixedRadixScalar>(data: &mut [F::Complex]) {
     dispatch_inplace::<F, true, true>(data, None);
-}
-
-/// In-place inverse FFT, normalized by 1/N, with optional pre-computed twiddles.
-#[inline]
-pub(crate) fn inverse_inplace_with_twiddles<F: MixedRadixScalar>(
-    data: &mut [F::Complex],
-    twiddles: Option<&[F::Complex]>,
-) {
-    dispatch_inplace::<F, true, true>(data, twiddles);
 }
 
 // ── Backward-compatible concrete aliases ──────────────────────────────────────
