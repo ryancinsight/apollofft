@@ -25,6 +25,12 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
   generic `dft_forward` and `dft_inverse` functions.
 
 ### Fixed
+- [patch] `apollo-fft`: split Stockham f64 AVX scratch dispatch out of the
+  fixed butterfly codelet leaf so generated fixed codelets stay below the
+  repository file-size limit while preserving static dispatch, and update stale
+  benchmark call sites to the maintained generic selector and `real_fft`
+  twiddle builders. Compact storage routing moved out of the type-named
+  `dispatch_f16.rs` leaf and into the canonical mixed-radix dispatch module.
 - [patch] `apollo-fft`: route `fftfreq` and `rfftfreq` through exact-capacity
   fill loops instead of known-length iterator collection pipelines.
 - [patch] `apollo-fft`: remove the unused `Default` bound from

@@ -16,9 +16,15 @@
 //! | `inverse_inplace`                | true    | true      |
 //! | `inverse_inplace_with_twiddles`  | true    | true      |
 
-use super::caches::cached_composite_radices;
+use super::super::precision_bridge::{run_via_complex32, Complex32Bridge};
+use super::super::radix_stage::normalize_inplace_c32;
+use super::super::{radix_composite, stockham};
+use super::caches::{
+    cached_composite_radices, cached_twiddle_fwd_32, cached_twiddle_inv_32,
+    with_stockham_scratch_32,
+};
 use super::scalar::MixedRadixScalar;
-use super::super::radix_shape::should_use_bluestein_instead_of_composite;
+use super::traits::{forward_short_winograd, inverse_short_winograd};
 
 /// Authoritative single-body FFT dispatch.
 ///
@@ -59,36 +65,31 @@ fn dispatch_inplace<F: MixedRadixScalar, const INVERSE: bool, const NORMALIZE: b
             F::normalize(data, n);
         }
     } else {
-        if !should_use_bluestein_instead_of_composite(data.len()) {
-            if let Some(radices) = cached_composite_radices(data.len()) {
-                match (INVERSE, NORMALIZE) {
-                    (false, _) => F::composite_forward(data, &radices),
-                    (true, false) => F::composite_inverse_unnorm(data, &radices),
-                    (true, true) => F::composite_inverse(data, &radices),
-                }
-                return;
+        if let Some(radices) = cached_composite_radices(data.len()) {
+            match (INVERSE, NORMALIZE) {
+                (false, _) => F::composite_forward(data, &radices),
+                (true, false) => F::composite_inverse_unnorm(data, &radices),
+                (true, true) => F::composite_inverse(data, &radices),
             }
-
-            if let Some((n1, n2)) = crate::application::execution::kernel::radix_shape::coprime_factors(data.len()) {
-                crate::application::execution::kernel::good_thomas::pfa_fft::<F>(data, INVERSE, n1, n2);
-                if INVERSE && NORMALIZE {
-                    F::normalize(data, data.len());
-                }
-                return;
-            }
-
-            if crate::application::execution::kernel::radix_shape::is_prime(data.len()) {
-                crate::application::execution::kernel::rader::rader_fft::<F>(data, INVERSE);
-                if INVERSE && NORMALIZE {
-                    F::normalize(data, data.len());
-                }
-                return;
-            }
+            return;
         }
-        match (INVERSE, NORMALIZE) {
-            (false, _) => F::bluestein_forward(data),
-            (true, false) => F::bluestein_inverse_unnorm(data),
-            (true, true) => F::bluestein_inverse(data),
+
+        if let Some((n1, n2)) =
+            crate::application::execution::kernel::radix_shape::coprime_factors(data.len())
+        {
+            crate::application::execution::kernel::good_thomas::pfa_fft::<F>(data, INVERSE, n1, n2);
+            if INVERSE && NORMALIZE {
+                F::normalize(data, data.len());
+            }
+            return;
+        }
+
+        if crate::application::execution::kernel::radix_shape::is_prime(data.len()) {
+            crate::application::execution::kernel::rader::rader_fft::<F>(data, INVERSE);
+            if INVERSE && NORMALIZE {
+                F::normalize(data, data.len());
+            }
+            return;
         }
     }
 }
@@ -115,6 +116,103 @@ pub(crate) fn inverse_inplace_unnorm<F: MixedRadixScalar>(data: &mut [F::Complex
 #[inline]
 pub(crate) fn inverse_inplace<F: MixedRadixScalar>(data: &mut [F::Complex]) {
     dispatch_inplace::<F, true, true>(data, None);
+}
+
+// ── Compact storage ──────────────────────────────────────────────────────────
+
+/// In-place forward FFT (unnormalized) for compact storage routed through `Complex32`.
+///
+/// Power-of-two sizes promote to f32, run the Stockham f32 autosort kernel
+/// without bit reversal, and demote back to compact storage. Non-PoT sizes use
+/// the same generic selector order through `run_via_complex32`.
+#[inline]
+pub(crate) fn forward_compact_storage<S: Complex32Bridge>(data: &mut [S]) {
+    dispatch_compact_storage::<S, false, false>(data);
+}
+
+/// In-place inverse FFT (unnormalized) for compact storage routed through `Complex32`.
+#[inline]
+pub(crate) fn inverse_unnorm_compact_storage<S: Complex32Bridge>(data: &mut [S]) {
+    dispatch_compact_storage::<S, true, false>(data);
+}
+
+/// In-place inverse FFT normalized by 1/N for compact storage routed through `Complex32`.
+#[inline]
+pub(crate) fn inverse_compact_storage<S: Complex32Bridge>(data: &mut [S]) {
+    dispatch_compact_storage::<S, true, true>(data);
+}
+
+#[inline]
+fn dispatch_compact_storage<S: Complex32Bridge, const INVERSE: bool, const NORMALIZE: bool>(
+    data: &mut [S],
+) {
+    if data.len() <= 1 {
+        return;
+    }
+    let n = data.len();
+    if n.is_power_of_two() {
+        run_via_complex32(data, |buf| {
+            if INVERSE {
+                if inverse_short_winograd(buf, NORMALIZE) {
+                    return;
+                }
+                let tw = cached_twiddle_inv_32(n);
+                with_stockham_scratch_32(n, |scratch| {
+                    <f32 as stockham::StockhamKernel>::forward_with_scratch(
+                        buf,
+                        scratch,
+                        tw.as_ref(),
+                    );
+                });
+                if NORMALIZE {
+                    normalize_inplace_c32(buf, 1.0f32 / n as f32);
+                }
+            } else {
+                if forward_short_winograd(buf) {
+                    return;
+                }
+                let tw = cached_twiddle_fwd_32(n);
+                with_stockham_scratch_32(n, |scratch| {
+                    <f32 as stockham::StockhamKernel>::forward_with_scratch(
+                        buf,
+                        scratch,
+                        tw.as_ref(),
+                    );
+                });
+            }
+        });
+        return;
+    }
+
+    if let Some(radices) = cached_composite_radices(n) {
+        run_via_complex32(data, |buf| match (INVERSE, NORMALIZE) {
+            (false, _) => radix_composite::forward_inplace_with_radices(buf, &radices),
+            (true, false) => radix_composite::inverse_inplace_unnorm_with_radices(buf, &radices),
+            (true, true) => radix_composite::inverse_inplace_with_radices(buf, &radices),
+        });
+        return;
+    }
+
+    if let Some((n1, n2)) = crate::application::execution::kernel::radix_shape::coprime_factors(n) {
+        run_via_complex32(data, |buf| {
+            crate::application::execution::kernel::good_thomas::pfa_fft::<f32>(
+                buf, INVERSE, n1, n2,
+            );
+            if INVERSE && NORMALIZE {
+                normalize_inplace_c32(buf, 1.0f32 / n as f32);
+            }
+        });
+        return;
+    }
+
+    if crate::application::execution::kernel::radix_shape::is_prime(n) {
+        run_via_complex32(data, |buf| {
+            crate::application::execution::kernel::rader::rader_fft::<f32>(buf, INVERSE);
+            if INVERSE && NORMALIZE {
+                normalize_inplace_c32(buf, 1.0f32 / n as f32);
+            }
+        });
+    }
 }
 
 // ── Backward-compatible concrete aliases ──────────────────────────────────────

@@ -1,5 +1,15 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure LXXXII phase)
+- [x] [patch] Reduce `apollo-fft` Stockham butterfly leaf size and dispatch
+  coupling. The f64 AVX scratch routing logic now lives in a separate
+  `butterfly::dispatch` leaf, leaving fixed butterfly codelets in
+  `butterfly::fixed` and preserving static dispatch. Stale benchmark references
+  to removed internal kernel modules were cleaned to compile against the
+  maintained generic selector and `real_fft` twiddle builders, and the
+  type-named compact storage leaf was consolidated into `mixed_radix/dispatch.rs`.
+  `apollo-fft` was bumped to 0.11.1.
+
 ## Closed in this sprint (Closure LXXVI phase)
 - [x] [patch] Reduce `apollo-fft` frequency utility iterator construction
   overhead. `fftfreq` and `rfftfreq` now use exact-capacity fill loops for

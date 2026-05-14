@@ -44,6 +44,24 @@ by design and will not be implemented.
 | GPU FFT 1D/2D | ✗ | ✗ | ✗ | Open |
 
 ## Closed Gaps
+### Closure LXXXII - Stockham Butterfly Dispatch Leaf Split [patch]
+- **Gap**: `stockham/butterfly/fixed.rs` remained over the repository
+  500-line structural limit and mixed generated fixed codelets with f64 AVX
+  scratch dispatch routing. Benchmark targets also referenced removed
+  `bluestein` and `radix2` module paths instead of the maintained generic
+  selector and `real_fft` twiddle builders. `mixed_radix/dispatch_f16.rs`
+  retained a type-named compact-storage routing leaf.
+- **Closed by**: Extracted f64 AVX scratch routing to `butterfly::dispatch`,
+  re-exported it through `butterfly::mod`, left fixed codelets in the `fixed`
+  leaf, and updated benches to use the public generic selector plus current
+  twiddle builders. Compact storage routing now lives in the canonical
+  `mixed_radix/dispatch.rs` module through one const-generic helper.
+- **Residual risk**: Release-size tooling should confirm the module split has
+  no measurable codegen impact.
+- **Evidence**: `cargo check -p apollo-fft`,
+  `cargo test -p apollo-fft --lib -- --test-threads=1`,
+  `cargo check -p apollo-fft --benches --examples`, and kernel file-size scan.
+
 ### Closure LXXVI - Frequency Utility Exact-Capacity Fill [patch]
 - **Gap**: `fftfreq` and `rfftfreq` built known-length output vectors through
   iterator collection, leaving avoidable iterator state and branch overhead in

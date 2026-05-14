@@ -66,9 +66,7 @@ fn allocation_count() -> u64 {
 }
 
 fn bench_f64(c: &mut Criterion) {
-    const SIZES: &[usize] = &[
-        64, 256, 512, 1_024, 4_096, 8_192, 9, 25, 81, 100, 343, 1_000, 2_401, 10_000, 10_007,
-    ];
+    const SIZES: &[usize] = &[15, 100, 10_007];
 
     let mut group = c.benchmark_group("apollo_fft_vs_rustfft_f64");
     group.sample_size(20);
@@ -114,11 +112,11 @@ fn bench_f64(c: &mut Criterion) {
             let mut apollo_data = input.clone();
             Complex64::fft_forward(&mut apollo_data);
             let apollo_twiddles_f64 =
-                apollo_fft::application::execution::kernel::radix2::build_forward_twiddle_table_64(
+                apollo_fft::application::execution::kernel::real_fft::build_forward_twiddle_table_64(
                     len,
                 );
             let apollo_inverse_twiddles_f64 =
-                apollo_fft::application::execution::kernel::radix2::build_inverse_twiddle_table_64(
+                apollo_fft::application::execution::kernel::real_fft::build_inverse_twiddle_table_64(
                     len,
                 );
             apollo_data.copy_from_slice(&input);
@@ -267,9 +265,7 @@ fn bench_f64(c: &mut Criterion) {
 }
 
 fn bench_f32(c: &mut Criterion) {
-    const SIZES: &[usize] = &[
-        64, 256, 512, 1_024, 4_096, 8_192, 9, 25, 81, 100, 343, 1_000, 2_401, 10_000, 10_007,
-    ];
+    const SIZES: &[usize] = &[15, 100, 10_007];
 
     let mut group = c.benchmark_group("apollo_fft_vs_rustfft_f32");
     group.sample_size(20);
@@ -315,11 +311,11 @@ fn bench_f32(c: &mut Criterion) {
             let mut apollo_data = input.clone();
             Complex32::fft_forward(&mut apollo_data);
             let apollo_twiddles_f32 =
-                apollo_fft::application::execution::kernel::radix2::build_forward_twiddle_table_32(
+                apollo_fft::application::execution::kernel::real_fft::build_forward_twiddle_table_32(
                     len,
                 );
             let apollo_inverse_twiddles_f32 =
-                apollo_fft::application::execution::kernel::radix2::build_inverse_twiddle_table_32(
+                apollo_fft::application::execution::kernel::real_fft::build_inverse_twiddle_table_32(
                     len,
                 );
             apollo_data.copy_from_slice(&input);

@@ -1,5 +1,6 @@
+//! Good-Thomas Prime Factor Algorithm (PFA)
+
 use crate::application::execution::kernel::mixed_radix::MixedRadixScalar;
-use num_complex::Complex;
 
 // Extended Euclidean algorithm to find the greatest common divisor and the coefficients of Bézout's identity
 fn extended_gcd(a: usize, b: usize) -> (usize, i64, i64) {
@@ -18,68 +19,76 @@ fn mod_inverse(a: usize, m: usize) -> usize {
 }
 
 /// Good-Thomas (Prime Factor Algorithm)
-pub fn pfa_fft<F: MixedRadixScalar>(
+pub(crate) fn pfa_fft<F: MixedRadixScalar>(
     data: &mut [F::Complex],
     inverse: bool,
     n1: usize,
     n2: usize,
 ) {
     let n = n1 * n2;
-    debug_assert_eq!(data.len(), n);
-    
-    // 1. Permute into 2D grid based on input CRT mapping
-    // n_idx = (n1_idx * N2 + n2_idx * N1) mod N
-    let mut grid = vec![F::complex(0.0, 0.0); n];
-    for i1 in 0..n1 {
+    debug_assert!(data.len() >= n);
+
+    F::with_pfa_scratch(n, |scratch| {
+        // 1. Permute into 2D grid based on input CRT mapping into scratch
+        // n_idx = (i1 * N2 + i2 * N1) mod N
+        for i1 in 0..n1 {
+            for i2 in 0..n2 {
+                let n_idx = (i1 * n2 + i2 * n1) % n;
+                scratch[i1 * n2 + i2] = data[n_idx];
+            }
+        }
+
+        // 2. Perform N1-point FFTs along rows (stride N2)
+        // Rows are contiguous N2 elements.
+        for i1 in 0..n1 {
+            let row_start = i1 * n2;
+            let row_end = row_start + n2;
+            let row_slice = &mut scratch[row_start..row_end];
+
+            if inverse {
+                crate::application::execution::kernel::mixed_radix::inverse_inplace_unnorm::<F>(
+                    row_slice,
+                );
+            } else {
+                crate::application::execution::kernel::mixed_radix::forward_inplace::<F>(row_slice);
+            }
+        }
+
+        // 3. Transpose N2xN1 into data buffer to perform contiguous columns
+        for i1 in 0..n1 {
+            for i2 in 0..n2 {
+                data[i2 * n1 + i1] = scratch[i1 * n2 + i2];
+            }
+        }
+
+        // 4. Perform N2-point FFTs along rows of the transposed matrix (contiguous N1 elements)
         for i2 in 0..n2 {
-            let n_idx = (i1 * n2 + i2 * n1) % n;
-            grid[i1 * n2 + i2] = data[n_idx];
-        }
-    }
+            let col_start = i2 * n1;
+            let col_end = col_start + n1;
+            let col_slice = &mut data[col_start..col_end];
 
-    // 2. Perform N1-point FFTs along columns (stride N2)
-    // Actually, our grid is row-major. So rows are N2 contiguous elements, columns are N1 elements spaced by N2.
-    // Let's do N2-point FFTs on rows first (contiguous).
-    for i1 in 0..n1 {
-        let row_start = i1 * n2;
-        let row_end = row_start + n2;
-        let mut row_buf = grid[row_start..row_end].to_vec();
-        
-        if inverse {
-            crate::application::execution::kernel::mixed_radix::inverse_inplace_unnorm::<F>(&mut row_buf);
-        } else {
-            crate::application::execution::kernel::mixed_radix::forward_inplace::<F>(&mut row_buf);
+            if inverse {
+                crate::application::execution::kernel::mixed_radix::inverse_inplace_unnorm::<F>(
+                    col_slice,
+                );
+            } else {
+                crate::application::execution::kernel::mixed_radix::forward_inplace::<F>(col_slice);
+            }
         }
-        grid[row_start..row_end].copy_from_slice(&row_buf);
-    }
 
-    // 3. Perform N1-point FFTs on columns (stride N2)
-    for i2 in 0..n2 {
-        let mut col_buf = vec![F::complex(0.0, 0.0); n1];
-        for i1 in 0..n1 {
-            col_buf[i1] = grid[i1 * n2 + i2];
-        }
-        
-        if inverse {
-            crate::application::execution::kernel::mixed_radix::inverse_inplace_unnorm::<F>(&mut col_buf);
-        } else {
-            crate::application::execution::kernel::mixed_radix::forward_inplace::<F>(&mut col_buf);
-        }
-        
-        for i1 in 0..n1 {
-            grid[i1 * n2 + i2] = col_buf[i1];
-        }
-    }
+        // 5. Permute back to 1D based on output CRT mapping
+        // k_idx = (k1 * N2 * (N2^-1 mod N1) + k2 * N1 * (N1^-1 mod N2)) mod N
+        let inv_n2_n1 = mod_inverse(n2, n1);
+        let inv_n1_n2 = mod_inverse(n1, n2);
 
-    // 4. Permute back to 1D based on output CRT mapping
-    // k_idx = (k1 * N2 * (N2^-1 mod N1) + k2 * N1 * (N1^-1 mod N2)) mod N
-    let inv_n2_n1 = mod_inverse(n2, n1);
-    let inv_n1_n2 = mod_inverse(n1, n2);
-    
-    for k1 in 0..n1 {
-        for k2 in 0..n2 {
-            let k_idx = (k1 * n2 * inv_n2_n1 + k2 * n1 * inv_n1_n2) % n;
-            data[k_idx] = grid[k1 * n2 + k2];
+        // Copy back into scratch since data currently holds the transposed results
+        scratch[..n].copy_from_slice(&data[..n]);
+
+        for k1 in 0..n1 {
+            for k2 in 0..n2 {
+                let k_idx = (k1 * n2 * inv_n2_n1 + k2 * n1 * inv_n1_n2) % n;
+                data[k_idx] = scratch[k2 * n1 + k1]; // Note: scratch is N2xN1 transposed layout
+            }
         }
-    }
+    });
 }

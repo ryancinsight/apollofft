@@ -1,24 +1,13 @@
 #![allow(clippy::many_single_char_names)]
 #![allow(clippy::too_many_arguments)]
-use num_complex::{Complex32, Complex64};
-use super::super::precision::*;
-use super::super::avx::*;
-use super::super::transform::*;
-pub(crate) unsafe fn forward64_avx_with_scratch(
-    data: &mut [Complex64],
-    scratch: &mut [Complex64],
-    twiddles: &[Complex64],
-) {
-    if data.len() == 64 {
-        fixed_len64_avx_fma(data, scratch, twiddles);
-        return;
-    }
-    if data.len() == 4096 && twiddles.get(1).is_some_and(|w| w.im < 0.0) {
-        transform_len4096_four_triples::<F64StockhamAvxFma>(data, scratch, twiddles);
-        return;
-    }
-    transform::<F64StockhamAvxFma>(data, scratch, twiddles, None);
-}
+use super::super::avx::{f32, fixed_len64_32_avx_fma};
+#[cfg(all(test, target_arch = "x86_64"))]
+use super::super::avx::{stage32_groups_one_avx_fma, stage_pair32_quarter_groups_two_avx_fma};
+use super::super::precision::F32StockhamAvxFma;
+use super::super::transform::{transform, transform_len4096_four_triples};
+use num_complex::Complex32;
+#[cfg(all(test, target_arch = "x86_64"))]
+use num_complex::Complex64;
 
 #[cfg(all(test, target_arch = "x86_64"))]
 #[target_feature(enable = "avx,fma")]

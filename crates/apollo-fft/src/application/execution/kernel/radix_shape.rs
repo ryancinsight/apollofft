@@ -106,43 +106,6 @@ pub(crate) fn factorize_composite(n: usize) -> Option<Vec<usize>> {
     Some(radices)
 }
 
-/// Empirical Bluestein fallback heuristic for composite sizes with poor cache behaviour.
-///
-/// ## Heuristic criterion
-///
-/// For n ∈ [500, 2000], count leading (innermost) DFT-5 stages produced by
-/// `factorize_composite`. If ≥ 3 consecutive DFT-5 stages are present, the
-/// working set of the first stage is only `prev_len = 1` element — each
-/// butterfly processes 5 scalars in isolation, producing poor cache utilization.
-/// Bluestein pads to the nearest power of two and uses the vectorized
-/// radix-8/Stockham kernel, which is substantially faster for these sizes.
-///
-/// ## Correctness boundary
-///
-/// - N=500 = 2²·5³: three DFT-5 innermost stages; triggers heuristic.
-/// - N=1000 = 2³·5³: three DFT-5 innermost stages; triggers heuristic.
-/// - N=2000 = 2⁴·5³: three DFT-5 innermost stages; triggers heuristic.
-/// - N=4000 = 2⁵·5³: outside range [500,2000]; Rayon parallelism recovers perf.
-///
-/// ## Failure modes
-///
-/// A false positive routes a composite size through Bluestein (correct, slower
-/// worst-case). A false negative uses composite (correct, potentially slower
-/// than Bluestein for the affected sizes). Both failure modes produce correct output.
-#[inline]
-pub(crate) fn should_use_bluestein_instead_of_composite(n: usize) -> bool {
-    if n >= 500 && n <= 2000 {
-        let Some(radices) = factorize_composite(n) else {
-            return false; // Not composite; Bluestein will handle it
-        };
-        let count_leading_fives = radices.iter().take_while(|&&r| r == 5).count();
-        if count_leading_fives >= 3 {
-            return true;
-        }
-    }
-    false
-}
-
 /// Find all prime factors of a number via trial division.
 /// The returned factors are sorted in ascending order.
 #[inline]
@@ -196,11 +159,11 @@ pub(crate) fn coprime_factors(n: usize) -> Option<(usize, usize)> {
     if factors.is_empty() {
         return None;
     }
-    
+
     let mut prime_powers = Vec::new();
     let mut current_prime = factors[0];
     let mut current_power = current_prime;
-    
+
     for &f in &factors[1..] {
         if f == current_prime {
             current_power *= f;
@@ -211,11 +174,11 @@ pub(crate) fn coprime_factors(n: usize) -> Option<(usize, usize)> {
         }
     }
     prime_powers.push(current_power);
-    
+
     if prime_powers.len() < 2 {
         return None;
     }
-    
+
     let n1 = prime_powers.pop().unwrap();
     let n2 = prime_powers.iter().product();
     Some((n1, n2))
@@ -280,19 +243,5 @@ mod tests {
         // n=28 = 7×4: 7 should be innermost.
         let r = factorize_composite(28).unwrap();
         assert_eq!(r[0], 7, "7-factor must be innermost for n=28");
-    }
-
-    #[test]
-    fn bluestein_heuristic_triggers_for_5cubed_sizes() {
-        assert!(should_use_bluestein_instead_of_composite(500));
-        assert!(should_use_bluestein_instead_of_composite(1000));
-        assert!(should_use_bluestein_instead_of_composite(2000));
-    }
-
-    #[test]
-    fn bluestein_heuristic_passes_outside_range_or_non_five() {
-        assert!(!should_use_bluestein_instead_of_composite(100));
-        assert!(!should_use_bluestein_instead_of_composite(3000));
-        assert!(!should_use_bluestein_instead_of_composite(512));
     }
 }

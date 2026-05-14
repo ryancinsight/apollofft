@@ -1,10 +1,21 @@
-use num_complex::Complex32;
-use super::traits::*;
+use super::super::avx::{
+    f32, stage32_avx_fma, stage32_groups_one_avx_fma, stage_pair32_avx_fma,
+    stage_pair32_groups_two_avx_fma, stage_pair32_quarter_groups_two_avx_fma,
+    stage_pair32_radix1_avx_fma, stage_triple32_avx_fma, stage_triple32_low_live_avx_fma,
+    stage_triple32_quarter_groups_one_avx_fma, stage_triple32_quarter_groups_two_avx_fma,
+    stage_triple32_radix1_avx_fma, stockham_quad_groups_eight32,
+};
+use super::super::butterfly::{stage_pair_impl, stage_quad_impl, stage_triple_impl};
 use super::super::stage::stage_impl;
-use super::super::butterfly::{stage_pair_impl, stage_triple_impl, stage_quad_impl};
-use crate::application::execution::kernel::radix_stage::normalize_inplace_c32;
-use super::super::avx::*;
 use super::super::stage::stockham_f32_stage_is_l1_resident;
+#[cfg(any(
+    test,
+    not(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))
+))]
+use super::traits::F32Stockham;
+use super::traits::{private, StockhamPrecision, StockhamRadix16AvxLeaf};
+use crate::application::execution::kernel::radix_stage::normalize_inplace_c32;
+use num_complex::Complex32;
 
 #[cfg(any(
     test,

@@ -1,5 +1,5 @@
-use num_complex::Complex64;
 use super::fixed::cmul_vec64;
+use num_complex::Complex64;
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx,fma")]

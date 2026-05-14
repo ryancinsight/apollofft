@@ -25,7 +25,7 @@ pub(crate) mod precision;
 pub(crate) mod stage;
 pub(crate) mod transform;
 
-use butterfly::{forward64_avx_with_scratch, forward32_avx_with_scratch};
+use butterfly::{forward32_avx_with_scratch, forward64_avx_with_scratch};
 use num_complex::{Complex32, Complex64};
 
 pub(crate) trait StockhamKernel: Sized {
@@ -109,7 +109,6 @@ impl StockhamKernel for f32 {
         }
     }
 }
-
 
 #[cfg(test)]
 pub(crate) mod tests;

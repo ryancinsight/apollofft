@@ -5,14 +5,13 @@
 //! as associated methods, allowing a single generic dispatch body to serve all
 //! precisions without cloned algorithm bodies.
 
+use super::super::radix_stage::{normalize_inplace_c32, normalize_inplace_c64};
+use super::super::{radix_composite, stockham};
 use super::caches::{
-    cached_twiddle_fwd_32, cached_twiddle_fwd_64,
-    cached_twiddle_inv_32, cached_twiddle_inv_64,
+    cached_twiddle_fwd_32, cached_twiddle_fwd_64, cached_twiddle_inv_32, cached_twiddle_inv_64,
     with_stockham_scratch_32, with_stockham_scratch_64,
 };
 use super::traits::{forward_short_winograd, inverse_short_winograd};
-use super::super::{bluestein, radix_composite, stockham};
-use super::super::radix_stage::{normalize_inplace_c32, normalize_inplace_c64};
 use num_complex::{Complex32, Complex64};
 use std::sync::Arc;
 
@@ -58,6 +57,16 @@ pub(crate) trait MixedRadixScalar: private::Sealed + Sized + Copy + 'static {
     /// growing it without zero-init if needed, then call `f`.
     fn with_scratch<R>(n: usize, f: impl FnOnce(&mut [Self::Complex]) -> R) -> R;
 
+    fn with_pfa_scratch<R>(n: usize, f: impl FnOnce(&mut [Self::Complex]) -> R) -> R;
+    fn with_rader_scratch<R>(n: usize, f: impl FnOnce(&mut [Self::Complex]) -> R) -> R;
+    fn with_rader_padded_scratch<R>(n: usize, f: impl FnOnce(&mut [Self::Complex]) -> R) -> R;
+
+    // ── Vectorized operations ────────────────────────────────────────────────
+
+    /// Point-wise complex multiplication `a[i] = a[i] * b[i]`.
+    /// `a` and `b` must have the same length.
+    fn pointwise_mul(a: &mut [Self::Complex], b: &[Self::Complex]);
+
     // ── Kernel dispatch ──────────────────────────────────────────────────────
 
     /// In-place Stockham forward pass with pre-computed twiddles.
@@ -77,12 +86,6 @@ pub(crate) trait MixedRadixScalar: private::Sealed + Sized + Copy + 'static {
     fn composite_forward(data: &mut [Self::Complex], radices: &[usize]);
     fn composite_inverse_unnorm(data: &mut [Self::Complex], radices: &[usize]);
     fn composite_inverse(data: &mut [Self::Complex], radices: &[usize]);
-
-    // ── Bluestein (arbitrary-length non-PoT) ────────────────────────────────
-
-    fn bluestein_forward(data: &mut [Self::Complex]);
-    fn bluestein_inverse_unnorm(data: &mut [Self::Complex]);
-    fn bluestein_inverse(data: &mut [Self::Complex]);
 
     // ── Normalization ────────────────────────────────────────────────────────
 
@@ -113,11 +116,26 @@ impl MixedRadixScalar for f64 {
         with_stockham_scratch_64(n, f)
     }
     #[inline]
-    fn stockham_forward(
-        data: &mut [Complex64],
-        scratch: &mut [Complex64],
-        twiddles: &[Complex64],
-    ) {
+    fn with_pfa_scratch<R>(n: usize, f: impl FnOnce(&mut [Complex64]) -> R) -> R {
+        super::caches::with_pfa_scratch_64(n, f)
+    }
+    #[inline]
+    fn with_rader_scratch<R>(n: usize, f: impl FnOnce(&mut [Complex64]) -> R) -> R {
+        super::caches::with_rader_scratch_64(n, f)
+    }
+    #[inline]
+    fn with_rader_padded_scratch<R>(n: usize, f: impl FnOnce(&mut [Complex64]) -> R) -> R {
+        super::caches::with_rader_padded_scratch_64(n, f)
+    }
+    #[inline]
+    fn pointwise_mul(a: &mut [Complex64], b: &[Complex64]) {
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter_mut().zip(b.iter()) {
+            *x *= *y;
+        }
+    }
+    #[inline]
+    fn stockham_forward(data: &mut [Complex64], scratch: &mut [Complex64], twiddles: &[Complex64]) {
         <f64 as stockham::StockhamKernel>::forward_with_scratch(data, scratch, twiddles);
     }
     #[inline]
@@ -139,18 +157,6 @@ impl MixedRadixScalar for f64 {
     #[inline]
     fn composite_inverse(data: &mut [Complex64], radices: &[usize]) {
         radix_composite::inverse_inplace_with_radices(data, radices);
-    }
-    #[inline]
-    fn bluestein_forward(data: &mut [Complex64]) {
-        bluestein::forward_inplace_64(data);
-    }
-    #[inline]
-    fn bluestein_inverse_unnorm(data: &mut [Complex64]) {
-        bluestein::inverse_inplace_unnorm_64(data);
-    }
-    #[inline]
-    fn bluestein_inverse(data: &mut [Complex64]) {
-        bluestein::inverse_inplace_64(data);
     }
     #[inline]
     fn normalize(data: &mut [Complex64], n: usize) {
@@ -181,11 +187,28 @@ impl MixedRadixScalar for f32 {
         with_stockham_scratch_32(n, f)
     }
     #[inline]
-    fn stockham_forward(
-        data: &mut [Complex32],
-        scratch: &mut [Complex32],
-        twiddles: &[Complex32],
-    ) {
+    fn with_pfa_scratch<R>(n: usize, f: impl FnOnce(&mut [Complex32]) -> R) -> R {
+        crate::application::execution::kernel::mixed_radix::caches::with_pfa_scratch_32(n, f)
+    }
+    #[inline]
+    fn with_rader_scratch<R>(n: usize, f: impl FnOnce(&mut [Complex32]) -> R) -> R {
+        crate::application::execution::kernel::mixed_radix::caches::with_rader_scratch_32(n, f)
+    }
+    #[inline]
+    fn with_rader_padded_scratch<R>(n: usize, f: impl FnOnce(&mut [Complex32]) -> R) -> R {
+        crate::application::execution::kernel::mixed_radix::caches::with_rader_padded_scratch_32(
+            n, f,
+        )
+    }
+    #[inline]
+    fn pointwise_mul(a: &mut [Complex32], b: &[Complex32]) {
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter_mut().zip(b.iter()) {
+            *x *= *y;
+        }
+    }
+    #[inline]
+    fn stockham_forward(data: &mut [Complex32], scratch: &mut [Complex32], twiddles: &[Complex32]) {
         <f32 as stockham::StockhamKernel>::forward_with_scratch(data, scratch, twiddles);
     }
     #[inline]
@@ -207,18 +230,6 @@ impl MixedRadixScalar for f32 {
     #[inline]
     fn composite_inverse(data: &mut [Complex32], radices: &[usize]) {
         radix_composite::inverse_inplace_with_radices(data, radices);
-    }
-    #[inline]
-    fn bluestein_forward(data: &mut [Complex32]) {
-        bluestein::forward_inplace_32(data);
-    }
-    #[inline]
-    fn bluestein_inverse_unnorm(data: &mut [Complex32]) {
-        bluestein::inverse_inplace_unnorm_32(data);
-    }
-    #[inline]
-    fn bluestein_inverse(data: &mut [Complex32]) {
-        bluestein::inverse_inplace_32(data);
     }
     #[inline]
     fn normalize(data: &mut [Complex32], n: usize) {

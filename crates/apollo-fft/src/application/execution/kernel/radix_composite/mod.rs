@@ -4,10 +4,10 @@ use num_complex::Complex;
 mod butterfly;
 mod cache;
 
-pub use cache::CompositeCache;
-use butterfly::stockham_stage;
-use crate::application::execution::kernel::tuning::RADIX_PARALLEL_CHUNK_THRESHOLD;
 use crate::application::execution::kernel::radix_stage::normalize_inplace;
+use crate::application::execution::kernel::tuning::RADIX_PARALLEL_CHUNK_THRESHOLD;
+use butterfly::stockham_stage;
+pub use cache::CompositeCache;
 
 #[inline]
 pub fn forward_inplace_with_radices<F: CompositeCache>(data: &mut [Complex<F>], radices: &[usize]) {
@@ -57,21 +57,49 @@ fn composite_core_with_radices<F: CompositeCache>(
             if src_is_data {
                 if use_parallel {
                     stockham_stage::<F, crate::application::execution::policy::ParallelPolicy>(
-                        data, scratch, r, prev_len, groups, stage_len, stage_twiddles, inverse,
+                        data,
+                        scratch,
+                        r,
+                        prev_len,
+                        groups,
+                        stage_len,
+                        stage_twiddles,
+                        inverse,
                     );
                 } else {
                     stockham_stage::<F, crate::application::execution::policy::SyncPolicy>(
-                        data, scratch, r, prev_len, groups, stage_len, stage_twiddles, inverse,
+                        data,
+                        scratch,
+                        r,
+                        prev_len,
+                        groups,
+                        stage_len,
+                        stage_twiddles,
+                        inverse,
                     );
                 }
             } else {
                 if use_parallel {
                     stockham_stage::<F, crate::application::execution::policy::ParallelPolicy>(
-                        scratch, data, r, prev_len, groups, stage_len, stage_twiddles, inverse,
+                        scratch,
+                        data,
+                        r,
+                        prev_len,
+                        groups,
+                        stage_len,
+                        stage_twiddles,
+                        inverse,
                     );
                 } else {
                     stockham_stage::<F, crate::application::execution::policy::SyncPolicy>(
-                        scratch, data, r, prev_len, groups, stage_len, stage_twiddles, inverse,
+                        scratch,
+                        data,
+                        r,
+                        prev_len,
+                        groups,
+                        stage_len,
+                        stage_twiddles,
+                        inverse,
                     );
                 }
             }

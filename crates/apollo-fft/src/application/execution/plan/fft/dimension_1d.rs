@@ -2,9 +2,9 @@
 
 use crate::application::execution::kernel::mixed_radix::{
     cached_twiddle_fwd_32, cached_twiddle_fwd_64, cached_twiddle_inv_32, cached_twiddle_inv_64,
-    forward_inplace_64_with_twiddles, inverse_inplace_64_with_twiddles,
+    forward_inplace_64_with_twiddles, inverse_inplace_64_with_twiddles, with_stockham_scratch_64,
 };
-use crate::application::execution::kernel::radix2::{
+use crate::application::execution::kernel::real_fft::{
     build_real_fwd_post_twiddles_64, forward_real_inplace_64, inverse_real_inplace_64,
 };
 use crate::application::execution::plan::fft::real_storage::RealFftData;
@@ -14,7 +14,7 @@ use crate::domain::metadata::shape::Shape1D;
 use ndarray::{Array1, Zip};
 use num_complex::Complex32;
 use num_complex::Complex64;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 mod precision;
 
@@ -82,9 +82,6 @@ mod precision;
 pub struct FftPlan1D {
     n: usize,
     precision: PrecisionProfile,
-    bluestein_plan: Option<crate::application::execution::kernel::bluestein::BluesteinPlan64>,
-    /// Scratch buffer for Bluestein convolution, reused across calls via Mutex.
-    bluestein_scratch: Option<Mutex<Vec<Complex64>>>,
     /// Precomputed contiguous per-stage forward twiddle table for power-of-two N.
     /// Layout: stage s occupies entries [base..base+half] where half = 2^(s-1).
     /// Total length = N-1. `None` for non-power-of-two (Bluestein handles those).
@@ -95,15 +92,9 @@ pub struct FftPlan1D {
     twiddle_fwd_32: Option<Arc<[Complex32]>>,
     /// Precomputed f32 inverse twiddle table (used in LOW_PRECISION_F32 mode).
     twiddle_inv_32: Option<Arc<[Complex32]>>,
-    /// Post-processing twiddles for the real-input half-spectrum FFT.
     /// Entry k = exp(-2πi·k/N) for k = 0..=N/2. Length N/2+1.
     /// `Some` iff `N` is a power of two ≥ 4; `None` otherwise.
     real_fwd_post_twiddles: Option<Vec<Complex64>>,
-    /// Pre-allocated scratch buffer for the inverse real FFT (iRFFT) trick.
-    /// Length N/2 Complex64. Reused via Mutex. Avoids the per-call N-element
-    /// allocation of the naive `input.to_owned()` path in `inverse_complex_to_real`.
-    /// `Some` iff `N` is a power of two ≥ 4; `None` otherwise.
-    real_inv_scratch: Option<Mutex<Vec<Complex64>>>,
 }
 
 impl std::fmt::Debug for FftPlan1D {
@@ -125,16 +116,6 @@ impl FftPlan1D {
     /// Create a new 1D plan with an explicit precision profile.
     #[must_use]
     pub fn with_precision(shape: Shape1D, precision: PrecisionProfile) -> Self {
-        let bluestein_plan = if shape.n.is_power_of_two() || shape.n <= 1 {
-            None
-        } else {
-            Some(crate::application::execution::kernel::bluestein::BluesteinPlan64::new(shape.n))
-        };
-        // Pre-allocate the scratch buffer for Bluestein convolution so subsequent
-        // calls reuse it instead of allocating a Vec on every invocation.
-        let bluestein_scratch = bluestein_plan
-            .as_ref()
-            .map(|bp| Mutex::new(uninit_copy_vec(bp.m())));
         // Precompute contiguous per-stage twiddle tables for power-of-two sizes.
         // For non-power-of-two (Bluestein), these are None; Bluestein has its own tables.
         let is_pow2 = shape.n.is_power_of_two() && shape.n > 1;
@@ -161,19 +142,12 @@ impl FftPlan1D {
         Self {
             n: shape.n,
             precision,
-            bluestein_plan,
-            bluestein_scratch,
             twiddle_fwd_64,
             twiddle_inv_64,
             twiddle_fwd_32,
             twiddle_inv_32,
             real_fwd_post_twiddles: if shape.n >= 4 && shape.n.is_power_of_two() {
                 Some(build_real_fwd_post_twiddles_64(shape.n))
-            } else {
-                None
-            },
-            real_inv_scratch: if shape.n >= 4 && shape.n.is_power_of_two() {
-                Some(Mutex::new(uninit_copy_vec(shape.n >> 1)))
             } else {
                 None
             },
@@ -344,21 +318,20 @@ impl FftPlan1D {
         // Fast path: iRFFT half-spectrum trick for PoT N ≥ 4.
         // Uses the M-point inverse FFT (M = N/2) instead of full N-point,
         // halving the FFT work and eliminating the per-call N-element allocation.
-        if let (Some(inv_tw), Some(post_tw), Some(scratch_mu)) = (
-            &self.twiddle_inv_64,
-            &self.real_fwd_post_twiddles,
-            &self.real_inv_scratch,
-        ) {
+        if let (Some(inv_tw), Some(post_tw)) = (&self.twiddle_inv_64, &self.real_fwd_post_twiddles)
+        {
             let input_slice = input.as_slice().expect("input must be contiguous");
             let output_slice = output.as_slice_mut().expect("output must be contiguous");
-            let mut scratch = scratch_mu.lock().expect("real_inv_scratch mutex poisoned");
-            inverse_real_inplace_64(
-                input_slice,
-                output_slice,
-                &mut scratch,
-                inv_tw.as_ref(),
-                post_tw,
-            );
+            let m = self.n >> 1;
+            with_stockham_scratch_64(m, |scratch| {
+                inverse_real_inplace_64(
+                    input_slice,
+                    output_slice,
+                    scratch,
+                    inv_tw.as_ref(),
+                    post_tw,
+                );
+            });
         } else {
             let mut spectrum = input.to_owned();
             self.inverse_complex_inplace(&mut spectrum);
@@ -373,10 +346,7 @@ impl FftPlan1D {
     /// Forward transform of a complex signal in-place using a slice.
     pub fn forward_complex_slice_inplace(&self, data: &mut [Complex64]) {
         assert_eq!(data.len(), self.n, "complex forward length mismatch");
-        if let (Some(plan), Some(scratch_mu)) = (&self.bluestein_plan, &self.bluestein_scratch) {
-            let mut scratch = scratch_mu.lock().expect("bluestein scratch mutex poisoned");
-            plan.forward_with_scratch(data, &mut scratch);
-        } else if let Some(twiddles) = &self.twiddle_fwd_64 {
+        if let Some(twiddles) = &self.twiddle_fwd_64 {
             forward_inplace_64_with_twiddles(data, Some(twiddles.as_ref()));
         } else {
             crate::application::execution::kernel::mixed_radix::forward_inplace::<f64>(data);
@@ -386,14 +356,7 @@ impl FftPlan1D {
     /// Inverse transform of a complex signal in-place with normalization using a slice.
     pub fn inverse_complex_slice_inplace(&self, data: &mut [Complex64]) {
         assert_eq!(data.len(), self.n, "complex inverse length mismatch");
-        if let (Some(plan), Some(scratch_mu)) = (&self.bluestein_plan, &self.bluestein_scratch) {
-            let mut scratch = scratch_mu.lock().expect("bluestein scratch mutex poisoned");
-            plan.inverse_unnorm_with_scratch(data, &mut scratch);
-            let scale = 1.0 / self.n as f64;
-            for x in data.iter_mut() {
-                *x *= scale;
-            }
-        } else if let Some(twiddles) = &self.twiddle_inv_64 {
+        if let Some(twiddles) = &self.twiddle_inv_64 {
             inverse_inplace_64_with_twiddles(data, Some(twiddles.as_ref()));
         } else {
             crate::application::execution::kernel::mixed_radix::inverse_inplace::<f64>(data);

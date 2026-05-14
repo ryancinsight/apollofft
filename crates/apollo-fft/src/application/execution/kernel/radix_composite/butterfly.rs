@@ -1,12 +1,15 @@
-use num_complex::Complex;
-use rayon::prelude::*;
 use crate::application::execution::kernel::winograd::{
     apply_twiddle_impl, dft2_impl, dft3_impl, dft4_impl, dft5_impl, dft7_impl, dft8_impl,
     WinogradScalar,
 };
+use num_complex::Complex;
 
 #[inline]
-pub(crate) fn apply_dft_r_impl<F: WinogradScalar>(data: &mut [Complex<F>], r: usize, inverse: bool) {
+pub(crate) fn apply_dft_r_impl<F: WinogradScalar>(
+    data: &mut [Complex<F>],
+    r: usize,
+    inverse: bool,
+) {
     match r {
         2 => {
             let (lo, hi) = data.split_at_mut(1);

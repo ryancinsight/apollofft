@@ -2,7 +2,7 @@
 
 #![allow(missing_docs)]
 
-use apollo_fft::application::execution::kernel::{bluestein, direct, fft_forward, mixed_radix};
+use apollo_fft::application::execution::kernel::{direct, fft_forward};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use half::f16;
 use num_complex::Complex;
@@ -51,19 +51,7 @@ fn bench_fft_kernels(c: &mut Criterion) {
         }
 
         group.bench_with_input(
-            BenchmarkId::new("mixed_radix_inplace", len),
-            &input,
-            |bench, input| {
-                bench.iter(|| {
-                    let mut data = input.clone();
-                    mixed_radix::forward_inplace_64(black_box(&mut data));
-                    black_box(data);
-                });
-            },
-        );
-
-        group.bench_with_input(
-            BenchmarkId::new("auto_selector", len),
+            BenchmarkId::new("generic_selector", len),
             &input,
             |bench, input| {
                 bench.iter(|| {
@@ -78,12 +66,12 @@ fn bench_fft_kernels(c: &mut Criterion) {
     for len in [31usize, 63, 127] {
         let input = signal(len);
         group.bench_with_input(
-            BenchmarkId::new("bluestein_inplace", len),
+            BenchmarkId::new("generic_prime_inplace", len),
             &input,
             |bench, input| {
                 bench.iter(|| {
                     let mut data = input.clone();
-                    bluestein::forward_inplace_64(black_box(&mut data));
+                    fft_forward(black_box(&mut data));
                     black_box(data);
                 });
             },

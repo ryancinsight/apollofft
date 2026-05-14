@@ -1,10 +1,21 @@
-use num_complex::Complex64;
-use super::traits::*;
+use super::super::avx::{
+    f64, stage64_avx_fma, stage64_groups_one_avx_fma, stage_pair64_avx_fma,
+    stage_pair64_groups_two_avx_fma, stage_pair64_radix1_avx_fma,
+    stage_triple64_groups_eight_avx_fma, stage_triple64_low_live_avx_fma,
+    stage_triple64_quarter_groups_one_avx_fma, stage_triple64_radix1_avx_fma,
+    stage_triple64_throughput_avx_fma, stockham_quad_groups_eight64_low_live,
+};
+use super::super::butterfly::{stage_pair_impl, stage_quad_impl, stage_triple_impl};
 use super::super::stage::stage_impl;
-use super::super::butterfly::{stage_pair_impl, stage_triple_impl, stage_quad_impl};
-use crate::application::execution::kernel::radix_stage::normalize_inplace_c64;
-use super::super::avx::*;
 use super::super::stage::stockham_f64_stage_is_l1_resident;
+#[cfg(any(
+    test,
+    not(all(target_arch = "x86_64", target_feature = "avx", target_feature = "fma"))
+))]
+use super::traits::F64Stockham;
+use super::traits::{private, StockhamPrecision, StockhamRadix16AvxLeaf};
+use crate::application::execution::kernel::radix_stage::normalize_inplace_c64;
+use num_complex::Complex64;
 
 #[cfg(any(
     test,

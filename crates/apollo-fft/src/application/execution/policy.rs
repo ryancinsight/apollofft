@@ -2,8 +2,6 @@
 
 use rayon::prelude::*;
 
-use rayon::prelude::*;
-use rayon::prelude::*;
 use std::future::Future;
 
 /// Zero-cost execution policy trait mapping parallelism strategies to compile-time

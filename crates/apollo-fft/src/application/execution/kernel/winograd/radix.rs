@@ -202,4 +202,3 @@ pub(crate) fn dft5_impl<F: WinogradScalar>(data: &mut [num_complex::Complex<F>],
     data[2] = s2_add + m4;
     data[3] = s2_add - m4;
 }
-

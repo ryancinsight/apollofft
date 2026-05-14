@@ -12,16 +12,15 @@
 //! | `stockham`        | Radix-2 Stockham autosort FFT for all power-of-two lengths. |
 //! | `mixed_radix`     | Dispatch facade: Stockham for PoT, composite for smooth, Bluestein otherwise. |
 
-pub mod bluestein;
 pub mod direct;
 pub mod good_thomas;
 pub mod mixed_radix;
 pub(crate) mod precision_bridge;
 pub mod rader;
-pub mod radix2;
 pub(crate) mod radix_composite;
 pub(crate) mod radix_shape;
 pub(crate) mod radix_stage;
+pub mod real_fft;
 pub(crate) mod stockham;
 pub(crate) mod tuning;
 pub(crate) mod twiddle_table;

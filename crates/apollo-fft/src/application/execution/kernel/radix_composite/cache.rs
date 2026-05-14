@@ -1,7 +1,7 @@
+use crate::application::execution::kernel::winograd::{apply_twiddle_impl, WinogradScalar};
 use num_complex::Complex;
 use std::cell::RefCell;
 use std::sync::Arc;
-use crate::application::execution::kernel::winograd::{apply_twiddle_impl, WinogradScalar};
 
 #[derive(Clone)]
 pub struct CompositeTwiddleEntry<C> {

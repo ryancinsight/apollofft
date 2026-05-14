@@ -1,5 +1,5 @@
 //! Thread-local and global twiddle/composite-radix caches for the mixed-radix dispatch.
-use super::super::{radix2, radix_shape::factorize_composite};
+use super::super::{radix_shape::factorize_composite, real_fft};
 use num_complex::{Complex32, Complex64};
 use parking_lot::RwLock;
 use std::cell::RefCell;
@@ -40,6 +40,23 @@ thread_local! {
         const { RefCell::new(Vec::new()) };
     static TL_STOCKHAM_SCRATCH_32: RefCell<Vec<Complex32>> =
         const { RefCell::new(Vec::new()) };
+
+    // Dedicated ping-pong scratches for PFA and Rader to avoid re-entrant borrows with Stockham.
+    // Rader is re-entrant (e.g., N=10007 -> 10006 -> 5003 -> Rader(5003)), so we use a Vec pool.
+    static TL_PFA_SCRATCH_64: RefCell<Vec<Vec<Complex64>>> =
+        const { RefCell::new(Vec::new()) };
+    static TL_PFA_SCRATCH_32: RefCell<Vec<Vec<Complex32>>> =
+        const { RefCell::new(Vec::new()) };
+
+    static TL_RADER_SCRATCH_64: RefCell<Vec<Vec<Complex64>>> =
+        const { RefCell::new(Vec::new()) };
+    static TL_RADER_SCRATCH_32: RefCell<Vec<Vec<Complex32>>> =
+        const { RefCell::new(Vec::new()) };
+
+    static TL_RADER_PADDED_SCRATCH_64: RefCell<Vec<Vec<Complex64>>> =
+        const { RefCell::new(Vec::new()) };
+    static TL_RADER_PADDED_SCRATCH_32: RefCell<Vec<Vec<Complex32>>> =
+        const { RefCell::new(Vec::new()) };
 }
 
 #[inline]
@@ -67,6 +84,92 @@ pub(crate) fn with_stockham_scratch_32<R>(n: usize, f: impl FnOnce(&mut [Complex
         }
         f(&mut scratch[..n])
     })
+}
+
+#[inline]
+pub(crate) fn with_pfa_scratch_64<R>(n: usize, f: impl FnOnce(&mut [Complex64]) -> R) -> R {
+    let mut scratch = TL_PFA_SCRATCH_64.with(|pool| pool.borrow_mut().pop().unwrap_or_default());
+    if scratch.len() < n {
+        let cur = scratch.len();
+        scratch.reserve(n.saturating_sub(cur));
+        unsafe { scratch.set_len(n) };
+    }
+    let res = f(&mut scratch[..n]);
+    TL_PFA_SCRATCH_64.with(|pool| pool.borrow_mut().push(scratch));
+    res
+}
+
+#[inline]
+pub(crate) fn with_pfa_scratch_32<R>(n: usize, f: impl FnOnce(&mut [Complex32]) -> R) -> R {
+    let mut scratch = TL_PFA_SCRATCH_32.with(|pool| pool.borrow_mut().pop().unwrap_or_default());
+    if scratch.len() < n {
+        let cur = scratch.len();
+        scratch.reserve(n.saturating_sub(cur));
+        unsafe { scratch.set_len(n) };
+    }
+    let res = f(&mut scratch[..n]);
+    TL_PFA_SCRATCH_32.with(|pool| pool.borrow_mut().push(scratch));
+    res
+}
+
+#[inline]
+pub(crate) fn with_rader_scratch_64<R>(n: usize, f: impl FnOnce(&mut [Complex64]) -> R) -> R {
+    let mut scratch = TL_RADER_SCRATCH_64.with(|pool| pool.borrow_mut().pop().unwrap_or_default());
+    if scratch.len() < n {
+        let cur = scratch.len();
+        scratch.reserve(n.saturating_sub(cur));
+        unsafe { scratch.set_len(n) };
+    }
+    let res = f(&mut scratch[..n]);
+    TL_RADER_SCRATCH_64.with(|pool| pool.borrow_mut().push(scratch));
+    res
+}
+
+#[inline]
+pub(crate) fn with_rader_scratch_32<R>(n: usize, f: impl FnOnce(&mut [Complex32]) -> R) -> R {
+    let mut scratch = TL_RADER_SCRATCH_32.with(|pool| pool.borrow_mut().pop().unwrap_or_default());
+    if scratch.len() < n {
+        let cur = scratch.len();
+        scratch.reserve(n.saturating_sub(cur));
+        unsafe { scratch.set_len(n) };
+    }
+    let res = f(&mut scratch[..n]);
+    TL_RADER_SCRATCH_32.with(|pool| pool.borrow_mut().push(scratch));
+    res
+}
+
+#[inline]
+pub(crate) fn with_rader_padded_scratch_64<R>(
+    n: usize,
+    f: impl FnOnce(&mut [Complex64]) -> R,
+) -> R {
+    let mut scratch =
+        TL_RADER_PADDED_SCRATCH_64.with(|pool| pool.borrow_mut().pop().unwrap_or_default());
+    if scratch.len() < n {
+        let cur = scratch.len();
+        scratch.reserve(n.saturating_sub(cur));
+        unsafe { scratch.set_len(n) };
+    }
+    let res = f(&mut scratch[..n]);
+    TL_RADER_PADDED_SCRATCH_64.with(|pool| pool.borrow_mut().push(scratch));
+    res
+}
+
+#[inline]
+pub(crate) fn with_rader_padded_scratch_32<R>(
+    n: usize,
+    f: impl FnOnce(&mut [Complex32]) -> R,
+) -> R {
+    let mut scratch =
+        TL_RADER_PADDED_SCRATCH_32.with(|pool| pool.borrow_mut().pop().unwrap_or_default());
+    if scratch.len() < n {
+        let cur = scratch.len();
+        scratch.reserve(n.saturating_sub(cur));
+        unsafe { scratch.set_len(n) };
+    }
+    let res = f(&mut scratch[..n]);
+    TL_RADER_PADDED_SCRATCH_32.with(|pool| pool.borrow_mut().push(scratch));
+    res
 }
 
 /// Retrieves the Arc from the thread-local map or falls back to global.
@@ -110,7 +213,7 @@ pub(crate) fn cached_twiddle_fwd_64(n: usize) -> Arc<[Complex64]> {
         &TL_FWD_64,
         &TWIDDLE_FWD_64_CACHE,
         n,
-        radix2::build_forward_twiddle_table_64,
+        real_fft::build_forward_twiddle_table_64,
     )
 }
 
@@ -120,7 +223,7 @@ pub(crate) fn cached_twiddle_inv_64(n: usize) -> Arc<[Complex64]> {
         &TL_INV_64,
         &TWIDDLE_INV_64_CACHE,
         n,
-        radix2::build_inverse_twiddle_table_64,
+        real_fft::build_inverse_twiddle_table_64,
     )
 }
 
@@ -130,7 +233,7 @@ pub(crate) fn cached_twiddle_fwd_32(n: usize) -> Arc<[Complex32]> {
         &TL_FWD_32,
         &TWIDDLE_FWD_32_CACHE,
         n,
-        radix2::build_forward_twiddle_table_32,
+        real_fft::build_forward_twiddle_table_32,
     )
 }
 
@@ -140,7 +243,7 @@ pub(crate) fn cached_twiddle_inv_32(n: usize) -> Arc<[Complex32]> {
         &TL_INV_32,
         &TWIDDLE_INV_32_CACHE,
         n,
-        radix2::build_inverse_twiddle_table_32,
+        real_fft::build_inverse_twiddle_table_32,
     )
 }
 

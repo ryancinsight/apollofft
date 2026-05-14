@@ -1,3 +1,5 @@
+//! Prime root generators for Rader's algorithm
+
 use crate::application::execution::kernel::radix_shape::prime_factors;
 
 pub(crate) fn primitive_root(p: usize) -> usize {

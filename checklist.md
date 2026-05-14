@@ -1,4 +1,23 @@
 # Apollo Checklist
+## Closure LXXXII - Stockham Butterfly Dispatch Leaf Split [patch]
+Sprint target version: apollo-fft 0.11.1
+
+- [x] Extract f64 AVX scratch dispatch from `stockham/butterfly/fixed.rs` into
+  `stockham/butterfly/dispatch.rs`.
+- [x] Re-export dispatch from `stockham/butterfly/mod.rs` so existing callers
+  keep static module-level routing.
+- [x] Keep fixed generated codelets in `fixed.rs` and bring the leaf below the
+  500-line structural limit.
+- [x] Clean stale bench references to removed `bluestein` and `radix2` module
+  paths so benchmarks compile against the maintained generic selector and
+  `real_fft` twiddle builders.
+- [x] Remove the type-named `dispatch_f16.rs` leaf by consolidating compact
+  storage routing into the canonical `mixed_radix/dispatch.rs` body.
+- [x] Bump `apollo-fft` to 0.11.1 and update sprint artifacts.
+- [x] Verified with `cargo check -p apollo-fft`,
+  `cargo test -p apollo-fft --lib -- --test-threads=1`, and
+  `cargo check -p apollo-fft --benches --examples`.
+
 ## Closure LXXXI - Mixed Radix Kernel Hierarchy Decomposition [minor]
 Sprint target version: apollo-fft 0.11.0
 
