@@ -69,7 +69,7 @@ pub fn forward_inplace_64(data: &mut [Complex64]) {
         return;
     }
     if n.is_power_of_two() {
-        mixed_radix::forward_inplace_64(data);
+        mixed_radix::forward_inplace::<f64>(data);
         return;
     }
     let plan = cached_plan64(n);
@@ -85,7 +85,7 @@ pub fn inverse_inplace_unnorm_64(data: &mut [Complex64]) {
         return;
     }
     if n.is_power_of_two() {
-        mixed_radix::inverse_inplace_unnorm_64(data);
+        mixed_radix::inverse_inplace_unnorm::<f64>(data);
         return;
     }
     let plan = cached_plan64(n);
@@ -108,7 +108,7 @@ pub fn forward_inplace_32(data: &mut [Complex32]) {
         return;
     }
     if n.is_power_of_two() {
-        mixed_radix::forward_inplace_32(data);
+        mixed_radix::forward_inplace::<f32>(data);
         return;
     }
     let plan = cached_plan32(n);
@@ -122,7 +122,7 @@ pub fn inverse_inplace_unnorm_32(data: &mut [Complex32]) {
         return;
     }
     if n.is_power_of_two() {
-        mixed_radix::inverse_inplace_unnorm_32(data);
+        mixed_radix::inverse_inplace_unnorm::<f32>(data);
         return;
     }
     let plan = cached_plan32(n);
@@ -281,7 +281,7 @@ mod tests {
         let mut bl = input.clone();
         forward_inplace_64(&mut bl);
         let mut st = input.clone();
-        mixed_radix::forward_inplace_64(&mut st);
+        mixed_radix::forward_inplace::<f64>(&mut st);
         assert!(max_abs_err(&bl, &st) < 1e-14, "bluestein vs stockham n=8");
     }
 }

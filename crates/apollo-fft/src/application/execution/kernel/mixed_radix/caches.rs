@@ -1,4 +1,10 @@
-use super::*;// Global backing caches: cross-thread sharing, written once per size.
+//! Thread-local and global twiddle/composite-radix caches for the mixed-radix dispatch.
+use super::super::{radix2, radix_shape::factorize_composite};
+use num_complex::{Complex32, Complex64};
+use parking_lot::RwLock;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 static TWIDDLE_FWD_64_CACHE: std::sync::LazyLock<RwLock<HashMap<usize, Arc<[Complex64]>>>> =
     std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));

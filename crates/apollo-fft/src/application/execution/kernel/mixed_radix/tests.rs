@@ -11,7 +11,7 @@
             .map(|k| Complex64::new((k as f64 * 0.29).sin(), (k as f64 * 0.17).cos()))
             .collect();
         let mut got = input.clone();
-        forward_inplace_64(&mut got);
+        forward_inplace::<f64>(&mut got);
         let expected = dft_forward(&input);
         let err = max_abs_err_64(&got, &expected);
         assert!(err < 1e-10, "mixed-radix forward mismatch err={err:.2e}");
@@ -24,7 +24,7 @@
             .map(|k| Complex64::new((k as f64 * 0.19).cos(), (k as f64 * 0.07).sin()))
             .collect();
         let mut got = input.clone();
-        inverse_inplace_unnorm_64(&mut got);
+        inverse_inplace_unnorm::<f64>(&mut got);
         let expected = dft_inverse(&input)
             .into_iter()
             .map(|x| x * n as f64)
@@ -40,19 +40,14 @@
             .map(|k| Complex32::new((k as f32 * 0.013).sin(), (k as f32 * 0.017).cos()))
             .collect();
         let mut got = input.clone();
-
-        forward_inplace_32(&mut got);
-        inverse_inplace_32(&mut got);
-
+        forward_inplace::<f32>(&mut got);
+        inverse_inplace::<f32>(&mut got);
         let err = got
             .iter()
             .zip(input.iter())
             .map(|(a, b)| (*a - *b).norm())
             .fold(0.0f32, f32::max);
-        assert!(
-            err < 1.0e-4,
-            "f32 Stockham roundtrip mismatch err={err:.2e}"
-        );
+        assert!(err < 1.0e-4, "f32 Stockham roundtrip mismatch err={err:.2e}");
     }
 
     #[test]
@@ -62,19 +57,14 @@
             .map(|k| Complex32::new((k as f32 * 0.011).sin(), (k as f32 * 0.019).cos()))
             .collect();
         let mut got = input.clone();
-
-        forward_inplace_32(&mut got);
-        inverse_inplace_32(&mut got);
-
+        forward_inplace::<f32>(&mut got);
+        inverse_inplace::<f32>(&mut got);
         let err = got
             .iter()
             .zip(input.iter())
             .map(|(a, b)| (*a - *b).norm())
             .fold(0.0f32, f32::max);
-        assert!(
-            err < 1.0e-4,
-            "f32 Stockham N=512 roundtrip mismatch err={err:.2e}"
-        );
+        assert!(err < 1.0e-4, "f32 Stockham N=512 roundtrip mismatch err={err:.2e}");
     }
 
     #[test]
@@ -84,10 +74,8 @@
             .map(|k| Complex32::new((k as f32 * 0.007).sin(), (k as f32 * 0.011).cos()))
             .collect();
         let mut got = input.clone();
-
-        forward_inplace_32(&mut got);
-        inverse_inplace_32(&mut got);
-
+        forward_inplace::<f32>(&mut got);
+        inverse_inplace::<f32>(&mut got);
         let err = got
             .iter()
             .zip(input.iter())
@@ -105,9 +93,7 @@
         let n = 8usize;
         let mut data = vec![Complex::new(f16::ZERO, f16::ZERO); n];
         data[0] = Complex::new(f16::from_f32(1.0), f16::ZERO);
-
         forward_compact_storage(&mut data);
-
         for (bin, value) in data.iter().enumerate() {
             assert!(
                 (value.re.to_f32() - 1.0).abs() < 5.0e-3,
@@ -129,19 +115,14 @@
             })
             .collect();
         let mut data = input.clone();
-
         forward_compact_storage(&mut data);
         inverse_compact_storage(&mut data);
-
         let max_err = data
             .iter()
             .zip(input.iter())
             .map(|(actual, expected)| (actual.re.to_f32() - expected.re.to_f32()).abs())
             .fold(0.0f32, f32::max);
-        assert!(
-            max_err < 5.0e-2,
-            "f16 storage roundtrip max error {max_err:.4e}"
-        );
+        assert!(max_err < 5.0e-2, "f16 storage roundtrip max error {max_err:.4e}");
     }
 
     #[test]
@@ -151,15 +132,10 @@
             .map(|k| Complex64::new((k as f64 * 0.013).sin(), (k as f64 * 0.017).cos()))
             .collect();
         let mut got = input.clone();
-
-        forward_inplace_64(&mut got);
-        inverse_inplace_64(&mut got);
-
+        forward_inplace::<f64>(&mut got);
+        inverse_inplace::<f64>(&mut got);
         let err = max_abs_err_64(&got, &input);
-        assert!(
-            err < 1.0e-10,
-            "f64 Stockham roundtrip mismatch err={err:.2e}"
-        );
+        assert!(err < 1.0e-10, "f64 Stockham roundtrip mismatch err={err:.2e}");
     }
 
     #[test]
@@ -169,13 +145,8 @@
             .map(|k| Complex64::new((k as f64 * 0.011).sin(), (k as f64 * 0.019).cos()))
             .collect();
         let mut got = input.clone();
-
-        forward_inplace_64(&mut got);
-        inverse_inplace_64(&mut got);
-
+        forward_inplace::<f64>(&mut got);
+        inverse_inplace::<f64>(&mut got);
         let err = max_abs_err_64(&got, &input);
-        assert!(
-            err < 1.0e-10,
-            "f64 Stockham N=512 roundtrip mismatch err={err:.2e}"
-        );
+        assert!(err < 1.0e-10, "f64 Stockham N=512 roundtrip mismatch err={err:.2e}");
     }

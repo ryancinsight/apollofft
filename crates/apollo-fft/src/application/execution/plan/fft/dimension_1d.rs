@@ -379,7 +379,7 @@ impl FftPlan1D {
         } else if let Some(twiddles) = &self.twiddle_fwd_64 {
             forward_inplace_64_with_twiddles(data, Some(twiddles.as_ref()));
         } else {
-            crate::application::execution::kernel::mixed_radix::forward_inplace_64(data);
+            crate::application::execution::kernel::mixed_radix::forward_inplace::<f64>(data);
         }
     }
 
@@ -396,7 +396,7 @@ impl FftPlan1D {
         } else if let Some(twiddles) = &self.twiddle_inv_64 {
             inverse_inplace_64_with_twiddles(data, Some(twiddles.as_ref()));
         } else {
-            crate::application::execution::kernel::mixed_radix::inverse_inplace_64(data);
+            crate::application::execution::kernel::mixed_radix::inverse_inplace::<f64>(data);
         }
     }
 

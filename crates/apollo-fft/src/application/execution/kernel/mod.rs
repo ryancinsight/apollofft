@@ -78,30 +78,30 @@ pub fn fft_inverse_unnorm<C: FftPrecision>(data: &mut [C]) {
 impl FftPrecision for Complex64 {
     #[inline]
     fn fft_forward(data: &mut [Self]) {
-        mixed_radix::forward_inplace_64(data);
+        mixed_radix::forward_inplace::<f64>(data);
     }
     #[inline]
     fn fft_inverse(data: &mut [Self]) {
-        mixed_radix::inverse_inplace_64(data);
+        mixed_radix::inverse_inplace::<f64>(data);
     }
     #[inline]
     fn fft_inverse_unnorm(data: &mut [Self]) {
-        mixed_radix::inverse_inplace_unnorm_64(data);
+        mixed_radix::inverse_inplace_unnorm::<f64>(data);
     }
 }
 
 impl FftPrecision for Complex32 {
     #[inline]
     fn fft_forward(data: &mut [Self]) {
-        mixed_radix::forward_inplace_32(data);
+        mixed_radix::forward_inplace::<f32>(data);
     }
     #[inline]
     fn fft_inverse(data: &mut [Self]) {
-        mixed_radix::inverse_inplace_32(data);
+        mixed_radix::inverse_inplace::<f32>(data);
     }
     #[inline]
     fn fft_inverse_unnorm(data: &mut [Self]) {
-        mixed_radix::inverse_inplace_unnorm_32(data);
+        mixed_radix::inverse_inplace_unnorm::<f32>(data);
     }
 }
 

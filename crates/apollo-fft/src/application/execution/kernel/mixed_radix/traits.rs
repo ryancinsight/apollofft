@@ -1,4 +1,9 @@
-use super::*;trait ShortWinogradScalar: winograd::WinogradScalar {
+//! `ShortWinogradScalar` and generic short-DFT dispatch helpers.
+use super::super::radix_stage::normalize_inplace;
+use super::super::winograd;
+use num_complex::{Complex32, Complex64};
+
+pub(crate) trait ShortWinogradScalar: winograd::WinogradScalar {
     fn dft2(a: &mut num_complex::Complex<Self>, b: &mut num_complex::Complex<Self>);
     fn dft4(data: &mut [num_complex::Complex<Self>; 4], inverse: bool);
     fn dft8(data: &mut [num_complex::Complex<Self>; 8], inverse: bool);
