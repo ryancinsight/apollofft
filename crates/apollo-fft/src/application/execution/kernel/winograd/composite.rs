@@ -1,58 +1,43 @@
 mod good_thomas;
+mod large;
+mod medium;
+mod small;
 
 pub(crate) use good_thomas::dft100_impl;
+pub(crate) use large::{dft33_impl, dft35_impl, dft40_impl, dft49_impl, dft50_impl, dft56_impl};
+pub(crate) use medium::{
+    dft18_impl, dft22_impl, dft28_impl, dft30_impl, dft36_impl, dft42_impl, dft45_impl,
+    dft48_impl, dft63_impl,
+};
+pub(crate) use small::{dft10_impl, dft12_impl, dft14_impl, dft6_impl, dft9_impl};
 
 use super::radix::{dft5_array_impl, dft8_impl};
 use super::traits::{apply_twiddle_impl, WinogradScalar};
 use num_complex::Complex64;
-/// Precomputed forward twiddle factors for the 16-point DFT stage.
-///
-/// `W_16^k = exp(-2πi·k/16)` for `k = 0..7`.
-/// Stored as `(cos(2πk/16), -sin(2πk/16))`.
-/// Only k=0..7 are needed (k=0 is trivial; k=1..7 are non-trivial).
-fn twiddle16_fwd(k: usize) -> Complex64 {
-    // Exact values for 16th roots of unity.
-    match k {
-        0 => Complex64::new(1.0, 0.0),
-        1 => {
-            // cos(π/8), -sin(π/8)
-            let c = (2.0f64 + 2.0f64.sqrt()).sqrt() * 0.5;
-            let s = (2.0f64 - 2.0f64.sqrt()).sqrt() * 0.5;
-            Complex64::new(c, -s)
-        }
-        2 => {
-            // cos(π/4), -sin(π/4)
-            const SQ2O2: f64 = std::f64::consts::FRAC_1_SQRT_2;
-            Complex64::new(SQ2O2, -SQ2O2)
-        }
-        3 => {
-            // cos(3π/8), -sin(3π/8)
-            let c = (2.0f64 - 2.0f64.sqrt()).sqrt() * 0.5;
-            let s = (2.0f64 + 2.0f64.sqrt()).sqrt() * 0.5;
-            Complex64::new(c, -s)
-        }
-        4 => Complex64::new(0.0, -1.0),
-        5 => {
-            let c = (2.0f64 - 2.0f64.sqrt()).sqrt() * 0.5;
-            let s = (2.0f64 + 2.0f64.sqrt()).sqrt() * 0.5;
-            Complex64::new(-c, -s)
-        }
-        6 => {
-            const SQ2O2: f64 = std::f64::consts::FRAC_1_SQRT_2;
-            Complex64::new(-SQ2O2, -SQ2O2)
-        }
-        7 => {
-            let c = (2.0f64 + 2.0f64.sqrt()).sqrt() * 0.5;
-            let s = (2.0f64 - 2.0f64.sqrt()).sqrt() * 0.5;
-            Complex64::new(-c, -s)
-        }
-        _ => unreachable!(),
-    }
-}
+/// `W_16^k = W_32^(2k)` for `k = 0..7`: every other entry of `TWIDDLE32_FWD`.
+/// Forward convention: `(cos(2πk/16), -sin(2πk/16))`.
+const TWIDDLE16_FWD: [Complex64; 8] = [
+    Complex64::new(1.0, 0.0),
+    Complex64::new(0.9238795325112867, -0.3826834323650898),
+    Complex64::new(
+        std::f64::consts::FRAC_1_SQRT_2,
+        -std::f64::consts::FRAC_1_SQRT_2,
+    ),
+    Complex64::new(0.38268343236508984, -0.9238795325112867),
+    Complex64::new(0.0, -1.0),
+    Complex64::new(-0.3826834323650897, -0.9238795325112867),
+    Complex64::new(
+        -std::f64::consts::FRAC_1_SQRT_2,
+        -std::f64::consts::FRAC_1_SQRT_2,
+    ),
+    Complex64::new(-0.9238795325112867, -0.3826834323650899),
+];
 
-fn twiddle16_inv(k: usize) -> Complex64 {
-    let w = twiddle16_fwd(k);
-    Complex64::new(w.re, -w.im)
+#[inline(always)]
+fn twiddle16<F: WinogradScalar>(k: usize, inverse: bool) -> num_complex::Complex<F> {
+    let w = TWIDDLE16_FWD[k];
+    let w = if inverse { Complex64::new(w.re, -w.im) } else { w };
+    cast_twiddle(w)
 }
 
 fn cast_twiddle<F: WinogradScalar>(w: Complex64) -> num_complex::Complex<F> {
@@ -85,12 +70,7 @@ pub(crate) fn dft16_impl<F: WinogradScalar>(
 
     // Step 2: apply W_16^k twiddles to odd outputs and butterfly.
     for k in 0..8 {
-        let tw = if inverse {
-            cast_twiddle(twiddle16_inv(k))
-        } else {
-            cast_twiddle(twiddle16_fwd(k))
-        };
-        let o = apply_twiddle_impl(odd[k], tw);
+        let o = apply_twiddle_impl(odd[k], twiddle16(k, inverse));
         data[k] = even[k] + o;
         data[k + 8] = even[k] - o;
     }
@@ -318,7 +298,9 @@ pub(super) fn dft25_impl_const<F: WinogradScalar, const INVERSE: bool>(
     dft5_array_impl(&mut rows[3], INVERSE);
     dft5_array_impl(&mut rows[4], INVERSE);
 
-    for k2 in 0..5 {
-        dft25_column_exp::<F, INVERSE>(&rows, data, k2);
-    }
+    dft25_column_exp::<F, INVERSE>(&rows, data, 0);
+    dft25_column_exp::<F, INVERSE>(&rows, data, 1);
+    dft25_column_exp::<F, INVERSE>(&rows, data, 2);
+    dft25_column_exp::<F, INVERSE>(&rows, data, 3);
+    dft25_column_exp::<F, INVERSE>(&rows, data, 4);
 }

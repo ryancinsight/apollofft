@@ -8,14 +8,13 @@
 use super::super::radix_stage::{normalize_inplace_c32, normalize_inplace_c64};
 use super::super::{radix_composite, stockham};
 use super::caches::{
-    cached_twiddle_fwd_32, cached_twiddle_fwd_64, cached_twiddle_inv_32, cached_twiddle_inv_64,
+    cached_rader_spectrum_32, cached_rader_spectrum_64, cached_twiddle_fwd_32,
+    cached_twiddle_fwd_64, cached_twiddle_inv_32, cached_twiddle_inv_64,
     with_stockham_scratch_32, with_stockham_scratch_64,
 };
 use super::traits::{forward_short_winograd, inverse_short_winograd};
 use num_complex::{Complex32, Complex64};
-use parking_lot::RwLock;
-use std::collections::HashMap;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 mod private {
     pub trait Sealed {}
@@ -137,9 +136,8 @@ impl MixedRadixScalar for f64 {
         inverse: bool,
         generator_inverse: usize,
     ) -> Arc<[Complex64]> {
-        static CACHE: LazyLock<RwLock<HashMap<(usize, bool, usize), Arc<[Complex64]>>>> =
-            LazyLock::new(|| RwLock::new(HashMap::new()));
-        cached_rader_spectrum_impl::<f64, _>(&CACHE, n, inverse, generator_inverse)
+        let key = (n, inverse as usize, generator_inverse);
+        cached_rader_spectrum_64(key, |_| build_rader_spectrum_vec::<f64>(n, inverse, generator_inverse))
     }
 
     #[inline]
@@ -218,9 +216,8 @@ impl MixedRadixScalar for f32 {
         inverse: bool,
         generator_inverse: usize,
     ) -> Arc<[Complex32]> {
-        static CACHE: LazyLock<RwLock<HashMap<(usize, bool, usize), Arc<[Complex32]>>>> =
-            LazyLock::new(|| RwLock::new(HashMap::new()));
-        cached_rader_spectrum_impl::<f32, _>(&CACHE, n, inverse, generator_inverse)
+        let key = (n, inverse as usize, generator_inverse);
+        cached_rader_spectrum_32(key, |_| build_rader_spectrum_vec::<f32>(n, inverse, generator_inverse))
     }
 
     #[inline]
@@ -260,39 +257,14 @@ impl MixedRadixScalar for f32 {
     }
 }
 
-#[inline]
-fn cached_rader_spectrum_impl<F, T>(
-    cache: &'static LazyLock<RwLock<HashMap<(usize, bool, usize), Arc<[T]>>>>,
+fn build_rader_spectrum_vec<F: MixedRadixScalar>(
     n: usize,
     inverse: bool,
     generator_inverse: usize,
-) -> Arc<[T]>
-where
-    F: MixedRadixScalar<Complex = T>,
-    T: Copy + Send + Sync + 'static,
-{
-    let key = (n, inverse, generator_inverse);
-    if let Some(spectrum) = cache.read().get(&key).cloned() {
-        return spectrum;
-    }
-
-    let spectrum = build_rader_spectrum::<F>(n, inverse, generator_inverse);
-    cache
-        .write()
-        .entry(key)
-        .or_insert_with(|| Arc::clone(&spectrum))
-        .clone()
-}
-
-fn build_rader_spectrum<F: MixedRadixScalar>(
-    n: usize,
-    inverse: bool,
-    generator_inverse: usize,
-) -> Arc<[F::Complex]> {
+) -> Vec<F::Complex> {
     let l = n - 1;
-    let padded_len = (2 * l - 1).next_power_of_two();
     let sign = if inverse { 1.0 } else { -1.0 };
-    let mut kernel = vec![F::complex(0.0, 0.0); padded_len];
+    let mut kernel = vec![F::complex(0.0, 0.0); l];
     let mut curr_inv = 1;
     for value in kernel.iter_mut().take(l) {
         let angle = sign * std::f64::consts::TAU * (curr_inv as f64) / (n as f64);
@@ -300,5 +272,5 @@ fn build_rader_spectrum<F: MixedRadixScalar>(
         curr_inv = (curr_inv * generator_inverse) % n;
     }
     crate::application::execution::kernel::mixed_radix::forward_inplace::<F>(&mut kernel);
-    Arc::from(kernel.into_boxed_slice())
+    kernel
 }

@@ -266,3 +266,110 @@ fn dft100_f32_forward_matches_f64() {
         .fold(0.0f32, f32::max);
     assert!(err < 5e-4, "f32 vs f64 DFT-100 max_err={err:.2e}");
 }
+
+// ── DFT-6 ─────────────────────────────────────────────────────────────────────
+
+macro_rules! composite_tests {
+    ($name:ident, $n:literal, $fn:ident, $tol:expr, $ops:expr) => {
+        mod $name {
+            use super::*;
+            #[test]
+            fn forward_matches_direct() {
+                let input: Vec<Complex64> = (0..$n)
+                    .map(|k| Complex64::new((k as f64 * 0.41).sin(), (k as f64 * 0.27).cos()))
+                    .collect();
+                let expected = dft_forward(&input);
+                let mut buf: [Complex64; $n] = input.as_slice().try_into().unwrap();
+                $fn(&mut buf, false);
+                let err = max_err(&buf, &expected);
+                let bound = roundoff_bound(&input, $ops);
+                assert!(err <= bound, "forward max_err={err:.2e}, bound={bound:.2e}");
+            }
+            #[test]
+            fn inverse_matches_direct() {
+                let input: Vec<Complex64> = (0..$n)
+                    .map(|k| Complex64::new((k as f64 * 0.33).cos(), (k as f64 * 0.61).sin()))
+                    .collect();
+                let expected: Vec<Complex64> =
+                    dft_inverse(&input).into_iter().map(|x| x * $n as f64).collect();
+                let mut buf: [Complex64; $n] = input.as_slice().try_into().unwrap();
+                $fn(&mut buf, true);
+                let err = max_err(&buf, &expected);
+                let bound = roundoff_bound(&input, $ops);
+                assert!(err <= bound, "inverse max_err={err:.2e}, bound={bound:.2e}");
+            }
+            #[test]
+            fn roundtrip_recovers_input() {
+                let input: Vec<Complex64> = (0..$n)
+                    .map(|k| Complex64::new((k as f64 * 0.17).sin(), (k as f64 * 0.53).cos()))
+                    .collect();
+                let mut buf: [Complex64; $n] = input.as_slice().try_into().unwrap();
+                $fn(&mut buf, false);
+                $fn(&mut buf, true);
+                let recovered: Vec<Complex64> = buf.iter().map(|x| x / $n as f64).collect();
+                let err = max_err(&recovered, &input);
+                let bound = roundoff_bound(&input, $ops * 2);
+                assert!(err <= bound, "roundtrip max_err={err:.2e}, bound={bound:.2e}");
+            }
+            #[test]
+            fn dc_energy_in_bin0_only() {
+                let mut buf = [Complex64::new(1.0, 0.0); $n];
+                $fn(&mut buf, false);
+                let bound = roundoff_bound(&buf, $ops);
+                assert!(
+                    (buf[0] - Complex64::new($n as f64, 0.0)).norm() <= bound,
+                    "DC bin: {:?}",
+                    buf[0]
+                );
+                for (k, x) in buf[1..].iter().enumerate() {
+                    assert!(x.norm() <= bound, "non-zero bin[{}]: {:?}", k + 1, x);
+                }
+            }
+            #[test]
+            fn f32_forward_matches_f64() {
+                let input64: Vec<Complex64> = (0..$n)
+                    .map(|k| Complex64::new((k as f64 * 0.41).sin(), (k as f64 * 0.27).cos()))
+                    .collect();
+                let input32: Vec<Complex32> = input64
+                    .iter()
+                    .map(|c| Complex32::new(c.re as f32, c.im as f32))
+                    .collect();
+                let mut buf64: [Complex64; $n] = input64.as_slice().try_into().unwrap();
+                let mut buf32: [Complex32; $n] = input32.as_slice().try_into().unwrap();
+                $fn(&mut buf64, false);
+                $fn(&mut buf32, false);
+                let err = buf32
+                    .iter()
+                    .zip(buf64.iter())
+                    .map(|(a, b)| {
+                        let diff =
+                            Complex32::new((a.re - b.re as f32).abs(), (a.im - b.im as f32).abs());
+                        diff.re.max(diff.im)
+                    })
+                    .fold(0.0f32, f32::max);
+                assert!(err < $tol, "f32 vs f64 max_err={err:.2e}");
+            }
+        }
+    };
+}
+
+composite_tests!(dft6_tests, 6, dft6_impl, 1e-4_f32, 100);
+composite_tests!(dft9_tests, 9, dft9_impl, 1e-4_f32, 200);
+composite_tests!(dft10_tests, 10, dft10_impl, 1e-4_f32, 200);
+composite_tests!(dft12_tests, 12, dft12_impl, 1e-4_f32, 300);
+composite_tests!(dft14_tests, 14, dft14_impl, 1e-4_f32, 400);
+composite_tests!(dft18_tests, 18, dft18_impl, 1e-4_f32, 500);
+composite_tests!(dft22_tests, 22, dft22_impl, 1e-4_f32, 600);
+composite_tests!(dft28_tests, 28, dft28_impl, 1e-4_f32, 800);
+composite_tests!(dft30_tests, 30, dft30_impl, 1e-4_f32, 900);
+composite_tests!(dft36_tests, 36, dft36_impl, 1e-4_f32, 1200);
+composite_tests!(dft42_tests, 42, dft42_impl, 1e-4_f32, 1400);
+composite_tests!(dft45_tests, 45, dft45_impl, 1e-4_f32, 1500);
+composite_tests!(dft48_tests, 48, dft48_impl, 1e-4_f32, 1600);
+composite_tests!(dft63_tests, 63, dft63_impl, 1e-4_f32, 2000);
+composite_tests!(dft33_tests, 33, dft33_impl, 1e-4_f32, 1100);
+composite_tests!(dft35_tests, 35, dft35_impl, 1e-4_f32, 1200);
+composite_tests!(dft40_tests, 40, dft40_impl, 1e-4_f32, 1300);
+composite_tests!(dft50_tests, 50, dft50_impl, 1e-4_f32, 1800);
+composite_tests!(dft56_tests, 56, dft56_impl, 1e-4_f32, 2000);
+composite_tests!(dft49_tests, 49, dft49_impl, 1e-4_f32, 1600);

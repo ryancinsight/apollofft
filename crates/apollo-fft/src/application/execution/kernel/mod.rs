@@ -88,7 +88,7 @@ impl FftPrecision for Complex64 {
                 return;
             }
             7 => {
-                winograd::dft7_impl(data, false);
+                winograd::dft7_impl(data.try_into().expect("len=7"), false);
                 return;
             }
             11 => {
@@ -121,7 +121,7 @@ impl FftPrecision for Complex64 {
                 return;
             }
             7 => {
-                winograd::dft7_impl(data, true);
+                winograd::dft7_impl(data.try_into().expect("len=7"), true);
                 radix_stage::normalize_inplace_c64(data, 1.0 / 7.0);
                 return;
             }
@@ -156,7 +156,7 @@ impl FftPrecision for Complex64 {
                 return;
             }
             7 => {
-                winograd::dft7_impl(data, true);
+                winograd::dft7_impl(data.try_into().expect("len=7"), true);
                 return;
             }
             11 => {
@@ -190,7 +190,7 @@ impl FftPrecision for Complex32 {
                 return;
             }
             7 => {
-                winograd::dft7_impl(data, false);
+                winograd::dft7_impl(data.try_into().expect("len=7"), false);
                 return;
             }
             11 => {
@@ -223,7 +223,7 @@ impl FftPrecision for Complex32 {
                 return;
             }
             7 => {
-                winograd::dft7_impl(data, true);
+                winograd::dft7_impl(data.try_into().expect("len=7"), true);
                 radix_stage::normalize_inplace_c32(data, 1.0 / 7.0);
                 return;
             }
@@ -258,7 +258,7 @@ impl FftPrecision for Complex32 {
                 return;
             }
             7 => {
-                winograd::dft7_impl(data, true);
+                winograd::dft7_impl(data.try_into().expect("len=7"), true);
                 return;
             }
             11 => {

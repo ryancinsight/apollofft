@@ -17,6 +17,15 @@ static TWIDDLE_INV_32_CACHE: std::sync::LazyLock<RwLock<HashMap<usize, Arc<[Comp
     std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
 static COMPOSITE_RADIX_CACHE: std::sync::LazyLock<RwLock<HashMap<usize, Option<Arc<[usize]>>>>> =
     std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+static RADER_SPECTRUM_64_CACHE: std::sync::LazyLock<
+    RwLock<HashMap<(usize, usize, usize), Arc<[Complex64]>>>,
+> = std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+static RADER_SPECTRUM_32_CACHE: std::sync::LazyLock<
+    RwLock<HashMap<(usize, usize, usize), Arc<[Complex32]>>>,
+> = std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+static RADER_PERM_CACHE: std::sync::LazyLock<
+    RwLock<HashMap<(usize, usize, usize), Arc<[(usize, usize)]>>>,
+> = std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
 
 thread_local! {
     static TL_FWD_64: RefCell<HashMap<usize, Arc<[Complex64]>>> =
@@ -28,6 +37,12 @@ thread_local! {
     static TL_INV_32: RefCell<HashMap<usize, Arc<[Complex32]>>> =
         RefCell::new(HashMap::with_capacity(8));
     static TL_COMPOSITE_RADIX: RefCell<HashMap<usize, Option<Arc<[usize]>>>> =
+        RefCell::new(HashMap::with_capacity(8));
+    static TL_RADER_SPECTRUM_64: RefCell<HashMap<(usize, usize, usize), Arc<[Complex64]>>> =
+        RefCell::new(HashMap::with_capacity(8));
+    static TL_RADER_SPECTRUM_32: RefCell<HashMap<(usize, usize, usize), Arc<[Complex32]>>> =
+        RefCell::new(HashMap::with_capacity(8));
+    static TL_RADER_PERM: RefCell<HashMap<(usize, usize, usize), Arc<[(usize, usize)]>>> =
         RefCell::new(HashMap::with_capacity(8));
     static TL_STOCKHAM_SCRATCH_64: RefCell<Vec<Complex64>> =
         const { RefCell::new(Vec::new()) };
@@ -222,4 +237,56 @@ pub(crate) fn cached_composite_radices(n: usize) -> Option<Arc<[usize]>> {
 
     TL_COMPOSITE_RADIX.with(|c| c.borrow_mut().insert(n, radices.clone()));
     radices
+}
+
+#[inline]
+fn tl_cached_k3<T: Clone>(
+    tl: &'static std::thread::LocalKey<RefCell<HashMap<(usize, usize, usize), Arc<[T]>>>>,
+    global: &'static std::sync::LazyLock<RwLock<HashMap<(usize, usize, usize), Arc<[T]>>>>,
+    key: (usize, usize, usize),
+    build_fn: impl FnOnce((usize, usize, usize)) -> Vec<T>,
+) -> Arc<[T]> {
+    if let Some(v) = tl.with(|c| c.borrow().get(&key).cloned()) {
+        return v;
+    }
+
+    let v = {
+        let maybe_cached = global.read().get(&key).cloned();
+        if let Some(v) = maybe_cached {
+            v
+        } else {
+            let new_v: Arc<[T]> = Arc::from(build_fn(key));
+            global
+                .write()
+                .entry(key)
+                .or_insert_with(|| Arc::clone(&new_v))
+                .clone()
+        }
+    };
+    tl.with(|c| c.borrow_mut().insert(key, Arc::clone(&v)));
+    v
+}
+
+#[inline]
+pub(crate) fn cached_rader_spectrum_64(
+    key: (usize, usize, usize),
+    build_fn: impl FnOnce((usize, usize, usize)) -> Vec<Complex64>,
+) -> Arc<[Complex64]> {
+    tl_cached_k3(&TL_RADER_SPECTRUM_64, &RADER_SPECTRUM_64_CACHE, key, build_fn)
+}
+
+#[inline]
+pub(crate) fn cached_rader_spectrum_32(
+    key: (usize, usize, usize),
+    build_fn: impl FnOnce((usize, usize, usize)) -> Vec<Complex32>,
+) -> Arc<[Complex32]> {
+    tl_cached_k3(&TL_RADER_SPECTRUM_32, &RADER_SPECTRUM_32_CACHE, key, build_fn)
+}
+
+#[inline]
+pub(crate) fn cached_rader_perm(
+    key: (usize, usize, usize),
+    build_fn: impl FnOnce((usize, usize, usize)) -> Vec<(usize, usize)>,
+) -> Arc<[(usize, usize)]> {
+    tl_cached_k3(&TL_RADER_PERM, &RADER_PERM_CACHE, key, build_fn)
 }
