@@ -7,6 +7,7 @@ pub(crate) trait ShortWinogradScalar: winograd::WinogradScalar {
     fn dft2(a: &mut num_complex::Complex<Self>, b: &mut num_complex::Complex<Self>);
     fn dft3(data: &mut [num_complex::Complex<Self>; 3], inverse: bool);
     fn dft4(data: &mut [num_complex::Complex<Self>; 4], inverse: bool);
+    fn dft5(data: &mut [num_complex::Complex<Self>], inverse: bool);
     fn dft7(data: &mut [num_complex::Complex<Self>; 7], inverse: bool);
     fn dft8(data: &mut [num_complex::Complex<Self>; 8], inverse: bool);
     fn dft15(data: &mut [num_complex::Complex<Self>; 15], inverse: bool);
@@ -31,6 +32,11 @@ impl ShortWinogradScalar for f64 {
     #[inline]
     fn dft4(data: &mut [Complex64; 4], inverse: bool) {
         winograd::dft4_impl(data, inverse);
+    }
+
+    #[inline]
+    fn dft5(data: &mut [Complex64], inverse: bool) {
+        winograd::dft5_impl(data, inverse);
     }
 
     #[inline]
@@ -88,6 +94,11 @@ impl ShortWinogradScalar for f32 {
     #[inline]
     fn dft4(data: &mut [Complex32; 4], inverse: bool) {
         winograd::dft4_impl(data, inverse);
+    }
+
+    #[inline]
+    fn dft5(data: &mut [Complex32], inverse: bool) {
+        winograd::dft5_impl(data, inverse);
     }
 
     #[inline]
@@ -159,6 +170,7 @@ pub(crate) fn short_winograd<F: ShortWinogradScalar>(
         }
         3 => F::dft3(data.try_into().expect("length checked"), inverse),
         4 => F::dft4(data.try_into().expect("length checked"), inverse),
+        5 => F::dft5(data, inverse),
         7 => F::dft7(data.try_into().expect("length checked"), inverse),
         8 => F::dft8(data.try_into().expect("length checked"), inverse),
         15 => F::dft15(data.try_into().expect("length checked"), inverse),

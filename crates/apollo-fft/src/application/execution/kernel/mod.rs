@@ -78,26 +78,48 @@ pub fn fft_inverse_unnorm<C: FftPrecision>(data: &mut [C]) {
 impl FftPrecision for Complex64 {
     #[inline(always)]
     fn fft_forward(data: &mut [Self]) {
-        if data.len() == 3 {
-            winograd::dft3_impl(data, false);
-            return;
+        match data.len() {
+            3 => {
+                winograd::dft3_impl(data, false);
+                return;
+            }
+            5 => {
+                winograd::dft5_impl(data, false);
+                return;
+            }
+            _ => {}
         }
         mixed_radix::forward_inplace::<f64>(data);
     }
     #[inline(always)]
     fn fft_inverse(data: &mut [Self]) {
-        if data.len() == 3 {
-            winograd::dft3_impl(data, true);
-            radix_stage::normalize_inplace_c64(data, 1.0 / 3.0);
-            return;
+        match data.len() {
+            3 => {
+                winograd::dft3_impl(data, true);
+                radix_stage::normalize_inplace_c64(data, 1.0 / 3.0);
+                return;
+            }
+            5 => {
+                winograd::dft5_impl(data, true);
+                radix_stage::normalize_inplace_c64(data, 1.0 / 5.0);
+                return;
+            }
+            _ => {}
         }
         mixed_radix::inverse_inplace::<f64>(data);
     }
     #[inline(always)]
     fn fft_inverse_unnorm(data: &mut [Self]) {
-        if data.len() == 3 {
-            winograd::dft3_impl(data, true);
-            return;
+        match data.len() {
+            3 => {
+                winograd::dft3_impl(data, true);
+                return;
+            }
+            5 => {
+                winograd::dft5_impl(data, true);
+                return;
+            }
+            _ => {}
         }
         mixed_radix::inverse_inplace_unnorm::<f64>(data);
     }
@@ -106,26 +128,48 @@ impl FftPrecision for Complex64 {
 impl FftPrecision for Complex32 {
     #[inline(always)]
     fn fft_forward(data: &mut [Self]) {
-        if data.len() == 3 {
-            winograd::dft3_impl(data, false);
-            return;
+        match data.len() {
+            3 => {
+                winograd::dft3_impl(data, false);
+                return;
+            }
+            5 => {
+                winograd::dft5_impl(data, false);
+                return;
+            }
+            _ => {}
         }
         mixed_radix::forward_inplace::<f32>(data);
     }
     #[inline(always)]
     fn fft_inverse(data: &mut [Self]) {
-        if data.len() == 3 {
-            winograd::dft3_impl(data, true);
-            radix_stage::normalize_inplace_c32(data, 1.0 / 3.0);
-            return;
+        match data.len() {
+            3 => {
+                winograd::dft3_impl(data, true);
+                radix_stage::normalize_inplace_c32(data, 1.0 / 3.0);
+                return;
+            }
+            5 => {
+                winograd::dft5_impl(data, true);
+                radix_stage::normalize_inplace_c32(data, 1.0 / 5.0);
+                return;
+            }
+            _ => {}
         }
         mixed_radix::inverse_inplace::<f32>(data);
     }
     #[inline(always)]
     fn fft_inverse_unnorm(data: &mut [Self]) {
-        if data.len() == 3 {
-            winograd::dft3_impl(data, true);
-            return;
+        match data.len() {
+            3 => {
+                winograd::dft3_impl(data, true);
+                return;
+            }
+            5 => {
+                winograd::dft5_impl(data, true);
+                return;
+            }
+            _ => {}
         }
         mixed_radix::inverse_inplace_unnorm::<f32>(data);
     }

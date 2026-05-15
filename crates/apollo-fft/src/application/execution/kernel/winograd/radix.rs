@@ -282,12 +282,15 @@ pub(crate) fn dft15_impl<F: WinogradScalar>(data: &mut [num_complex::Complex<F>]
 /// d₁,d₂ — each scalar×complex costs 2 real muls). Standard minimal-form
 /// derivation: Winograd (1978), Blahut (2010) §3.3.
 /// **Complex additions**: 10.
-#[inline]
+#[inline(always)]
 pub(crate) fn dft5_impl<F: WinogradScalar>(data: &mut [num_complex::Complex<F>], inverse: bool) {
     debug_assert!(data.len() >= 5);
-    let data: &mut [num_complex::Complex<F>; 5] =
-        (&mut data[..5]).try_into().expect("length checked");
-    dft5_array_impl(data, inverse);
+    let [y0, y1, y2, y3, y4] = dft5_values([data[0], data[1], data[2], data[3], data[4]], inverse);
+    data[0] = y0;
+    data[1] = y1;
+    data[2] = y2;
+    data[3] = y3;
+    data[4] = y4;
 }
 
 #[inline(always)]
@@ -295,6 +298,14 @@ pub(crate) fn dft5_array_impl<F: WinogradScalar>(
     data: &mut [num_complex::Complex<F>; 5],
     inverse: bool,
 ) {
+    *data = dft5_values(*data, inverse);
+}
+
+#[inline(always)]
+fn dft5_values<F: WinogradScalar>(
+    data: [num_complex::Complex<F>; 5],
+    inverse: bool,
+) -> [num_complex::Complex<F>; 5] {
     let c1 = F::cast_f64(0.30901699437494745);
     let c2 = F::cast_f64(-0.8090169943749475);
     let s1 = F::cast_f64(0.9510565162951535);
@@ -306,22 +317,36 @@ pub(crate) fn dft5_array_impl<F: WinogradScalar>(
     };
     let s1 = s1 * sign;
     let s2 = s2 * sign;
-    let t1 = data[1] + data[4];
-    let t2 = data[1] - data[4];
-    let t3 = data[2] + data[3];
-    let t4 = data[2] - data[3];
-    let m0 = data[0] + t1 + t3;
-    let m1 = t1 * c1 + t3 * c2;
-    let m2 = t1 * c2 + t3 * c1;
-    let q3 = t2 * s1 + t4 * s2;
-    let q4 = t2 * s2 - t4 * s1;
-    let m3 = num_complex::Complex::new(-q3.im, q3.re);
-    let m4 = num_complex::Complex::new(-q4.im, q4.re);
-    let s1_add = data[0] + m1;
-    let s2_add = data[0] + m2;
-    data[0] = m0;
-    data[1] = s1_add + m3;
-    data[4] = s1_add - m3;
-    data[2] = s2_add + m4;
-    data[3] = s2_add - m4;
+    let x0 = data[0];
+    let x1 = data[1];
+    let x2 = data[2];
+    let x3 = data[3];
+    let x4 = data[4];
+    let t1_re = x1.re + x4.re;
+    let t1_im = x1.im + x4.im;
+    let t2_re = x1.re - x4.re;
+    let t2_im = x1.im - x4.im;
+    let t3_re = x2.re + x3.re;
+    let t3_im = x2.im + x3.im;
+    let t4_re = x2.re - x3.re;
+    let t4_im = x2.im - x3.im;
+    let m1_re = t1_re * c1 + t3_re * c2;
+    let m1_im = t1_im * c1 + t3_im * c2;
+    let m2_re = t1_re * c2 + t3_re * c1;
+    let m2_im = t1_im * c2 + t3_im * c1;
+    let q3_re = t2_re * s1 + t4_re * s2;
+    let q3_im = t2_im * s1 + t4_im * s2;
+    let q4_re = t2_re * s2 - t4_re * s1;
+    let q4_im = t2_im * s2 - t4_im * s1;
+    let a1_re = x0.re + m1_re;
+    let a1_im = x0.im + m1_im;
+    let a2_re = x0.re + m2_re;
+    let a2_im = x0.im + m2_im;
+    [
+        num_complex::Complex::new(x0.re + t1_re + t3_re, x0.im + t1_im + t3_im),
+        num_complex::Complex::new(a1_re - q3_im, a1_im + q3_re),
+        num_complex::Complex::new(a2_re - q4_im, a2_im + q4_re),
+        num_complex::Complex::new(a2_re + q4_im, a2_im - q4_re),
+        num_complex::Complex::new(a1_re + q3_im, a1_im - q3_re),
+    ]
 }
