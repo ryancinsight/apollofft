@@ -1,4 +1,18 @@
 # Apollo Checklist
+## Closure LXXXVI - Winograd DFT-13 Dispatch and Monomorphization [patch]
+Sprint target version: apollo-fft 0.12.3
+
+- [x] Add a dedicated N=13 Winograd pair-symmetry codelet with f64/f32 scalar
+  trait constants and direct `FftPrecision` fast paths.
+- [x] Encode DFT-13 direction as a const generic so forward/inverse kernels are
+  separately monomorphized and runtime direction dispatch is removed.
+- [x] Add DFT-13 value-semantic tests for forward, inverse, roundtrip, and f32
+  differential equivalence against the direct DFT reference.
+- [x] Move DFT-13 and DFT-3 into `winograd/radix/` leaves; `radix.rs` is now
+  464 lines, `radix/dft13.rs` 475 lines, and `radix/dft3.rs` 43 lines.
+- [x] Verified: Apollo N=13 f64 **82.158 ns** vs RustFFT **94.077 ns**;
+  Apollo N=13 f32 **78.778 ns** vs RustFFT **86.069 ns**.
+
 ## Closure LXXXV - Winograd DFT-7 and N=15 Optimization [patch]
 Sprint target version: apollo-fft 0.12.2
 

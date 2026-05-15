@@ -128,7 +128,11 @@ pub(crate) fn dft7_impl<F: WinogradScalar>(data: &mut [num_complex::Complex<F>],
     let s2 = F::cast_f64(0.9749279121818236);
     let s3 = F::cast_f64(0.4338837391175582);
     // sign = +1 inverse (add sine terms), −1 forward (subtract)
-    let sign = if inverse { F::cast_f64(1.0) } else { F::cast_f64(-1.0) };
+    let sign = if inverse {
+        F::cast_f64(1.0)
+    } else {
+        F::cast_f64(-1.0)
+    };
     let sixi1 = ixi1 * sign;
     let sixi2 = ixi2 * sign;
     let sixi3 = ixi3 * sign;
@@ -264,7 +268,11 @@ fn dft_odd_prime_impl<F: WinogradScalar, const N: usize, const H: usize>(
     }
     data[0] = num_complex::Complex::new(y0_re, y0_im);
 
-    let sign = if inverse { F::cast_f64(1.0) } else { F::cast_f64(-1.0) };
+    let sign = if inverse {
+        F::cast_f64(1.0)
+    } else {
+        F::cast_f64(-1.0)
+    };
     let mut k = 0usize;
     while k < H {
         let mut even_re = x0.re;
@@ -292,51 +300,11 @@ pub(crate) fn dft11_impl<F: WinogradScalar>(data: &mut [num_complex::Complex<F>]
     dft_odd_prime_impl::<F, 11, 5>(data, inverse, &DFT11_COS, &DFT11_SIN);
 }
 
-/// In-place DFT-3.
-///
-/// ## Mathematical derivation
-///
-/// For N=3, W₃ = exp(-2πi/3), the DFT matrix rows give:
-/// ```text
-/// Y[0] = X[0] + X[1] + X[2]
-/// Y[1] = X[0] + W₃¹·X[1] + W₃²·X[2]   (fwd)
-/// Y[2] = X[0] + W₃²·X[1] + W₃¹·X[2]   (fwd)
-/// ```
-/// With W₃¹ = −½ − i·(√3/2) and W₃² = −½ + i·(√3/2):
-/// ```text
-/// Y[1] = (X[0] − (X[1]+X[2])/2) − i·(√3/2)·(X[1]−X[2])
-/// Y[2] = (X[0] − (X[1]+X[2])/2) + i·(√3/2)·(X[1]−X[2])
-/// ```
-/// Conjugate (flip sign on imaginary twiddle component) for inverse.
-///
-/// **Real multiplications**: 4 (two by C3=−½ on re/im of s, two by S3=√3/2
-/// on re/im of id). Matches Winograd's lower bound for DFT-3.
-/// **Complex additions**: 6.
-///
-/// References: Winograd (1978), Blahut (2010) §3.2.
-#[inline(always)]
-pub(crate) fn dft3_impl<F: WinogradScalar>(data: &mut [num_complex::Complex<F>], inverse: bool) {
-    debug_assert!(data.len() >= 3);
-    let s = F::cast_f64(0.8660254037844386);
-    let w_r = F::cast_f64(-0.5);
-    let x0 = data[0];
-    let x1 = data[1];
-    let x2 = data[2];
-    let sum_re = x1.re + x2.re;
-    let sum_im = x1.im + x2.im;
-    let diff_re = x1.re - x2.re;
-    let diff_im = x1.im - x2.im;
-    let m0_re = x0.re + sum_re * w_r;
-    let m0_im = x0.im + sum_im * w_r;
-    let (m1_re, m1_im) = if inverse {
-        (-diff_im * s, diff_re * s)
-    } else {
-        (diff_im * s, -diff_re * s)
-    };
-    data[0] = num_complex::Complex::new(x0.re + sum_re, x0.im + sum_im);
-    data[1] = num_complex::Complex::new(m0_re + m1_re, m0_im + m1_im);
-    data[2] = num_complex::Complex::new(m0_re - m1_re, m0_im - m1_im);
-}
+pub(crate) mod dft13;
+pub(crate) use dft13::dft13_impl;
+
+pub(crate) mod dft3;
+pub(crate) use dft3::dft3_impl;
 
 /// In-place Good-Thomas DFT-15.
 ///

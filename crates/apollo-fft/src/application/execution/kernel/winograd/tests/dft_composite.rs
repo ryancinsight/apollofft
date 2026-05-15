@@ -183,7 +183,10 @@ fn dft100_forward_matches_direct() {
     dft100_impl(&mut buf, false);
     let err = max_err(&buf, &expected);
     let bound = roundoff_bound(&input, 10_000);
-    assert!(err <= bound, "DFT-100 forward max_err={err:.2e}, bound={bound:.2e}");
+    assert!(
+        err <= bound,
+        "DFT-100 forward max_err={err:.2e}, bound={bound:.2e}"
+    );
 }
 
 #[test]
@@ -197,7 +200,10 @@ fn dft100_inverse_matches_direct() {
     dft100_impl(&mut buf, true);
     let err = max_err(&buf, &expected_unnorm);
     let bound = roundoff_bound(&input, 10_000);
-    assert!(err <= bound, "DFT-100 inverse max_err={err:.2e}, bound={bound:.2e}");
+    assert!(
+        err <= bound,
+        "DFT-100 inverse max_err={err:.2e}, bound={bound:.2e}"
+    );
 }
 
 #[test]
@@ -211,7 +217,10 @@ fn dft100_roundtrip_recovers_input() {
     let recovered: Vec<Complex64> = buf.iter().map(|x| x / 100.0).collect();
     let err = max_err(&recovered, &input);
     let bound = roundoff_bound(&input, 20_000);
-    assert!(err <= bound, "DFT-100 roundtrip max_err={err:.2e}, bound={bound:.2e}");
+    assert!(
+        err <= bound,
+        "DFT-100 roundtrip max_err={err:.2e}, bound={bound:.2e}"
+    );
 }
 
 #[test]
@@ -225,7 +234,12 @@ fn dft100_dc_energy_in_bin0_only() {
         buf[0]
     );
     for (k, x) in buf[1..].iter().enumerate() {
-        assert!(x.norm() <= bound, "non-zero bin[{}]: {:?}, bound={bound:.2e}", k + 1, x);
+        assert!(
+            x.norm() <= bound,
+            "non-zero bin[{}]: {:?}, bound={bound:.2e}",
+            k + 1,
+            x
+        );
     }
 }
 

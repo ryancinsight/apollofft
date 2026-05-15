@@ -87,8 +87,9 @@ pub(crate) fn rader_fft<F: MixedRadixScalar>(data: &mut [F::Complex], inverse: b
 
 // ── Permutation cache ─────────────────────────────────────────────────────────
 
-static RADER_PERMUTATION_CACHE: LazyLock<RwLock<HashMap<(usize, usize, usize), Arc<[(usize, usize)]>>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
+static RADER_PERMUTATION_CACHE: LazyLock<
+    RwLock<HashMap<(usize, usize, usize), Arc<[(usize, usize)]>>>,
+> = LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// Returns cached pairs `(g^q mod n, g_inv^q mod n)` for `q = 0..n-1`.
 ///

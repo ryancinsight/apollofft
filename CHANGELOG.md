@@ -6,6 +6,26 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ---
 
+## [0.12.3] - 2026-05-15
+### Added
+- [patch] `apollo-fft`: N=13 now routes through a dedicated Winograd
+  pair-symmetry codelet for f64 and f32, with const-generic direction
+  monomorphization so forward and inverse kernels compile without runtime
+  direction dispatch.
+- [patch] `apollo-fft`: `ShortWinogradScalar::dft13` and direct
+  `FftPrecision` fast paths now cover length 13.
+
+### Changed
+- [patch] `apollo-fft`: split short Winograd leaves into
+  `winograd/radix/dft13.rs` and `winograd/radix/dft3.rs`, keeping each leaf
+  below the repository structural limit while preserving the canonical
+  `winograd::dft*_impl` call surface.
+
+### Fixed
+- [patch] `apollo-fft`: N=13 performance against RustFFT. Latest isolated run:
+  Apollo f64 82.158 ns vs RustFFT 94.077 ns; Apollo f32 78.778 ns vs RustFFT
+  86.069 ns.
+
 ## [0.12.2] - 2026-05-14
 ### Added
 - [patch] `apollo-fft`: `dft7_impl` replaced with Winograd constant algorithm.

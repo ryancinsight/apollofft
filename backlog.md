@@ -1,5 +1,13 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure LXXXVI phase)
+- [x] [patch] Add N=13 Winograd pair-symmetry codelet and dispatch coverage.
+  Direction is encoded as a const generic so forward/inverse variants are
+  separately monomorphized and runtime sign dispatch is eliminated. DFT-13 and
+  DFT-3 leaves now live under `winograd/radix/`, keeping `radix.rs` below 500
+  lines. Apollo N=13 latest run: f64 82.158 ns vs RustFFT 94.077 ns; f32
+  78.778 ns vs RustFFT 86.069 ns. `apollo-fft` bumped to 0.12.3.
+
 ## Closed in this sprint (Closure LXXXV phase)
 - [x] [patch] Replace O(N²) `dft7_impl` with Winograd constant algorithm
   (18 real muls: Hermitian symmetry + circulant cosine/sine matrix). Add `dft7`

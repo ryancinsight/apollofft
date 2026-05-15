@@ -386,3 +386,60 @@ fn dft11_f32_forward_matches_direct() {
     let err = max_err(&got, &expected);
     assert!(err < 1e-5, "DFT-11 f32 forward max_err={err:.2e}");
 }
+
+// ── DFT-13 ───────────────────────────────────────────────────────────────────
+
+#[test]
+fn dft13_forward_matches_direct() {
+    let input: Vec<Complex64> = (0..13)
+        .map(|k| Complex64::new((k as f64 * 0.21).sin(), (k as f64 * 0.39).cos()))
+        .collect();
+    let expected = dft_forward(&input);
+    let mut buf: [Complex64; 13] = input.as_slice().try_into().unwrap();
+    dft13_impl::<f64, false>(&mut buf);
+    let err = max_err(&buf, &expected);
+    assert!(err < 1e-12, "DFT-13 forward max_err={err:.2e}");
+}
+
+#[test]
+fn dft13_inverse_roundtrip() {
+    let input: Vec<Complex64> = (0..13)
+        .map(|k| Complex64::new((k as f64 * 0.31).cos(), -(k as f64 * 0.17).sin()))
+        .collect();
+    let mut buf: [Complex64; 13] = input.as_slice().try_into().unwrap();
+    dft13_impl::<f64, false>(&mut buf);
+    dft13_impl::<f64, true>(&mut buf);
+    let recovered: Vec<Complex64> = buf.iter().map(|x| x / 13.0).collect();
+    let err = max_err(&recovered, &input);
+    assert!(err < 1e-12, "DFT-13 roundtrip max_err={err:.2e}");
+}
+
+#[test]
+fn dft13_inverse_matches_direct() {
+    let input: Vec<Complex64> = (0..13)
+        .map(|k| Complex64::new((k as f64 * 0.47).sin(), (k as f64 * 0.27).cos()))
+        .collect();
+    let expected_unnorm: Vec<Complex64> =
+        dft_inverse(&input).into_iter().map(|x| x * 13.0).collect();
+    let mut buf: [Complex64; 13] = input.as_slice().try_into().unwrap();
+    dft13_impl::<f64, true>(&mut buf);
+    let err = max_err(&buf, &expected_unnorm);
+    assert!(err < 1e-12, "DFT-13 inverse max_err={err:.2e}");
+}
+
+#[test]
+fn dft13_f32_forward_matches_direct() {
+    let input: Vec<Complex64> = (0..13)
+        .map(|k| Complex64::new((k as f64 * 0.25).sin(), (k as f64 * 0.33).cos()))
+        .collect();
+    let expected = dft_forward(&input);
+    let mut buf: [Complex32; 13] =
+        core::array::from_fn(|i| Complex32::new(input[i].re as f32, input[i].im as f32));
+    dft13_impl::<f32, false>(&mut buf);
+    let got: Vec<Complex64> = buf
+        .iter()
+        .map(|x| Complex64::new(x.re as f64, x.im as f64))
+        .collect();
+    let err = max_err(&got, &expected);
+    assert!(err < 1e-5, "DFT-13 f32 forward max_err={err:.2e}");
+}
