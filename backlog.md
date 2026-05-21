@@ -1,5 +1,403 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure CVX phase)
+- [x] [patch] Reduce runtime Rader and ordered-Rader Good-Thomas permutation
+  cache memory by retaining only the generator-order table. The inverse
+  generator order used for scatter is derived exactly from the cyclic group
+  identity `g^{-q} = g^(N-1-q)` for prime `N`, so the cached scatter array is
+  no longer independent state. This removes `N-1` retained `usize` values per
+  cached prime/generator pair; for N=10007 on 64-bit targets this removes
+  10006 `usize` values, or 80,048 bytes, from the runtime Rader permutation
+  cache. Verification covers the identity directly, Rader direct-DFT and
+  half-cyclic/full-cyclic equivalence, ordered Good-Thomas routes, `xtask`
+  compile, and focused half-cyclic Criterion execution under the local
+  opt-level 1 bench profile.
+
+## Closed in this sprint (Closure CVIX phase)
+- [x] [patch] Reduce half-cyclic Rader cache-build memory by streaming the
+  length `N-1 = 2m` kernel directly into cyclic and negacyclic CRT residues.
+  The previous builder materialized a full `2m` kernel plus two `m` residue
+  buffers before FFTing the residues. The new builder retains only the two
+  residue buffers, eliminating `2m` complex values of peak temporary storage
+  and one explicit split pass. For N=10007 this removes 10006 temporary complex
+  values from the build path: 160,096 bytes for f64 complex spectra and 80,048
+  bytes for f32 complex spectra. Rader-focused correctness checks pass, and the
+  focused opt-level 1 benchmark shows N=1031 forced half-cyclic f64/f32 rows
+  improved while smaller forced rows remain noisy and below the production
+  threshold.
+
+## Closed in this sprint (Closure CVIII phase)
+- [x] [patch] Integrate the Liu-Tolimieri half-cyclic convolution strategy
+  into runtime Rader prime FFT execution without retaining a Bluestein fallback
+  path. Rader now factors the length `N-1 = 2m` cyclic convolution through the
+  CRT identity `x^(2m)-1 = (x^m-1)(x^m+1)`, computes cyclic and negacyclic
+  length-`m` residues, and recombines lower/upper halves in place. Automatic
+  production routing is conservative at `N-1 >= 1024` for both f64 and f32;
+  forced strategy hooks remain feature-gated for tests and benchmarks. Focused
+  Rader tests pass against direct DFT references and the N=10007 large-prime
+  roundtrip. The final local optimized benchmark completed with
+  `CARGO_PROFILE_BENCH_QUICK_OPT_LEVEL=1`; default bench-quick codegen was
+  terminated before Criterion emitted rows in this environment.
+
+## Closed in this sprint (Closure CVII phase)
+- [x] [patch] Convert fixed coprime Good-Thomas dispatch from ad hoc route
+  plumbing into a proc-macro-derived support/match surface backed by one
+  bounded const-generic PFA codelet. The generator derives canonical coprime
+  pairs from one `short_sizes` list and `max_n`; the retained implementation
+  specializes `(N1, N2, N, INVERSE)` through monomorphization and uses const
+  CRT maps plus direct `ShortDft<N>` row/column transforms. The partial
+  proc-macro short-codelet refactor is now complete: `ShortDft<N>` is a
+  derived blanket capability rather than a cyclic `ShortWinogradScalar`
+  supertrait requirement, and `generate_winograd_fft!` is exported again. A
+  full unrolled per-pair body prototype passed value checks but was rejected
+  because the bench/release codegen path exceeded the bounded verification
+  budget. The review-comment rows demonstrate that monomorphization is not
+  route equivalence: N=9 is a prime-power short codelet,
+  N=84/N=90/N=150/N=175 are fixed coprime PFA shapes with different subfactor
+  costs, and N=94 is the direct `2*p` promoted-prime route. A focused N=44
+  probe improved Apollo from the prior table row but still missed RustFFT at
+  120.96 ns vs 78.51 ns for f64 and 145.49 ns vs 91.35 ns for f32, so
+  `benchmark_results.md` was not rewritten for that row. Targeted
+  quick-profile rows were regenerated for N=84/N=90/N=94/N=150/N=175. N=94
+  remains a RustFFT win at 0.729x f64 and 0.519x f32; N=150 f64 is near parity
+  at 1.042x; N=84/N=90/N=175 and f32 N=150 remain misses that need route-cost
+  adaptation instead of more size-specific code. A focused N=10 refresh shows
+  the apparent f32-only regression was stale Criterion data: current N=10 is
+  40.75 ns Apollo vs 55.60 ns RustFFT for f64 and 42.38 ns Apollo vs 51.42 ns
+  RustFFT for f32. `xtask benchmark --sizes ...` now treats subset runs as row
+  merges, and the normal measurement path is the optimized `xtask` bounded
+  adaptive clone-inclusive runner rather than a Criterion subprocess. The
+  already-built optimized `xtask` binary rewrote the full canonical table in
+  65.6 seconds. A focused N=77 refresh first closed the stale 4.739x f32
+  mixed-epoch Criterion row, then the shared odd-prime-pair DFT kernel was
+  changed from iterator-zip arithmetic to const-indexed loops with native
+  `one()` sign selection. Current N=77 is 199.94 ns Apollo vs 103.96 ns
+  RustFFT for f64 and 235.34 ns Apollo vs 78.52 ns RustFFT for f32. The route
+  remains canonical fixed Good-Thomas `(11, 7)`; the remaining f32 disparity
+  is a real route-cost/vectorization gap, not dynamic dispatch or stale table
+  evidence.
+
+## Closed in this sprint (Closure CVI phase)
+- [x] [patch] Add generated short Good-Thomas codelets for N=18, N=24, and
+  N=36 without hand-written per-size arithmetic bodies. The new leaves are
+  built from existing short factors through `generate_good_thomas!` and routed
+  through the canonical short-Winograd dispatch. Generic natural and ordered
+  PFA now use the existing thread-local PFA scratch allocation for column
+  buffers instead of allocating a fresh `Vec` per transform. A broader generated
+  fixed coprime dispatch was prototyped and rejected for this increment because
+  optimized ThinLTO release builds did not complete reliably under the current
+  codegen profile. The direct generated `2*p` natural-prime path now uses a
+  twiddle-free Good-Thomas row/column codelet across the promoted-prime family,
+  and `xtask benchmark` now defaults to a quick Criterion profile plus an
+  optimized `bench-quick` Cargo profile for iterative table refreshes.
+  `benchmark_results.md` was regenerated for N=38/N=58/N=74/N=82/N=94.
+  N=94 remains faster than RustFFT in both precisions; N=38/N=58/N=74/N=82
+  remain measured misses, with N=74 f32 the largest current regression.
+
+## Closed in this sprint (Closure CV phase)
+- [x] [patch] Correct the natural Good-Thomas PFA CRT scatter layout. The
+  cached PFA output permutation is keyed by transformed column-major frequency
+  coordinates `(k2, k1)`, so the natural PFA kernel now indexes
+  `output_perm[k2 * n1 + k1]` instead of row-major `k1 * n2 + k2`.
+  Direct-DFT forward and unnormalized inverse tests cover a nontrivial
+  coprime natural PFA shape. The same closure completed the stale Winograd
+  const-generic direction migration exposed by a fresh rebuild: generated
+  Good-Thomas, production short-codelet dispatch, and unit tests now target
+  the current `const INVERSE` DFT-3/7/8/15 entry points. The generated `3*p`
+  Good-Thomas route now emits direct const-generic column and row codelet calls
+  from one proc-macro prime list instead of relying on a separate short-codelet
+  adapter surface. The canonical `vs_rustfft` f64/f32 Criterion table now also
+  includes N=38/N=58/N=74/N=82/N=94. Fresh targeted rows show N=33 still
+  misses RustFFT at 1.419x f64 and 1.778x f32, while N=94 now beats RustFFT at
+  0.665x f64 and 0.726x f32. `xtask benchmark` is now the single active
+  benchmark runner/table generator for `benchmark_results.md`; the old Python
+  extractor, quick comparison example, duplicate validation `vs_rustfft` bench,
+  and bench output logs were removed. `apollo-fft` bumped to 0.12.22.
+
+## Closed in this sprint (Closure CIV phase)
+- [x] [patch] Move Good-Thomas family dispatch deeper into proc-macro
+  generation. The `3*p` generator now emits the complete per-prime transform
+  body, not closure parameters around a hand-written driver, and the direct
+  Winograd-pair `2*p` route now uses `generate_two_by_prime_natural_dispatch!`
+  from one prime/half-size table. The sealed Winograd scalar contract now
+  carries the prime-pair table capability required by generated dispatch in
+  release builds. The hand DFT-3 codelet remains selected because the current
+  generated Winograd direct-DFT prototype has not been proven faster.
+  `benchmark_results.md` was regenerated after a targeted N=33 Criterion
+  refresh; N=33 records f64 Apollo/RustFFT 94.34 ns / 68.16 ns and f32
+  Apollo/RustFFT 108.75 ns / 64.81 ns. `apollo-fft` bumped to 0.12.21.
+
+## Closed in this sprint (Closure CIII phase)
+- [x] [patch] Fuse more of the compact Good-Thomas `3*p` route into generated
+  code without deleting retained FFT components. `generate_three_by_prime_dispatch!`
+  now emits per-prime CRT gather/scatter functions from the single supported
+  prime list, and `three_by_prime_impl` receives those generated functions as
+  monomorphized parameters. The runtime kernel keeps the generic
+  `MixedRadixScalar` contract and uses `short_winograd_const` for const-size
+  row codelet dispatch. Generated Rader now matches the runtime generator
+  convention and uses exact f64 constants; direct static Rader expansion is
+  intentionally bounded to 5/7/11/13 until the generator can emit a scalable
+  convolution form. `benchmark_results.md` was regenerated from the canonical
+  Criterion cache; N=33 records f64 Apollo/RustFFT 93.00 ns / 64.92 ns and f32
+  Apollo/RustFFT 108.00 ns / 67.49 ns. `apollo-fft` bumped to 0.12.20.
+
+## Closed in this sprint (Closure CII phase)
+- [x] [patch] Move the compact Good-Thomas `3*p` dispatch surface from
+  hand-written duplicated match arms to the internal `apollo-fft-macros`
+  generator. `generate_three_by_prime_dispatch!` now owns the single
+  short-prime list and emits the support predicate plus monomorphized
+  `(P, inverse)` dispatch arms. The numerical kernel remains the existing
+  generic `three_by_prime_impl` over `MixedRadixScalar` and
+  `ThreeByPrimePlan<const P>`, so the runtime path stays statically
+  dispatched and no retained Rader, Good-Thomas, Winograd, butterfly,
+  Stockham, or four-step component was removed. `benchmark_results.md` was
+  regenerated from the canonical Criterion cache; N=33 still records f64
+  Apollo/RustFFT 101.49 ns / 70.27 ns and f32 Apollo/RustFFT 121.28 ns /
+  78.91 ns. `apollo-fft` bumped to 0.12.19.
+
+## Closed in this sprint (Closure CI phase)
+- [x] [patch] Move the compact Good-Thomas `3*p` route toward the generator
+  architecture described by the root `gen*.md` notes. Added
+  `ThreeByPrimePlan<const P>` so CRT input and output maps, including modular
+  inverses, are derived in `const fn` once per monomorphized short-prime
+  factor. The hot transform body now indexes precomputed CRT maps rather than
+  calculating modulo-based input/output routes. This is the stable Rust
+  foundation for a future proc-macro SSA route generator and keeps the current
+  code maintainable and verifiable. `benchmark_results.md` was regenerated
+  from completed Criterion rows; N=33 now records f64 Apollo/RustFFT
+  101.49 ns / 70.27 ns and f32 Apollo/RustFFT 121.28 ns / 78.91 ns.
+  `apollo-fft` bumped to 0.12.18.
+
+## Closed in this sprint (Closure C phase)
+- [x] [patch] Close the N=33 routing gap without deleting retained FFT
+  components. N=33 is `3*11`, so it has a coprime Good-Thomas decomposition,
+  but the dispatcher previously selected the prime-23 mixed-radix composite
+  `[11, 3]` route first. Added a compact `3*p` Good-Thomas CRT codelet for
+  short-prime factors 5/7/11/13/17/23 and route that verified structural
+  family before `cached_prime23_radices`. Existing radix-composite,
+  Good-Thomas, Rader, Winograd, butterfly, Stockham, and four-step components
+  remain available. The benchmark-only ordered-Rader hook was also updated to
+  the current ordered-Rader API. `benchmark_results.md` was regenerated from
+  Criterion; N=33 now records f64 Apollo/RustFFT 104.08 ns / 69.15 ns and f32
+  Apollo/RustFFT 128.21 ns / 63.15 ns. `apollo-fft` bumped to 0.12.17.
+
+## Closed in this sprint (Closure XCIX phase)
+- [x] [patch] Remove typed real-storage conversion temporaries from
+  caller-owned execution paths. f64, f32, and compact f16 `forward_*_into`
+  implementations now fill the caller-owned complex spectrum buffer directly
+  with one `Zip` pass before executing the existing monomorphized 1D/2D/3D
+  plans in place. The matching `inverse_*_into` implementations now copy the
+  input spectrum into caller-owned scratch, execute the inverse plan, and fill
+  real output directly from scratch without allocating a mapped temporary.
+  Allocating typed forward paths also avoid the previous complex-array clone by
+  transforming the mapped output in place. Compact f16 still converts only at
+  the storage boundary and executes through the f32 plan family. No Rader,
+  Good-Thomas, Winograd, butterfly, Stockham, or four-step component was
+  removed. `benchmark_results.md` remains the single canonical
+  Apollo-vs-RustFFT f64/f32 clone-inclusive table and was regenerated from the
+  current Criterion cache snapshot. `apollo-fft` bumped to 0.12.16.
+
+## Closed in this sprint (Closure XCVIII phase)
+- [x] [patch] Reconcile generic FFT plans with typed real-storage cache
+  policy. `FftPlan1D`, `FftPlan2D`, and `FftPlan3D` now remain generic over
+  the mixed-radix scalar contract, while public typed real FFT helpers resolve
+  plan precision through `RealFftData::PlanScalar` and `PlanCacheProvider`.
+  Native f64/f32 storage keeps native cached plan families; compact f16 storage
+  delegates to f32 plans at the storage boundary instead of forcing
+  `f16: MixedRadixScalar`. The power-of-two fast path now starts at N>=64 so
+  N=16/N=32 stay on the faster current short-codelet route, and all retained
+  Rader, Good-Thomas, Winograd, butterfly, Stockham, and four-step components
+  remain available until measured replacements beat RustFFT.
+  `benchmark_results.md` remains the single canonical Apollo-vs-RustFFT f64/f32
+  clone-inclusive table and was regenerated from the current Criterion cache
+  snapshot. `apollo-fft` bumped to 0.12.15.
+
+## Closed in this sprint (Closure XCVII phase)
+- [x] [patch] Restore scalable power-of-two routing without deleting retained
+  components. Mixed-radix dispatch now sends every power-of-two length N>=16
+  through one generic fast-path before small Winograd, composite, PFA, or Rader
+  routing can claim the shape. The fast-path uses Stockham for asymmetric
+  powers and retains square four-step for even-exponent lengths above the
+  four-step threshold, preserving N=2/N=4/N=8 short codelets. This fixes the
+  N=32768 selector fallthrough/no-op risk exposed by the benchmark table.
+  `FftPlan1D` now uses the generic mixed-radix twiddle and scratch-cache APIs
+  directly instead of removed precision suffix helpers, and exposes the same
+  generic caller-owned typed forward/inverse methods as 2D/3D plans for
+  zero-allocation benchmark compilation. Rader, Good-Thomas, Winograd,
+  butterfly, Stockham, and four-step implementations remain available until a
+  measured replacement beats RustFFT.
+  `benchmark_results.md` remains the single canonical Apollo-vs-RustFFT f64/f32
+  clone-inclusive table and was regenerated from the current Criterion cache
+  snapshot. `apollo-fft` bumped to 0.12.14.
+
+## Closed in this sprint (Closure XCVI phase)
+- [x] [patch] Reduce small-coprime composite routing overhead without deleting
+  retained components. N=6, N=10, N=12, and N=14 now use stack-resident
+  Good-Thomas CRT codelets built from the existing Winograd DFT-3/4/5/7 leaves,
+  bypassing the generic mixed-radix scratch/twiddle route for these shapes.
+  The route remains monomorphized through `short_winograd`, no Rader,
+  Good-Thomas, Winograd, butterfly, or composite component was removed, and
+  retained routes stay available until measured replacements beat RustFFT.
+  The obsolete private Good-Thomas gather helper left unused by the fused
+  ordered-Rader PFA path was removed to resolve the bench build dead-code
+  warning at source.
+  `benchmark_results.md` remains the single canonical Apollo-vs-RustFFT f64/f32
+  clone-inclusive table. `apollo-fft` bumped to 0.12.13.
+
+## Closed in this sprint (Closure XCV phase)
+- [x] [patch] Reduce Rader negacyclic convolution memory traffic across
+  large-prime routes. The Nussbaumer split now writes the negacyclic half in
+  already-twisted form, and CRT recombination multiplies by the conjugate
+  twist while combining cyclic and negacyclic results. This removes two
+  standalone full passes over the negacyclic half while keeping the same
+  mathematical decomposition, fused radix-composite pointwise dispatch, and all
+  retained Rader, Good-Thomas, Winograd, butterfly, and composite routes.
+  `benchmark_results.md` remains the single canonical Apollo-vs-RustFFT f64/f32
+  clone-inclusive table. `apollo-fft` bumped to 0.12.12.
+
+## Closed in this sprint (Closure XCIV phase)
+- [x] [patch] Reduce promoted-prime permutation and Rader convolution memory
+  traffic without deleting retained kernels. Direct `2*p` Good-Thomas routing
+  now calls one monomorphized Winograd-pair two-prime kernel that consumes the
+  original interleaved even/odd input, eliminating the previous even-half stack
+  copy and odd-half compaction pass across every `PrimePairTable<P, H>` direct
+  route. The f32/f64 scalar implementations now satisfy the
+  `composite_forward_with_pointwise` contract, so Rader circular and
+  negacyclic convolution can fuse supported radix-composite forward FFT stages
+  with spectrum multiplication instead of running a separate pointwise pass.
+  No Rader, Good-Thomas, Winograd, butterfly, or composite route was removed.
+  `benchmark_results.md` remains the single canonical Apollo-vs-RustFFT f64/f32
+  clone-inclusive table. `apollo-fft` bumped to 0.12.11.
+
+## Closed in this sprint (Closure XCIII phase)
+- [x] [patch] Reduce generic fused-routing and Good-Thomas permutation
+  overhead. Radix-composite scalar fallback stages now walk destination blocks
+  through `chunks_exact_mut(stage_chunk)`, so one const-radix monomorphized
+  stage dispatch covers each output block without recomputing slice bounds.
+  Final fused pointwise multiplication now uses raw pointer traversal over the
+  contiguous output block under the existing length contract. Good-Thomas
+  natural and ordered-Rader PFA gather/scatter loops now use cached-permutation
+  length assertions and four-wide unchecked copies. No Rader, Good-Thomas,
+  Winograd, butterfly, or composite route was removed; retained components stay
+  available until a measured replacement beats RustFFT. The retained Winograd
+  N=82 composite codelet now carries the required `PrimePairTable<41, 20>`
+  bound. `benchmark_results.md` was regenerated from the Criterion cache plus
+  the latest quick strategy and selected public comparisons. `apollo-fft`
+  bumped to 0.12.10.
+
+## Closed in this sprint (Closure XCII phase)
+- [x] [patch] Reduce radix-composite dispatch overhead and refresh benchmark
+  evidence. Recursive fused-composite scratch arena logic now lives in the
+  cohesive `radix_composite::adaptive` leaf, bringing `arity.rs` back under the
+  repository structural limit. The flat fused Stockham path now dispatches
+  scalar fallback stages through one const-radix match per stage instead of one
+  match per output group, preserving the existing f64 AVX2 radix-3/radix-4
+  hooks and improving routing adaptability for every scalar fallback radix.
+  The final fused pointwise spectrum multiply now uses one contiguous output
+  pass instead of a radix/column nested loop.
+  Rader benchmark routing now targets the shared generic Rader kernel and real
+  Winograd-pair kernels, and stable-Rust static Rader permutation tables remain
+  compile-time constants per prime dispatch arm.
+  Winograd large-composite leaves remain available; no composite component is
+  gated or removed before a measured RustFFT-beating replacement exists.
+  `benchmark_results.md` was regenerated from all available Criterion
+  `new/estimates.json` records and the latest debug Rader-vs-Winograd-pair
+  quick strategy comparison. `apollo-fft` bumped to 0.12.9.
+
+## Closed in this sprint (Closure XCI phase)
+- [x] [patch] Optimize Rader Bluestein cache retention and inverse pointwise
+  execution. Bluestein now caches `(chirp_fw, kernel_fw)` only; the inverse
+  path derives `conj(kernel_fw)` from the even cyclic kernel identity instead
+  of retaining a second M-length spectrum. The pre-chirp, zero-pad, post-chirp,
+  and conjugated pointwise stages route through the f64/f32 SIMD dispatchers.
+  The SIMD zero-fill count is corrected to typed element lanes. For N=10007,
+  M=20736, the persistent cache entry saves one M-length spectrum: 331,776
+  bytes for f64 complex data or 165,888 bytes for f32 complex data per cached
+  prime/precision entry. `apollo-fft` bumped to 0.12.8.
+
+## Closed in this sprint (Closure XC phase)
+- [x] [patch] Optimize standalone Rader memory traffic and retained scratch.
+  Standalone generated and runtime Rader now compute the nonzero DC contribution
+  while gathering primitive-root ordered inputs, removing the previous separate
+  full pass over `data[1..N]`. Static-table and runtime scatter loops now use
+  the same unrolled unchecked-index shape as the gather path. Rader padded
+  scratch now retains one aligned thread-local buffer per precision and uses a
+  local nested-call fallback instead of retaining a two-buffer pool, reducing
+  persistent per-thread Rader scratch retention by one maximum-size buffer.
+  Direct-DFT Rader coverage passes, `cargo check -p apollo-fft` passes with
+  pre-existing odd-prime-pair dead-code warnings, and release strategy-only
+  `quick_compare` records Rader latencies of 148/126 ns at N=29, 121/123 ns at
+  N=31, and 138/136 ns at N=37 for f64/f32. The current comparison hook's
+  Winograd column aliases Rader, so these numbers are recorded as Rader absolute
+  latency only. `apollo-fft` bumped to 0.12.7.
+
+## Closed in this sprint (Closure LXXXIX phase)
+- [x] [patch] Restore fused radix-composite Stockham dispatch and radix-4
+  factorization verification.
+  The fused dispatcher now routes `Fused2` through `Fused6` ZST arity types
+  through `ExecutionPolicy` chunk dispatch, corrects each fused twiddle slice to
+  `(radix - 1) * prev_len * prior_product`, and lowers consecutive radix-2
+  pairs to radix-4 stages while keeping `factorize_composite` prime-only.
+  The rejected highest-power lowering probe was removed because it emitted
+  unsupported radix 16. `Radix<R>` and fallback dispatch now cover 4, 8, 17, and 23;
+  nested fused `Compose` stages reserve their complete recursive arena scratch
+  before exposing midpoint pointers. Direct Winograd coverage for N=17 and N=23
+  remains active. N=29/N=31/N=37 now route through the no-gather Winograd-pair
+  kernels after bounded Rader-vs-Winograd comparison showed Winograd-pair still
+  faster for these small primes. Generated Rader remains available for larger
+  primes and gated comparison, but generated leaves N=17..97 now route through
+  one const-generic `rader_static_impl::<F, N, G, G_INV>` body with fused
+  gather+x0 accumulation, fused scatter+x0 offset, and final-forward-stage
+  composite pointwise fusion for the convolution spectrum. N=29/N=31/N=37
+  Rader comparison leaves now use static gather/scatter permutation tables to
+  remove runtime modular-index recurrence from the small-prime Rader hot loop.
+  The ordered-layout Rader leaf now consumes generator-ordered nonzero inputs,
+  emits inverse-generator-ordered nonzero outputs, and reuses `data[1..]` as
+  the convolution buffer so fused callers can bypass standalone Rader
+  gather/scatter and scratch copy without changing the natural-order dispatch.
+  Good-Thomas PFA now uses that ordered leaf for prime `n1` subtransforms that
+  would otherwise route through Rader: the PFA transpose writes generator-order
+  columns, ordered Rader runs in place, and the final CRT scatter consumes the
+  inverse-generator output order. N=29/N=31/N=37 remain excluded from that PFA
+  branch so the measured Winograd-pair production choice is preserved.
+  The ordered-Rader PFA branch now reuses the same cached generator and
+  inverse-generator permutation arrays as standalone Rader, removing runtime
+  modular index recurrence from the transpose/scatter layout conversion.
+  Stale radix-composite fallback dispatch code was removed from the module
+  graph. Closure XCII supersedes the earlier composite export narrowing:
+  retained large Winograd leaves remain available until a measured replacement
+  beats RustFFT. Radix-shape tests now encode the radix-4 promotion invariant
+  (`192 = 3 * 4^3`). Earlier
+  bounded debug Winograd/Rader ratios are 0.345/0.541 at N=29, 0.309/0.710 at
+  N=31, and 0.414/0.883 at N=37 for f64/f32. Earlier release strategy-only
+  Winograd/Rader ratios are 0.206/0.476 at N=29, 0.368/0.566 at N=31, and
+  0.334/0.555 at N=37 for f64/f32. Rader latency improved versus the previous
+  restored fused-path probe, but Winograd-pair remains faster for these
+  small-prime strategy rows. Latest release production comparison:
+  N=29 Apollo 0.096 us vs RustFFT 0.107 us; N=31 0.104 us vs 0.105 us; N=37
+  0.147 us vs 0.132 us. Ordered-Rader PFA probe hooks now cover
+  N=38/N=82/N=86/N=94/N=106 through `APOLLO_FFT_QUICK_N` and the
+  `ordered_rader_pfa_coprime_composites` Criterion group. Latest release
+  ordered-Rader PFA ratios against RustFFT are 6.433, 2.581, 2.505, 1.845, and
+  2.455 respectively. The follow-up production increment added a dedicated
+  `good_thomas::two_by_prime` route for N=2p, promoted
+  N=19/N=29/N=31/N=37/N=41/N=43/N=47/N=53 to the shared odd-prime
+  Winograd-pair kernel, moved odd-prime pair code into
+  `winograd/radix/odd_prime_pair.rs`, expanded benchmark hooks, and removed the
+  stale dedicated DFT-82 codelet so N=82 falls through to the optimized
+  two-by-prime route. The follow-up memory increment loads the even half of
+  promoted N=2p composites into a const-generic stack array and compacts the
+  odd half in place before fused two-prime Winograd execution, bypassing
+  thread-local PFA scratch on that route. Latest release prime-leaf ratios
+  against RustFFT are 0.907, 0.972, 0.736, 0.799, 0.720, 0.599, 0.582, and
+  0.909 for N=19/N=29/N=31/N=37/N=41/N=43/N=47/N=53. Latest two-by-prime ratios
+  are 1.514, 1.195, 1.228, 1.059, 1.025, 0.943, 0.587, and 0.757 for
+  N=38/N=58/N=62/N=74/N=82/N=86/N=94/N=106; N=38 remains the largest composite
+  gap, while N=58/N=62/N=74/N=82 are marginal misses in the bounded probe.
+  The remaining declarative composite-test generator was replaced by a
+  const-generic helper and grouped explicit tests, preserving all value checks
+  while keeping the test leaf under 500 lines. `apollo-fft` bumped to 0.12.6.
+
 ## Closed in this sprint (Closure LXXXVIII phase)
 - [x] [patch] Add N=23 Winograd pair-symmetry codelet and dispatch coverage.
   The DFT-23 kernel uses eleven conjugate input pairs, const-generic

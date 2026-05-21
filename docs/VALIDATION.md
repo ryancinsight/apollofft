@@ -204,7 +204,7 @@ The benchmark group compares:
 
 - `direct_dft`: the O(N^2) analytical baseline.
 - `radix2_inplace`: the power-of-two Cooley-Tukey path.
-- `bluestein_inplace`: the arbitrary-length chirp-Z path.
+- `generic_prime_inplace`: the prime-length Rader/Winograd path.
 
 These benchmarks are performance diagnostics only. Correctness remains enforced
 by unit and property tests against analytical identities and direct references.
@@ -217,6 +217,9 @@ by unit and property tests against analytical identities and direct references.
 - FFT 2D row passes and 3D innermost-axis passes now transform contiguous
   backing-slice chunks directly with Rayon, eliminating the full-field
   `Vec<Vec<Complex>>` lane-copy allocation for those axes.
+- Runtime Rader and ordered-Rader Good-Thomas paths retain only the
+  generator-order table; inverse-generator scatter order is derived from
+  `g^{-q}=g^(N-1-q)` and validated against the modular inverse power sequence.
 - FFT 3D typed caller-owned paths cover `f64`, `f32`, and mixed `f16` storage:
   callers can reuse output and scratch spectra instead of allocating a new
   full-volume complex field on each forward/inverse pass.
@@ -230,14 +233,14 @@ by unit and property tests against analytical identities and direct references.
   by reusing the generic Hadamard butterfly schedule, using `f32` compute for
   mixed `f16`, and rejecting profile/storage mismatches.
 - CZT typed caller-owned paths now cover `Complex64`, `Complex32`, and mixed
-  `[f16; 2]` storage by reusing the authoritative Bluestein path and rejecting
-  profile/storage mismatches.
+  `[f16; 2]` storage by reusing the authoritative convolution path and
+  rejecting profile/storage mismatches.
 - FrFT typed caller-owned paths now cover `Complex64`, `Complex32`, and mixed
   `[f16; 2]` storage by reusing the authoritative direct fractional-kernel path
   and rejecting profile/storage mismatches.
-- CZT Bluestein execution reuses its convolution workspace after the forward
-  FFT, multiplies by the precomputed kernel in place, and inverse-transforms the
-  same buffer instead of copying to a separate product vector.
+- CZT convolution execution reuses its workspace after the forward FFT,
+  multiplies by the precomputed kernel in place, and inverse-transforms the same
+  buffer instead of copying to a separate product vector.
 - FWHT exposes caller-owned real and complex output paths that copy once into
   the output buffer and then reuse the in-place butterfly kernel.
 - FrFT integer-order plans store finite cotangent/cosecant state for singular

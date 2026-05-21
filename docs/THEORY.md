@@ -15,7 +15,21 @@ Apollo FFT paths use a shared normalization convention:
 ## Fourier Algorithms
 
 - Iterative Cooley-Tukey radix-2 factorization for power-of-two CPU lengths.
-- Bluestein/Chirp-Z convolution reduction for arbitrary CPU lengths.
+- Rader prime-length DFT reduction: for prime `N`, the non-zero indices form
+  a cyclic multiplicative group, so the non-DC DFT bins reduce to a length
+  `N-1` cyclic convolution. For `N-1 = 2m`, Apollo can use the half-cyclic
+  Liu-Tolimieri/Winograd-style CRT split:
+  `x^(2m)-1 = (x^m-1)(x^m+1)`. The residues compute one cyclic and one
+  negacyclic length-`m` convolution, and recombination recovers the original
+  lower and upper halves exactly in exact arithmetic. Production routing is
+  scalar-policy driven: current f32 and f64 routing enables the split at
+  `N-1 >= 1024` because the split and recombination overhead does not amortize
+  at the lower threshold in the current CPU kernel family.
+  The half-cyclic spectrum cache builder constructs these residues directly,
+  avoiding a temporary full length-`N-1` kernel allocation.
+  Runtime Rader caches only the generator order `g^q`; the scatter order is
+  derived by `g^{-q}=g^(N-1-q)` because the non-zero residues form a cyclic
+  group of order `N-1`.
 - CZT evaluates `X[k] = sum_n x[n] a^-n w^(nk)` directly for reference and
   uses `nk = (n^2 + k^2 - (k-n)^2) / 2` to reduce fast execution to one
   zero-padded convolution.
