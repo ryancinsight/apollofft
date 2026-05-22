@@ -2,6 +2,26 @@
 
 ## Closed Gaps
 
+- Closure CVXII narrows the reduced f32 Winograd-pair layout to DFT31 after
+  measuring and rejecting the broader N=29/37/41/53 reduced route. The retained
+  path stores pair sums and imaginary differences in separate scalar arrays and
+  accumulates the DC bin during the pair pass, while all f64 routes and f32
+  N=11/13/17/19/23/29/37/41/43/47/53 remain on the generic Winograd-pair
+  kernel. Direct-DFT coverage now checks promoted f64 odd-prime routes, all
+  f32 odd-prime routes, and the reduced f32 DFT31 inverse route. Current
+  optimized clone-inclusive rows record reduced f32 DFT31 at 87.31 ns Apollo
+  vs 83.75 ns RustFFT (`1.043x`), improving the direct generic-route probe of
+  107.39 ns Apollo vs 82.46 ns RustFFT (`1.302x`) but leaving DFT31 open.
+
+- Closure CVXI routes short odd-prime `ShortDft` sizes
+  11/13/17/19/23/29/31/37/41/43/47/53 through the Winograd-pair kernel
+  instead of static Rader. This removes the Rader convolution path from
+  production short-prime leaves where the direct pair decomposition has lower
+  constant cost. Generated static Rader coverage is retained and extended
+  through N=53 for direct Rader/codegen verification. Focused direct value
+  tests pass. Closure CVXII supersedes the f32 row inventory after the
+  reduced-layout follow-up.
+
 - Closure CVX removes the cached inverse-generator scatter table from runtime
   Rader and ordered-Rader Good-Thomas paths. The retained generator-order table
   stores `g^q`; scatter order is derived on demand by
@@ -31,6 +51,12 @@
   release-quality threshold sweep remains open before tightening this policy.
 
 ## Open Gaps
+
+- After Closure CVXII, f32 short odd-prime rows
+  N=11/13/17/19/29/31/37/41/53 still trail RustFFT despite improved timings.
+  N=23/43/47 beat RustFFT through the generic Winograd-pair route. The
+  remaining gap is inside the f32 Winograd-pair codegen/arithmetic path, not
+  in static Rader dispatch.
 
 - `benchmark_results.md` still contains measured rows where Apollo trails
   RustFFT. Editing the table without corresponding Criterion evidence is

@@ -1,4 +1,38 @@
 # Apollo Checklist
+## Closure CVXII - Reduced f32 DFT31 Pair Layout [patch]
+Sprint target version: apollo-fft 0.12.24
+
+- [x] Reject broad reduced f32 Winograd-pair routing for
+  N=29/37/41/53 after refreshed quick-profile rows showed no stable
+  improvement and visible regressions for larger primes.
+- [x] Keep the reduced structure-of-arrays Winograd-pair body as a single
+  monomorphized implementation and route only f32 DFT31 through it.
+- [x] Preserve the generic Winograd-pair route for all f64 short odd primes
+  and for f32 N=11/13/17/19/23/29/37/41/43/47/53.
+- [x] Add value-semantic direct-DFT coverage for promoted f64 odd-prime
+  routes, all f32 odd-prime routes, and the reduced f32 DFT31 inverse route.
+- [x] Refresh `benchmark_results.md` rows for N=29/31/37/41/53 after the
+  final route narrowing; current reduced f32 DFT31 is 87.31 ns Apollo vs
+  83.75 ns RustFFT (`1.043x`), improved over the generic-route probe but not
+  yet a parity close.
+
+## Closure CVXI - Short Odd-Prime Winograd Pair Routing [patch]
+Sprint target version: apollo-fft 0.12.24
+
+- [x] Route `ShortDft` odd-prime sizes 11, 13, 17, 19, 23, 29, 31, 37,
+  41, 43, 47, and 53 through the existing Winograd-pair codelet instead of
+  the static Rader codelet.
+- [x] Preserve static Rader codelets as direct Rader validation and fallback
+  surfaces, and extend generated static Rader coverage through N=53 for the
+  direct Rader path.
+- [x] Keep one `impl_short_winograd_prime_pair!` route declaration per
+  precision so f64/f32 use the same monomorphized kernel family.
+- [x] Verify direct-DFT value semantics for affected short-prime tests and
+  Rader tests, plus the `apollo-fft-macros` proc-macro crate.
+- [x] Refresh `benchmark_results.md` rows for
+  N=11/13/17/19/23/29/31/37/41/43/47/53 with the optimized `xtask`
+  clone-inclusive runner.
+
 ## Closure CVX - Rader Generator-Order Cache Compression [patch]
 Sprint target version: apollo-fft 0.12.24
 

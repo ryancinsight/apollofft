@@ -8,6 +8,17 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
 
 ## [Unreleased]
 ### Changed
+- [patch] `apollo-fft`: f32 DFT31 now uses a reduced Winograd-pair layout
+  that stores pair sums and imaginary differences in separate scalar arrays;
+  the broader reduced route for N=29/37/41/53 was rejected after measurement
+  and those sizes remain on the generic Winograd-pair path.
+- [patch] `apollo-fft`: short odd-prime `ShortDft` routes for
+  N=11/13/17/19/23/29/31/37/41/43/47/53 now use the Winograd-pair kernel
+  instead of generated static Rader codelets, retaining static Rader as a
+  direct Rader validation and fallback surface.
+- [patch] `apollo-fft`: generated static Rader coverage now includes
+  N=29/37/41/43/47/53 so `apollo-fft-macros` codegen is exercised through
+  the short-prime direct Rader surface up to N=53.
 - [patch] `apollo-fft`: runtime Rader and ordered-Rader Good-Thomas paths now
   cache only the generator-order table and derive inverse-generator scatter
   indices by `g^{-q}=g^(N-1-q)`, removing one retained `usize` table per
@@ -27,6 +38,20 @@ Change-class tags: [patch] backward-compatible fix, [minor] additive non-breakin
   f64/f32 prime lengths 257, 521, and 1031.
 
 ### Verification
+- [patch] Focused reduced-layout verification passes:
+  `cargo check -p apollo-fft --lib` and
+  `cargo test -p apollo-fft dft_prime --lib`. The final optimized `xtask`
+  subset refresh for N=29/31/37/41/53 records reduced f32 DFT31 at
+  87.31 ns Apollo vs 83.75 ns RustFFT (`1.043x`), improving the generic-route
+  probe of 107.39 ns Apollo vs 82.46 ns RustFFT (`1.302x`).
+- [patch] Focused short-prime verification passes:
+  `cargo test -p apollo-fft dft_prime --lib`,
+  `cargo test -p apollo-fft dft_small --lib`, and
+  `cargo test -p apollo-fft rader --lib`, plus
+  `cargo check -p apollo-fft --lib` and `cargo test -p apollo-fft-macros`.
+  Optimized `xtask` subset rows for
+  N=11/13/17/19/23/29/31/37/41/43/47/53 were refreshed in
+  `benchmark_results.md`.
 - [patch] Post-change verification passes: `cargo check -p apollo-fft
   --features kernel-strategy-bench`, `cargo test -p apollo-fft --lib rader`,
   `cargo test -p apollo-fft --lib good_thomas`, `cargo check -p xtask`, and

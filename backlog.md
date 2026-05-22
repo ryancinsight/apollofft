@@ -1,5 +1,31 @@
 # Apollo Backlog
 
+## Closed in this sprint (Closure CVXII phase)
+- [x] [patch] Narrow reduced f32 Winograd-pair execution to DFT31 only. A
+  broader structure-of-arrays reduced route for N=29/37/41/53 was measured and
+  rejected because it did not produce stable improvement and regressed larger
+  short-prime rows. The retained DFT31 route keeps the generic Winograd-pair
+  path for every f64 short odd prime and for f32
+  N=11/13/17/19/23/29/37/41/43/47/53. Value-semantic coverage now exercises
+  promoted f64 odd-prime routes, all f32 odd-prime routes, and the reduced
+  f32 DFT31 inverse route. Current optimized `xtask` rows record reduced f32
+  DFT31 at 87.31 ns Apollo vs 83.75 ns RustFFT (`1.043x`), while the generic
+  DFT31 probe measured 107.39 ns Apollo vs 82.46 ns RustFFT (`1.302x`).
+  f32 N=23/43/47 beat RustFFT; f32 N=11/13/17/19/29/31/37/41/53 remain
+  measured misses.
+
+## Closed in this sprint (Closure CVXI phase)
+- [x] [patch] Replace static-Rader routing for short odd-prime `ShortDft`
+  sizes 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, and 53 with the
+  existing Winograd-pair kernel. The change removes the Rader gather,
+  sub-FFT, pointwise spectrum multiply, inverse sub-FFT, and scatter from the
+  production short-prime path while retaining and extending generated static
+  Rader codelets as validation and direct Rader surfaces through N=53.
+  Focused value tests pass, the proc-macro crate compiles under test, and
+  optimized `xtask` clone-inclusive rows showed the direct pair route as the
+  better production short-prime baseline; Closure CVXII supersedes the f32
+  row inventory after a focused reduced-layout follow-up.
+
 ## Closed in this sprint (Closure CVX phase)
 - [x] [patch] Reduce runtime Rader and ordered-Rader Good-Thomas permutation
   cache memory by retaining only the generator-order table. The inverse
