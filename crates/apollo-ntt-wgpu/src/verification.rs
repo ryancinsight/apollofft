@@ -462,7 +462,7 @@ mod tests {
                     .expect("gpu inverse must succeed");
 
                 prop_assert_eq!(recovered, input,
-                    "INTT(NTT(x)) must recover x for N={n}");
+                    "INTT(NTT(x)) must recover x for N={}", n);
             }
         }
     }
